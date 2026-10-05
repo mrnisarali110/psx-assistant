@@ -1,0 +1,17 @@
+# secrets: never commit
+.env
+.env.*
+!.env.example
+.secrets/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+worker/.cache/
+
+# node
+node_modules/
+dist/
+*.tsbuildinfo

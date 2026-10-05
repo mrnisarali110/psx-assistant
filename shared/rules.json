@@ -1,0 +1,35 @@
+{
+  "market": {
+    "dip_pct": -2,
+    "crash_pct": -4,
+    "rally_pct": 2.5,
+    "crash_fund_deploy_fraction": 0.5
+  },
+  "holding": {
+    "sector_limit_pct": 35,
+    "big_move_pct": 5,
+    "below_cost_repeat_days": 7
+  },
+  "allocation": {
+    "avg_down_share": 0.5,
+    "watchlist_picks": 2,
+    "underweight_sector_pct": 15,
+    "min_order_pkr": 500,
+    "score": {
+      "dividend_yield": 1.0,
+      "below_52w_high": 0.25,
+      "underweight_sector_bonus": 3
+    }
+  },
+  "notifications": {
+    "max_per_day": 3
+  },
+  "data": {
+    "stale_minutes": 30
+  },
+  "market_hours_pkt": {
+    "source": "https://www.psx.com.pk/psx/exchange/general/trading-hours (checked 2026-10-06; Ramadan hours differ)",
+    "mon_thu": [["09:15", "15:50"]],
+    "fri": [["09:00", "12:00"], ["14:15", "16:50"]]
+  }
+}

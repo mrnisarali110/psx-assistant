@@ -1,0 +1,533 @@
+{
+  "captured_at": "2026-10-05T21:41:04.339Z",
+  "index": {
+    "ts": "2026-10-05T10:49:00.000Z",
+    "kse100": 165867.31,
+    "change": -2288.18,
+    "change_pct": -1.36
+  },
+  "prices": {
+    "SYS": {
+      "symbol": "SYS",
+      "name": "Systems Limited",
+      "sector": "TECHNOLOGY & COMMUNICATION",
+      "price": 114.37,
+      "change": -1.47,
+      "change_pct": -1.27,
+      "volume": 1830789,
+      "ldcp": 115.84,
+      "high_52w": 174.4,
+      "low_52w": 105.98,
+      "dividend_yield_pct": 1.36,
+      "pe": 22.74,
+      "is_shariah": true,
+      "as_of": "2026-10-05T10:49:00.000Z"
+    },
+    "MEBL": {
+      "symbol": "MEBL",
+      "name": "Meezan Bank Limited",
+      "sector": "COMMERCIAL BANKS",
+      "price": 548.11,
+      "change": -0.68,
+      "change_pct": -0.12,
+      "volume": 352590,
+      "ldcp": 548.79,
+      "high_52w": 605,
+      "low_52w": 410,
+      "dividend_yield_pct": 5.71,
+      "pe": 10.78,
+      "is_shariah": true,
+      "as_of": "2026-10-05T10:49:00.000Z"
+    },
+    "UBL": {
+      "symbol": "UBL",
+      "name": "United Bank Limited",
+      "sector": "COMMERCIAL BANKS",
+      "price": 414.19,
+      "change": -6.63,
+      "change_pct": -1.57,
+      "volume": 743226,
+      "ldcp": 420.82,
+      "high_52w": 517,
+      "low_52w": 293.25,
+      "dividend_yield_pct": 7.15,
+      "pe": 6.96,
+      "is_shariah": false,
+      "as_of": "2026-10-05T10:49:00.000Z"
+    },
+    "DCR": {
+      "symbol": "DCR",
+      "name": "Dolmen City REIT",
+      "sector": "REAL ESTATE INVESTMENT TRUST",
+      "price": 38.76,
+      "change": -0.24,
+      "change_pct": -0.61,
+      "volume": 411425,
+      "ldcp": 39,
+      "high_52w": 41.98,
+      "low_52w": 30,
+      "dividend_yield_pct": 0,
+      "pe": 16.72,
+      "is_shariah": true,
+      "as_of": "2026-10-05T10:47:00.000Z"
+    },
+    "EFERT": {
+      "symbol": "EFERT",
+      "name": "Engro Fertilizers Limited",
+      "sector": "FERTILIZER",
+      "price": 191.57,
+      "change": -2.35,
+      "change_pct": -1.21,
+      "volume": 277829,
+      "ldcp": 193.92,
+      "high_52w": 263.3,
+      "low_52w": 180.01,
+      "dividend_yield_pct": 6.16,
+      "pe": 12.42,
+      "is_shariah": true,
+      "as_of": "2026-10-05T10:49:00.000Z"
+    },
+    "LUCK": {
+      "symbol": "LUCK",
+      "name": "Lucky Cement Limited",
+      "sector": "CEMENT",
+      "price": 407.54,
+      "change": -3.02,
+      "change_pct": -0.74,
+      "volume": 647015,
+      "ldcp": 410.56,
+      "high_52w": 529.5,
+      "low_52w": 339,
+      "dividend_yield_pct": null,
+      "pe": null,
+      "is_shariah": null,
+      "as_of": "2026-10-05T10:49:00.000Z"
+    },
+    "FCCL": {
+      "symbol": "FCCL",
+      "name": "Fauji Cement Company Limited",
+      "sector": "CEMENT",
+      "price": 50,
+      "change": -1.13,
+      "change_pct": -2.21,
+      "volume": 3630160,
+      "ldcp": 51.13,
+      "high_52w": 61.09,
+      "low_52w": 36.26,
+      "dividend_yield_pct": null,
+      "pe": null,
+      "is_shariah": null,
+      "as_of": "2026-10-05T10:49:00.000Z"
+    },
+    "AVN": {
+      "symbol": "AVN",
+      "name": "Avanceon Limited",
+      "sector": "TECHNOLOGY & COMMUNICATION",
+      "price": 27.01,
+      "change": -0.61,
+      "change_pct": -2.21,
+      "volume": 266100,
+      "ldcp": 27.62,
+      "high_52w": 50.89,
+      "low_52w": 26.5,
+      "dividend_yield_pct": 2.77,
+      "pe": 0,
+      "is_shariah": true,
+      "as_of": "2026-10-05T10:48:00.000Z"
+    },
+    "MARI": {
+      "symbol": "MARI",
+      "name": "Mari Energies Limited",
+      "sector": "OIL & GAS EXPLORATION COMPANIES",
+      "price": 631.98,
+      "change": -3.24,
+      "change_pct": -0.51,
+      "volume": 252916,
+      "ldcp": 635.22,
+      "high_52w": 781.89,
+      "low_52w": 544.56,
+      "dividend_yield_pct": 4,
+      "pe": 8.71,
+      "is_shariah": true,
+      "as_of": "2026-10-05T10:49:00.000Z"
+    },
+    "HUBC": {
+      "symbol": "HUBC",
+      "name": "The Hub Power Company Limited",
+      "sector": "POWER GENERATION & DISTRIBUTION",
+      "price": 195.57,
+      "change": -3.07,
+      "change_pct": -1.55,
+      "volume": 2997194,
+      "ldcp": 198.64,
+      "high_52w": 249.99,
+      "low_52w": 186.6,
+      "dividend_yield_pct": 8.57,
+      "pe": 10.37,
+      "is_shariah": true,
+      "as_of": "2026-10-05T10:48:00.000Z"
+    },
+    "FFC": {
+      "symbol": "FFC",
+      "name": "Fauji Fertilizer Company Limited",
+      "sector": "FERTILIZER",
+      "price": 534.46,
+      "change": -3.44,
+      "change_pct": -0.64,
+      "volume": 450592,
+      "ldcp": 537.9,
+      "high_52w": 685,
+      "low_52w": 467,
+      "dividend_yield_pct": 7.28,
+      "pe": 9.94,
+      "is_shariah": true,
+      "as_of": "2026-10-05T10:49:00.000Z"
+    },
+    "OGDC": {
+      "symbol": "OGDC",
+      "name": "Oil & Gas Development Company Limited",
+      "sector": "OIL & GAS EXPLORATION COMPANIES",
+      "price": 310.34,
+      "change": -4.28,
+      "change_pct": -1.36,
+      "volume": 1581051,
+      "ldcp": 314.62,
+      "high_52w": 352,
+      "low_52w": 238.2,
+      "dividend_yield_pct": 3.81,
+      "pe": 5.51,
+      "is_shariah": true,
+      "as_of": "2026-10-05T10:49:00.000Z"
+    },
+    "PPL": {
+      "symbol": "PPL",
+      "name": "Pakistan Petroleum Limited",
+      "sector": "OIL & GAS EXPLORATION COMPANIES",
+      "price": 216.48,
+      "change": -4.18,
+      "change_pct": -1.89,
+      "volume": 3848988,
+      "ldcp": 220.66,
+      "high_52w": 284.6,
+      "low_52w": 178.9,
+      "dividend_yield_pct": 4.95,
+      "pe": 5.98,
+      "is_shariah": true,
+      "as_of": "2026-10-05T10:49:00.000Z"
+    }
+  },
+  "announcements": [
+    {
+      "id": "psx-doc-284216",
+      "symbol": "SYS",
+      "published_at": "2026-10-02",
+      "title": "Disclosure of Interest by a Director CEO, or Executive of a listed company and their Spouses and the Substantial Shareholders u/c 5.6.1.(d) of PSX Regulations",
+      "kind": "other",
+      "pdf_url": "https://dps.psx.com.pk/download/document/284216.pdf"
+    },
+    {
+      "id": "psx-doc-281936",
+      "symbol": "SYS",
+      "published_at": "2026-08-28",
+      "title": "Transmission of Half Yearly Report for the Period Ended June 30, 2026",
+      "kind": "results",
+      "pdf_url": "https://dps.psx.com.pk/download/document/281936.pdf"
+    },
+    {
+      "id": "psx-doc-281926",
+      "symbol": "SYS",
+      "published_at": "2026-08-28",
+      "title": "Notice of Corporate Briefing Session",
+      "kind": "other",
+      "pdf_url": "https://dps.psx.com.pk/download/document/281926.pdf"
+    },
+    {
+      "id": "psx-doc-283196",
+      "symbol": "MEBL",
+      "published_at": "2026-09-22",
+      "title": "Disclosure of Interest by a Director CEO, or Executive of a listed company and their Spouses and the Substantial Shareholders u/c 5.6.1.(d) of PSX Regulations",
+      "kind": "other",
+      "pdf_url": "https://dps.psx.com.pk/download/document/283196.pdf"
+    },
+    {
+      "id": "psx-doc-282470",
+      "symbol": "MEBL",
+      "published_at": "2026-09-10",
+      "title": "Disclosure of Interest by a Director CEO, or Executive of a listed company and their Spouses and the Substantial Shareholders u/c 5.6.1.(d) of PSX Regulations",
+      "kind": "other",
+      "pdf_url": "https://dps.psx.com.pk/download/document/282470.pdf"
+    },
+    {
+      "id": "psx-doc-282135",
+      "symbol": "MEBL",
+      "published_at": "2026-09-02",
+      "title": "PUBLICATION OF NOTICES FOR THE CREDIT OF INTERIM CASH DIVIDEND (D-46) OF MEEZAN BANK FOR THE YEAR ENDING DECEMBER 31, 2026",
+      "kind": "dividend",
+      "pdf_url": "https://dps.psx.com.pk/download/document/282135.pdf"
+    },
+    {
+      "id": "psx-9f66aa11",
+      "symbol": "UBL",
+      "published_at": "2026-10-02",
+      "title": "Disclosure of Interest by a Director CEO, or Executive of a listed company and their Spouses and the Substantial Shareholders u/c 5.6.1.(d) of PSX Regulations",
+      "kind": "other",
+      "pdf_url": null
+    },
+    {
+      "id": "psx-952bb7a0",
+      "symbol": "UBL",
+      "published_at": "2026-09-30",
+      "title": "Disclosure of Interest by a Director CEO, or Executive of a listed company and their Spouses and the Substantial Shareholders u/c 5.6.1.(d) of PSX Regulations",
+      "kind": "other",
+      "pdf_url": null
+    },
+    {
+      "id": "psx-f63da06a",
+      "symbol": "UBL",
+      "published_at": "2026-09-18",
+      "title": "Disclosure of Interest by a Director CEO, or Executive of a listed company and their Spouses and the Substantial Shareholders u/c 5.6.1.(d) of PSX Regulations",
+      "kind": "other",
+      "pdf_url": null
+    },
+    {
+      "id": "psx-55c4f958",
+      "symbol": "DCR",
+      "published_at": "2026-10-01",
+      "title": "DCR | Dolmen City REIT Board Meeting",
+      "kind": "board_meeting",
+      "pdf_url": "https://dps.psx.com.pk/download/attachment/284206-1.pdf"
+    },
+    {
+      "id": "psx-doc-284196",
+      "symbol": "DCR",
+      "published_at": "2026-10-01",
+      "title": "Emergent Board Meeting / Closed Period REVOKED",
+      "kind": "board_meeting",
+      "pdf_url": "https://dps.psx.com.pk/download/document/284196.pdf"
+    },
+    {
+      "id": "psx-doc-280894",
+      "symbol": "DCR",
+      "published_at": "2026-08-07",
+      "title": "Credit of Final Cash Dividend",
+      "kind": "dividend",
+      "pdf_url": "https://dps.psx.com.pk/download/document/280894.pdf"
+    },
+    {
+      "id": "psx-doc-284264",
+      "symbol": "EFERT",
+      "published_at": "2026-10-02",
+      "title": "BOARD MEETING FOR THE ANNOUNCEMENT OF THE FINANCIAL RESULTS FOR THE NINE MONTHS ENDED SEPTEMBER 30, 2026",
+      "kind": "results",
+      "pdf_url": "https://dps.psx.com.pk/download/document/284264.pdf"
+    },
+    {
+      "id": "psx-doc-283796",
+      "symbol": "EFERT",
+      "published_at": "2026-09-29",
+      "title": "APPOINTMENT OF DIRECTOR",
+      "kind": "other",
+      "pdf_url": "https://dps.psx.com.pk/download/document/283796.pdf"
+    },
+    {
+      "id": "psx-doc-283091",
+      "symbol": "EFERT",
+      "published_at": "2026-09-21",
+      "title": "DISCLOSURE OF MATERIAL INFORMATION",
+      "kind": "other",
+      "pdf_url": "https://dps.psx.com.pk/download/document/283091.pdf"
+    },
+    {
+      "id": "psx-cdc2ba04",
+      "symbol": "LUCK",
+      "published_at": "2026-09-29",
+      "title": "Disclosure of Interest by a Director CEO, or Executive of a listed company and their Spouses and the Substantial Shareholders u/c 5.6.1.(d) of PSX Regulations",
+      "kind": "other",
+      "pdf_url": null
+    },
+    {
+      "id": "psx-doc-283482",
+      "symbol": "LUCK",
+      "published_at": "2026-09-25",
+      "title": "CERTIFIED TRUE COPY OF THE RESOLUTIONS PASSED IN THE 33rd ANNUAL GENERAL MEETING OF LUCKY CEMENT LIMITED U/C 5.6.9.(b) OF PSX REGULATIONS",
+      "kind": "other",
+      "pdf_url": "https://dps.psx.com.pk/download/document/283482.pdf"
+    },
+    {
+      "id": "psx-3b98fde0",
+      "symbol": "LUCK",
+      "published_at": "2026-09-25",
+      "title": "Disclosure of Interest by a Director CEO, or Executive of a listed company and their Spouses and the Substantial Shareholders u/c 5.6.1.(d) of PSX Regulations",
+      "kind": "other",
+      "pdf_url": null
+    },
+    {
+      "id": "psx-doc-284522",
+      "symbol": "FCCL",
+      "published_at": "2026-10-05",
+      "title": "173 Board Meeting of FCCL - 27 October 2026",
+      "kind": "board_meeting",
+      "pdf_url": "https://dps.psx.com.pk/download/document/284522.pdf"
+    },
+    {
+      "id": "psx-doc-284516",
+      "symbol": "FCCL",
+      "published_at": "2026-10-05",
+      "title": "Corporate Briefing Session",
+      "kind": "other",
+      "pdf_url": "https://dps.psx.com.pk/download/document/284516.pdf"
+    },
+    {
+      "id": "psx-doc-283688",
+      "symbol": "FCCL",
+      "published_at": "2026-09-29",
+      "title": "Extract of Resolutions Adopted in 34th Annual General Meeting",
+      "kind": "other",
+      "pdf_url": "https://dps.psx.com.pk/download/document/283688.pdf"
+    },
+    {
+      "id": "psx-doc-282153",
+      "symbol": "AVN",
+      "published_at": "2026-09-02",
+      "title": "Transmission of Quarterly Report for the Period Ended 30 June 2026",
+      "kind": "results",
+      "pdf_url": "https://dps.psx.com.pk/download/document/282153.pdf"
+    },
+    {
+      "id": "psx-doc-281843",
+      "symbol": "AVN",
+      "published_at": "2026-08-28",
+      "title": "Financial Results for the Quarter Ended 30 June 2026",
+      "kind": "results",
+      "pdf_url": "https://dps.psx.com.pk/download/document/281843.pdf"
+    },
+    {
+      "id": "psx-doc-281428",
+      "symbol": "AVN",
+      "published_at": "2026-08-20",
+      "title": "Board Meeting",
+      "kind": "board_meeting",
+      "pdf_url": "https://dps.psx.com.pk/download/document/281428.pdf"
+    },
+    {
+      "id": "psx-doc-284451",
+      "symbol": "MARI",
+      "published_at": "2026-10-05",
+      "title": "Results of Emergent Board Meeting",
+      "kind": "board_meeting",
+      "pdf_url": "https://dps.psx.com.pk/download/document/284451.pdf"
+    },
+    {
+      "id": "psx-doc-284214",
+      "symbol": "MARI",
+      "published_at": "2026-10-02",
+      "title": "Notice of Emergent Board Meeting",
+      "kind": "board_meeting",
+      "pdf_url": "https://dps.psx.com.pk/download/document/284214.pdf"
+    },
+    {
+      "id": "psx-45358fd6",
+      "symbol": "MARI",
+      "published_at": "2026-10-01",
+      "title": "Corporate Briefing Session Presentation - October 2, 2026",
+      "kind": "other",
+      "pdf_url": null
+    },
+    {
+      "id": "psx-doc-283449",
+      "symbol": "HUBC",
+      "published_at": "2026-09-25",
+      "title": "Newspaper Advertisement for the Notice of the 35th Annual General Meeting - The Hub Power Company Limited",
+      "kind": "other",
+      "pdf_url": "https://dps.psx.com.pk/download/document/283449.pdf"
+    },
+    {
+      "id": "psx-doc-283369",
+      "symbol": "HUBC",
+      "published_at": "2026-09-24",
+      "title": "Transmission of Annual Report for the Year Ended June 30, 2026 - The Hub Power Company Limited",
+      "kind": "results",
+      "pdf_url": "https://dps.psx.com.pk/download/document/283369.pdf"
+    },
+    {
+      "id": "psx-doc-283365",
+      "symbol": "HUBC",
+      "published_at": "2026-09-24",
+      "title": "Notice of Annual General Meeting-The Hub Power Company Limited",
+      "kind": "other",
+      "pdf_url": "https://dps.psx.com.pk/download/document/283365.pdf"
+    },
+    {
+      "id": "psx-eb8ff167",
+      "symbol": "FFC",
+      "published_at": "2026-09-11",
+      "title": "Disclosure of Interest by a Director CEO, or Executive of a listed company and their Spouses and the Substantial Shareholders u/c 5.6.1.(d) of PSX Regulations",
+      "kind": "other",
+      "pdf_url": null
+    },
+    {
+      "id": "psx-0974b588",
+      "symbol": "FFC",
+      "published_at": "2026-09-09",
+      "title": "Change of Company Secretary",
+      "kind": "other",
+      "pdf_url": null
+    },
+    {
+      "id": "psx-doc-282442",
+      "symbol": "FFC",
+      "published_at": "2026-09-09",
+      "title": "Change of Company Secretary",
+      "kind": "other",
+      "pdf_url": "https://dps.psx.com.pk/download/document/282442.pdf"
+    },
+    {
+      "id": "psx-doc-283468",
+      "symbol": "OGDC",
+      "published_at": "2026-09-25",
+      "title": "Transmission of Annual Report for the Year Ended June 30, 2026",
+      "kind": "results",
+      "pdf_url": "https://dps.psx.com.pk/download/document/283468.pdf"
+    },
+    {
+      "id": "psx-doc-283329",
+      "symbol": "OGDC",
+      "published_at": "2026-09-24",
+      "title": "Notice of Annual General Meeting",
+      "kind": "other",
+      "pdf_url": "https://dps.psx.com.pk/download/document/283329.pdf"
+    },
+    {
+      "id": "psx-doc-282420",
+      "symbol": "OGDC",
+      "published_at": "2026-09-09",
+      "title": "Material Information",
+      "kind": "other",
+      "pdf_url": "https://dps.psx.com.pk/download/document/282420.pdf"
+    },
+    {
+      "id": "psx-doc-284542",
+      "symbol": "PPL",
+      "published_at": "2026-10-05",
+      "title": "Notice of Annual General Meeting 2026",
+      "kind": "other",
+      "pdf_url": "https://dps.psx.com.pk/download/document/284542.pdf"
+    },
+    {
+      "id": "psx-doc-282826",
+      "symbol": "PPL",
+      "published_at": "2026-09-16",
+      "title": "Appointment of Chairman Mr. Shahid Khan",
+      "kind": "other",
+      "pdf_url": "https://dps.psx.com.pk/download/document/282826.pdf"
+    },
+    {
+      "id": "psx-doc-282732",
+      "symbol": "PPL",
+      "published_at": "2026-09-15",
+      "title": "Names of Directors Elected at the Election of Directors held at EGM 2026",
+      "kind": "other",
+      "pdf_url": "https://dps.psx.com.pk/download/document/282732.pdf"
+    }
+  ]
+}

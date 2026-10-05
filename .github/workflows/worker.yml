@@ -1,0 +1,68 @@
+name: PSX worker
+
+# Weekday market checks + Sunday plan. GitHub cron is UTC; Pakistan (PKT) is UTC+5.
+# GitHub may start scheduled runs a few minutes late, and pauses schedules in repos
+# with no activity for 60 days. The weekly run makes a keep-alive commit when needed.
+on:
+  schedule:
+    - cron: '0 4 * * 1-5'    # 09:00 PKT morning brief
+    - cron: '30 7 * * 1-5'   # 12:30 PKT midday check
+    - cron: '0 10 * * 1-5'   # 15:00 PKT pre-close check
+    - cron: '0 12 * * 1-5'   # 17:00 PKT end of day (after Friday's 16:50 post-close)
+    - cron: '0 13 * * 0'     # Sunday 18:00 PKT weekly plan
+  workflow_dispatch:
+    inputs:
+      job:
+        description: Job to run now
+        type: choice
+        options: [midday, morning, preclose, eod, weekly, test, telegram]
+        default: midday
+      email:
+        description: 'job=test only: account email to send a test crash alert to'
+        required: false
+
+permissions:
+  contents: write # only for the keep-alive commit
+
+concurrency:
+  group: psx-worker
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Run worker
+        env:
+          JOB: ${{ github.event_name == 'schedule' && 'auto' || inputs.job }}
+          SCHEDULE: ${{ github.event.schedule }}
+          TEST_EMAIL: ${{ inputs.email }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+          VAPID_SUBJECT: ${{ vars.APP_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          APP_URL: ${{ vars.APP_URL }}
+        run: npm run worker -- "$JOB"
+      - name: Keep scheduled workflows alive
+        if: github.event.schedule == '0 13 * * 0'
+        run: |
+          days=$(( ( $(date +%s) - $(git log -1 --format=%ct) ) / 86400 ))
+          echo "last commit $days days ago"
+          if [ "$days" -ge 40 ]; then
+            date -u +%Y-%m-%dT%H:%M:%SZ > .github/keepalive
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add .github/keepalive
+            git commit -m "chore: keep scheduled workflows alive"
+            git push
+          fi

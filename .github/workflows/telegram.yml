@@ -1,0 +1,33 @@
+name: Telegram link
+
+# Links a user's Telegram chat after they tap Start on the bot with their one-time code.
+# Runs every 20 minutes from 08:00 to 23:59 PKT. Skipped until the TELEGRAM_BOT repo variable is set.
+on:
+  schedule:
+    - cron: '*/20 3-18 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: psx-telegram
+  cancel-in-progress: true
+
+jobs:
+  link:
+    if: vars.TELEGRAM_BOT != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run worker -- telegram
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
