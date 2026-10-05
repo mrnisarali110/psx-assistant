@@ -18,6 +18,7 @@ export class GeminiClient {
   private models: string[];
   private fetchImpl: typeof fetch;
   private log: (m: string) => void;
+  private skip = new Set<string>(); // models that were overloaded or rate limited earlier in this run
   calls = 0;
 
   constructor(private opts: GeminiOptions) {
@@ -29,7 +30,8 @@ export class GeminiClient {
   /** Ask for JSON matching `schema`. Tries each model in turn on rate limits, missing models or server errors. */
   async json<T>(parts: Part[], schema: object, system: string): Promise<{ data: T; model: string }> {
     let last = 'no model tried';
-    for (const model of this.models) {
+    const order = [...this.models.filter((m) => !this.skip.has(m)), ...this.models.filter((m) => this.skip.has(m))];
+    for (const model of order) {
       this.calls++;
       let r: Response;
       try {
@@ -51,7 +53,8 @@ export class GeminiClient {
         const body = (await r.text().catch(() => '')).slice(0, 200).replace(/\s+/g, ' ');
         last = `${model}: HTTP ${r.status} ${body}`;
         if ([400, 401, 403].includes(r.status) && !/model|not found|not supported/i.test(body)) break; // bad key/request: other models won't help
-        this.log(`gemini ${last}; trying next model`);
+        if (!this.skip.has(model)) this.log(`gemini ${last}; trying next model (skipping ${model} for the rest of this run)`);
+        this.skip.add(model);
         continue;
       }
       const j = (await r.json()) as any;
