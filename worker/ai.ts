@@ -218,8 +218,11 @@ Rules you must follow:
 - Only mention symbols that appear in the facts.
 - Respect the investor's own rules: never suggest adding to a holding whose status is hold_no_add or review, never suggest buying a stock already at or above max_position_pct, and when rules_say is "Wait" do not suggest buying.
 - "trim" or "sell" only with a concrete reason from the facts (e.g. over the position cap, sector over limit, weak results in recent_news, status review).
-- At most 4 suggestions, most important first. Prefer "hold" when nothing stands out.
-- Plain, short English. No guarantees, no hype.`;
+- At most 4 suggestions, most important first. Skip plain "hold" lines unless holding is itself the point; say what to DO or WATCH.
+- recent_news contains AI summaries of company announcements: use them when relevant (results, dividends).
+- screen_candidates are high-yield, low-P/E KSE-100 stocks the investor does not own; you may suggest "watch" for one if it fits a sector they lack.
+- plan_note: comment on plan_tranche_1 itself (which stocks get the money and whether that mix looks sensible), not on the market.
+- Plain, short English for a non-expert. Say "profit/loss" not "PnL". No guarantees, no hype.`;
 
 export interface GuardContext {
   holdings: { symbol: string; status: string; weight_pct: number | null; is_shariah: boolean | null }[];
