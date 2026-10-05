@@ -26,6 +26,24 @@ export interface PortfolioView {
   missing_prices: string[];
 }
 
+/**
+ * "Mark as bought": add a fill to a holding with a weighted average cost, or start a new core holding.
+ * `price` should be what was actually paid per share (including broker charges, for an accurate cost).
+ */
+export function applyBuy(existing: Holding | undefined, symbol: string, shares: number, price: number, p?: Price | null): Holding {
+  if (!Number.isInteger(shares) || shares <= 0) throw new Error('Shares must be a whole number above 0');
+  if (!(price > 0)) throw new Error('Price must be above 0');
+  const round2 = (v: number) => Math.round(v * 100) / 100;
+  if (existing) {
+    const total = existing.shares + shares;
+    return { ...existing, shares: total, avg_cost: round2((existing.shares * existing.avg_cost + shares * price) / total) };
+  }
+  return {
+    symbol, shares, avg_cost: round2(price), status: 'core', sector: p?.sector ?? null,
+    is_shariah: p?.is_shariah ?? false, note: 'Added from plan',
+  };
+}
+
 /** PSX's own sector name when we have it (one taxonomy for everything), else what the user typed. */
 export function sectorOf(symbol: string, prices: PriceMap, fallback?: string | null): string {
   return prices[symbol]?.sector ?? fallback ?? 'Unknown';

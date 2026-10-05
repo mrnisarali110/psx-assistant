@@ -16,6 +16,10 @@ const out = {
   index: { ts: asOf, kse100: kse?.value, change: kse?.change, change_pct: kse?.change_pct },
   prices: Object.fromEntries(Object.values(snap.quotes).map((q) => [q.symbol, toPrice(q, snap.screener[q.symbol])])),
   announcements: Object.values(snap.quotes).flatMap((q) => q.announcements.slice(0, 3)),
+  screen: Object.values(snap.screener).filter((s) => s.listed_in.includes('KSE100')).map((s) => ({
+    symbol: s.symbol, sector: s.sector, price: s.price, change_pct: s.change_pct, pe: s.pe,
+    dividend_yield_pct: s.dividend_yield_pct, market_cap: s.market_cap, is_shariah: s.listed_in.includes('KMIALLSHR'),
+  })),
 };
 mkdirSync('shared/fixtures', { recursive: true });
 writeFileSync('shared/fixtures/seed-prices.json', JSON.stringify(out, null, 2));

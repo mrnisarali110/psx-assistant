@@ -24,6 +24,16 @@
   "notifications": {
     "max_per_day": 3
   },
+  "opportunities": {
+    "min_dividend_yield_pct": 5,
+    "max_pe": 15,
+    "picks": 5
+  },
+  "ai": {
+    "announcements_per_run": 6,
+    "announcement_max_age_days": 10,
+    "max_users_per_run": 25
+  },
   "data": {
     "stale_minutes": 30
   },

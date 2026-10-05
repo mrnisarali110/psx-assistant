@@ -117,7 +117,7 @@ function Notifications({ data, source, reload }: Pick<ScreenProps, 'data' | 'sou
   );
 }
 
-type Form = Record<'monthly_budget_pkr' | 'crash_fund_pkr' | 'crash_trigger_kse' | 'max_position_pct' | 'drop_alert_pct' | 't1' | 't2' | 't3' | 'd2' | 'd3' | 'quiet_start' | 'quiet_end', string> & { shariah_only: boolean; notifications_enabled: boolean };
+type Form = Record<'monthly_budget_pkr' | 'crash_fund_pkr' | 'crash_trigger_kse' | 'max_position_pct' | 'drop_alert_pct' | 't1' | 't2' | 't3' | 'd2' | 'd3' | 'quiet_start' | 'quiet_end', string> & { shariah_only: boolean; notifications_enabled: boolean; ai_enabled: boolean };
 
 function Thresholds({ data, source, reload }: Pick<ScreenProps, 'data' | 'source' | 'reload'>) {
   const s = data.settings;
@@ -128,6 +128,7 @@ function Thresholds({ data, source, reload }: Pick<ScreenProps, 'data' | 'source
     t1: String(ts[0]?.pct ?? 40), t2: String(ts[1]?.pct ?? 40), t3: String(ts[2]?.pct ?? 20),
     d2: String(ts[1]?.after_days ?? 14), d3: String(ts[2]?.after_days ?? 25),
     quiet_start: s.quiet_hours.start, quiet_end: s.quiet_hours.end, shariah_only: s.shariah_only, notifications_enabled: s.notifications_enabled,
+    ai_enabled: !!s.ai_enabled,
   };
   const [f, setF] = useState<Form>(initial);
   const [error, setError] = useState<string | null>(null);
@@ -147,6 +148,7 @@ function Thresholds({ data, source, reload }: Pick<ScreenProps, 'data' | 'source
       max_position_pct: n('max_position_pct'), drop_alert_pct: n('drop_alert_pct'),
       tranche_split: [{ pct: split[0], after_days: 0 }, { pct: split[1], after_days: n('d2') }, { pct: split[2], after_days: n('d3') }],
       quiet_hours: { start: f.quiet_start, end: f.quiet_end }, shariah_only: f.shariah_only, notifications_enabled: f.notifications_enabled,
+      ...(f.ai_enabled !== !!s.ai_enabled ? { ai_enabled: f.ai_enabled } : {}),
     };
     try {
       await source.saveSettings(patch);
@@ -192,6 +194,16 @@ function Thresholds({ data, source, reload }: Pick<ScreenProps, 'data' | 'source
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" className="h-5 w-5 accent-teal-700" checked={f.notifications_enabled} onChange={(e) => { setF({ ...f, notifications_enabled: e.target.checked }); setSaved(false); }} />
             Send me notifications (all devices)
+          </label>
+          <label className="flex items-start gap-2 text-sm">
+            <input type="checkbox" className="mt-0.5 h-5 w-5 shrink-0 accent-teal-700" checked={f.ai_enabled} onChange={(e) => { setF({ ...f, ai_enabled: e.target.checked }); setSaved(false); }} />
+            <span>
+              AI Assistant suggestions
+              <span className="block text-xs text-slate-500 dark:text-slate-400">
+                Sends your holdings’ symbols, share counts, costs and these rules (never your name or email) to Google Gemini’s free tier,
+                which Google may use to improve its products. Announcement summaries use only public PSX documents and work either way.
+              </span>
+            </span>
           </label>
           <ErrorNote error={error} />
           <Button type="submit">{saved ? 'Saved ✓' : 'Save rules'}</Button>

@@ -62,6 +62,7 @@ export interface Settings {
   quiet_hours: { start: string; end: string };
   shariah_only: boolean;
   notifications_enabled: boolean;
+  ai_enabled?: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -89,6 +90,27 @@ export interface Announcement {
   kind: AnnouncementKind;
   published_at: string; // YYYY-MM-DD
   pdf_url: string | null;
+  ai_summary?: string | null;
+  ai_figures?: { label: string; value: string; verified: boolean }[] | null;
+  ai_verified?: boolean | null;
+}
+
+export interface AiSuggestion {
+  action: 'buy' | 'add' | 'hold' | 'trim' | 'sell' | 'watch' | 'review';
+  symbol: string | null;
+  text: string;
+  why: string;
+  confidence: 'low' | 'medium' | 'high';
+}
+
+export interface AiInsight {
+  created_at: string;
+  job: string;
+  headline: string;
+  suggestions: AiSuggestion[];
+  plan_note: string | null;
+  risks: string | null;
+  model: string | null;
 }
 
 export interface AlertLogRow {

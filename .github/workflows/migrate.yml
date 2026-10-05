@@ -1,0 +1,31 @@
+name: Database migrations
+
+# Applies new supabase/migrations/*.sql automatically when they land on main.
+# Needs the SUPABASE_DB_URL secret (Supabase > Connect > Session pooler connection string).
+on:
+  push:
+    branches: [main]
+    paths: ['supabase/migrations/**', 'scripts/migrate.ts']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: psx-migrate
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npx tsx scripts/migrate.ts

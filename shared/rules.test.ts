@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { allocate, nextTradingDay, planToText } from './allocate.ts';
-import { buildPortfolio } from './portfolio.ts';
+import { applyBuy, buildPortfolio } from './portfolio.ts';
 import { holdingAlerts, marketAlerts, marketState, planDelivery, todayBanner } from './signals.ts';
 import { isMarketOpen, isStale, isoWeek } from './time.ts';
 import { DEFAULT_RULES, DEFAULT_SETTINGS, type PriceMap } from './types.ts';
@@ -38,6 +38,24 @@ describe('portfolio', () => {
     expect(sys.value).toBeNull();
     expect(sys.pnl).toBeNull();
     expect(v.missing_prices).toEqual(['SYS']);
+  });
+});
+
+describe('mark as bought', () => {
+  it('updates shares and weighted average cost', () => {
+    const mebl = SEED_HOLDINGS.find((h) => h.symbol === 'MEBL')!; // 20 @ 583.06
+    const after = applyBuy(mebl, 'MEBL', 8, 548.11);
+    expect(after.shares).toBe(28);
+    expect(after.avg_cost).toBeCloseTo((20 * 583.06 + 8 * 548.11) / 28, 2);
+    expect(after.status).toBe('core');
+  });
+  it('starts a new core holding with PSX sector and Shariah flag', () => {
+    const h = applyBuy(undefined, 'HUBC', 26, 195.57, SEED_PRICES.HUBC);
+    expect(h).toMatchObject({ symbol: 'HUBC', shares: 26, avg_cost: 195.57, status: 'core', is_shariah: true, sector: 'POWER GENERATION & DISTRIBUTION' });
+  });
+  it('rejects bad input', () => {
+    expect(() => applyBuy(undefined, 'X', 1.5, 10)).toThrow();
+    expect(() => applyBuy(undefined, 'X', 1, 0)).toThrow();
   });
 });
 

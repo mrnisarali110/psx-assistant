@@ -3,10 +3,11 @@
  * decides what is visible. DemoSource serves the seed portfolio with saved PSX prices in memory.
  */
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import type { Announcement, AlertLogRow, Holding, IndexSnapshot, PriceMap, Settings, WatchItem } from '../../shared/types.ts';
+import type { AiInsight, Announcement, AlertLogRow, Holding, IndexSnapshot, PriceMap, Settings, WatchItem } from '../../shared/types.ts';
 import { DEFAULT_SETTINGS } from '../../shared/types.ts';
+import type { ScreenRow } from '../../shared/opportunities.ts';
 import {
-  SEED_ANNOUNCEMENTS, SEED_CAPTURED_AT, SEED_HOLDINGS, SEED_INDEX, SEED_PRICES, SEED_WATCHLIST,
+  SEED_ANNOUNCEMENTS, SEED_CAPTURED_AT, SEED_HOLDINGS, SEED_INDEX, SEED_PRICES, SEED_SCREEN, SEED_WATCHLIST,
 } from '../../shared/fixtures/seed.ts';
 import { config } from './config.ts';
 
@@ -26,6 +27,8 @@ export interface AppData {
   lastRun: WorkerRun | null;
   telegramLinked: boolean;
   email: string | null;
+  aiInsight: AiInsight | null;
+  screen: ScreenRow[];
 }
 
 export interface DataSource {
@@ -69,6 +72,12 @@ export class LiveSource implements DataSource {
 
   async load(): Promise<AppData> {
     const sb = supabase();
+    // AI and screen tables are optional extras: if they are missing or empty, the app still works.
+    const optional = async <T,>(q: PromiseLike<{ data: T | null; error: unknown }>, fallback: T): Promise<T> => {
+      try { const r = await q; return r.error || r.data == null ? fallback : r.data; } catch { return fallback; }
+    };
+    const insightP = optional(sb.from('ai_insights').select('created_at, job, headline, suggestions, plan_note, risks, model').order('created_at', { ascending: false }).limit(1), [] as any[]);
+    const screenP = optional(sb.from('market_screen').select('*'), [] as any[]);
     const [settings, holdings, watchlist, idx, alerts, plan, run, profile] = await Promise.all([
       sb.from('settings').select('*').maybeSingle(),
       sb.from('holdings').select('*').order('symbol'),
@@ -90,6 +99,7 @@ export class LiveSource implements DataSource {
       : [{ data: [], error: null }, { data: [], error: null }];
     const s = ok(settings) as any;
     const history = (ok(idx) as any[]).map(normIdx);
+    const [insights, screen] = await Promise.all([insightP, screenP]);
     return {
       settings: s ? {
         ...DEFAULT_SETTINGS, ...s, monthly_budget_pkr: Number(s.monthly_budget_pkr), crash_fund_pkr: Number(s.crash_fund_pkr),
@@ -106,6 +116,11 @@ export class LiveSource implements DataSource {
       lastRun: ((ok(run) as any[])[0] ?? null) as WorkerRun | null,
       telegramLinked: !!(ok(profile) as any)?.telegram_chat_id,
       email: this.email,
+      aiInsight: (insights[0] ?? null) as AiInsight | null,
+      screen: screen.map((r: any) => ({
+        symbol: r.symbol, sector: r.sector, price: n(r.price), change_pct: n(r.change_pct), pe: n(r.pe),
+        dividend_yield_pct: n(r.dividend_yield_pct), market_cap: n(r.market_cap), is_shariah: r.is_shariah,
+      })),
     };
   }
 
@@ -161,6 +176,8 @@ export class DemoSource implements DataSource {
       settings: { ...this.settings }, holdings: this.holdings.map((h) => ({ ...h })), watchlist: [...this.watch],
       prices: SEED_PRICES, index: SEED_INDEX, indexHistory: history, announcements: SEED_ANNOUNCEMENTS,
       alerts: [...this.alerts], latestPlan: this.plan, telegramLinked: false, email: 'demo',
+      aiInsight: null, // never show made-up AI text; real suggestions appear after the first signed-in run
+      screen: SEED_SCREEN,
       lastRun: { job: 'eod', started_at: SEED_CAPTURED_AT, finished_at: SEED_CAPTURED_AT, ok: true },
     };
   }

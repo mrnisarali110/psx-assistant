@@ -2,6 +2,7 @@
 import captured from './seed-prices.json' with { type: 'json' };
 import type { Announcement, Holding, IndexSnapshot, PriceMap, WatchItem } from '../types.ts';
 import { DEFAULT_SETTINGS } from '../types.ts';
+import type { ScreenRow } from '../opportunities.ts';
 
 export const SEED_HOLDINGS: Holding[] = [
   { symbol: 'SYS', shares: 118, avg_cost: 130.45, sector: 'Technology', is_shariah: true, status: 'core', note: 'Earnings growing, near the cap, so add small' },
@@ -22,3 +23,4 @@ export const SEED_PRICES = captured.prices as unknown as PriceMap;
 export const SEED_INDEX = captured.index as IndexSnapshot;
 export const SEED_ANNOUNCEMENTS = captured.announcements as Announcement[];
 export const SEED_CAPTURED_AT = captured.captured_at;
+export const SEED_SCREEN = ((captured as any).screen ?? []) as ScreenRow[];

@@ -267,6 +267,23 @@ export class Fetcher {
     }
     throw new FetchError(`GET ${url} failed: ${lastErr}`);
   }
+
+  /** Download a PSX document (announcement PDF). Only dps.psx.com.pk URLs are allowed. */
+  async getBytes(url: string, maxBytes = 15_000_000): Promise<Uint8Array> {
+    const u = new URL(url, this.baseUrl);
+    if (u.origin !== new URL(this.baseUrl).origin) throw new FetchError(`refusing to fetch ${u.origin}`);
+    const wait = this.politeDelayMs - (Date.now() - this.lastCall);
+    if (wait > 0) await this.sleep(wait);
+    const resp = await this.fetchImpl(u.toString(), {
+      headers: { 'User-Agent': USER_AGENT, Accept: 'application/pdf' },
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    this.lastCall = Date.now();
+    if (resp.status !== 200) throw new FetchError(`GET ${u} failed: HTTP ${resp.status}`);
+    const buf = new Uint8Array(await resp.arrayBuffer());
+    if (buf.length > maxBytes) throw new FetchError(`${u} is too large (${buf.length} bytes)`);
+    return buf;
+  }
 }
 
 /** Fetch indices, screener and per-symbol company pages. Never throws; failures go to `errors`. */

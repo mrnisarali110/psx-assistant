@@ -15,7 +15,7 @@ on:
       job:
         description: Job to run now
         type: choice
-        options: [midday, morning, preclose, eod, weekly, test, telegram]
+        options: [midday, morning, preclose, eod, weekly, test, telegram, aicheck]
         default: midday
       email:
         description: 'job=test only: account email to send a test crash alert to'

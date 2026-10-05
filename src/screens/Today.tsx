@@ -6,6 +6,7 @@ import { DEFAULT_RULES } from '../../shared/types.ts';
 import { asOfLabel, num, pct, rs, signedRs } from '../../shared/format.ts';
 import { titleCase } from '../../shared/allocate.ts';
 import { AsOf, Card, Section, Sparkline, changeTone } from '../components/ui.tsx';
+import { AiCard } from '../components/AiCard.tsx';
 
 export function latestAsOf(data: ScreenProps['data']): string | null {
   const times = Object.values(data.prices).map((p) => p.as_of).filter(Boolean) as string[];
@@ -18,7 +19,7 @@ const BANNER_STYLE = {
   Wait: 'bg-amber-500 text-slate-950',
 };
 
-export function Today({ data, go }: ScreenProps) {
+export function Today({ data, go, source }: ScreenProps) {
   const now = new Date();
   const asOf = latestAsOf(data);
   const stale = isStale(asOf, now, DEFAULT_RULES.data.stale_minutes, DEFAULT_RULES.market_hours_pkt);
@@ -51,6 +52,8 @@ export function Today({ data, go }: ScreenProps) {
         <p className="mt-2 text-base leading-snug">{banner.reason}</p>
         {due && <button onClick={() => go('plan')} className="mt-3 rounded-full bg-white/20 px-3 py-1 text-sm font-semibold">See tranche {due.index}</button>}
       </div>
+
+      <AiCard insight={data.aiInsight} aiEnabled={!!data.settings.ai_enabled} demo={source.kind === 'demo'} />
 
       <Card>
         <div className="flex items-start justify-between gap-3">

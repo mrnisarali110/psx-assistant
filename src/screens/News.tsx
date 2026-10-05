@@ -42,6 +42,21 @@ export function News({ data }: ScreenProps) {
                   <span className="text-xs text-slate-500 dark:text-slate-400">{dateLabel(a.published_at)}</span>
                 </div>
                 <p className="mt-1 text-sm">{a.title}</p>
+                {a.ai_summary && (
+                  <div className="mt-2 space-y-1 rounded-xl bg-violet-50 p-3 text-sm dark:bg-violet-950/40">
+                    <p><span className="font-semibold">AI summary: </span>{a.ai_summary}</p>
+                    {!!a.ai_figures?.length && (
+                      <ul className="num text-xs">
+                        {a.ai_figures.map((f) => (
+                          <li key={f.label}>{f.verified ? '✓' : '?'} {f.label}: <span className="font-semibold">{f.value}</span></li>
+                        ))}
+                      </ul>
+                    )}
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                      {a.ai_verified ? 'Every number was found in the PDF text.' : 'Some figures could not be checked against the PDF text (e.g. a scanned document). Open the PDF to confirm.'}
+                    </p>
+                  </div>
+                )}
                 <div className="mt-2 flex items-center justify-between">
                   <Tag tone={KIND_TONE[a.kind]}>{KIND_LABEL[a.kind]}</Tag>
                   {a.pdf_url && <a href={a.pdf_url} target="_blank" rel="noopener noreferrer" className="text-sm font-semibold text-teal-700 dark:text-teal-400">PSX PDF ↗</a>}

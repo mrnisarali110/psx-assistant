@@ -5,6 +5,7 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import type { Announcement, AlertLogRow, Holding, IndexSnapshot, Price, PriceMap, Settings, WatchItem } from '../shared/types.ts';
 import { DEFAULT_SETTINGS } from '../shared/types.ts';
+import type { ScreenRow } from '../shared/opportunities.ts';
 
 export interface PushSub { id: string; endpoint: string; p256dh: string; auth: string }
 
@@ -40,7 +41,19 @@ export interface Store {
   findUserByEmail(email: string): Promise<string | null>;
   consumeLinkCode(code: string): Promise<string | null>;
   setTelegramChat(userId: string, chatId: number): Promise<void>;
+  // AI layer + opportunity screen (migration 0003)
+  saveScreen(rows: ScreenRow[]): Promise<void>;
+  announcementsToRead(symbols: string[], sinceDate: string, limit: number): Promise<Announcement[]>;
+  saveAnnouncementDigest(id: string, d: { summary: string | null; figures: unknown; verified: boolean | null }): Promise<void>;
+  recentDigests(symbols: string[], sinceDate: string): Promise<Announcement[]>;
+  saveInsight(userId: string, row: InsightRow): Promise<void>;
 }
+
+export interface InsightRow {
+  job: string; headline: string; suggestions: unknown; plan_note: string | null; risks: string | null; model: string | null; dropped: number;
+}
+
+const READ_KINDS = ['dividend', 'results', 'board_meeting'];
 
 const num = (v: unknown) => (v == null ? null : Number(v));
 
@@ -174,6 +187,35 @@ export class SupabaseStore implements Store {
   async setTelegramChat(userId: string, chatId: number) {
     check(await this.sb.from('profiles').update({ telegram_chat_id: chatId }).eq('id', userId), 'link telegram');
   }
+
+  async saveScreen(rows: ScreenRow[]) {
+    if (!rows.length) return;
+    const now = new Date().toISOString();
+    check(await this.sb.from('market_screen').upsert(rows.map((r) => ({ ...r, updated_at: now })), { onConflict: 'symbol' }), 'save screen');
+  }
+
+  async announcementsToRead(symbols: string[], sinceDate: string, limit: number) {
+    if (!symbols.length) return [];
+    return check(await this.sb.from('announcements').select('*').in('symbol', symbols).in('kind', READ_KINDS)
+      .is('ai_checked_at', null).not('pdf_url', 'is', null).gte('published_at', sinceDate)
+      .order('published_at', { ascending: false }).limit(limit), 'announcements to read') as Announcement[];
+  }
+
+  async saveAnnouncementDigest(id: string, d: { summary: string | null; figures: unknown; verified: boolean | null }) {
+    check(await this.sb.from('announcements').update({
+      ai_summary: d.summary, ai_figures: d.figures, ai_verified: d.verified, ai_checked_at: new Date().toISOString(),
+    }).eq('id', id), 'save digest');
+  }
+
+  async recentDigests(symbols: string[], sinceDate: string) {
+    if (!symbols.length) return [];
+    return check(await this.sb.from('announcements').select('*').in('symbol', symbols).not('ai_summary', 'is', null)
+      .gte('published_at', sinceDate).order('published_at', { ascending: false }).limit(20), 'recent digests') as Announcement[];
+  }
+
+  async saveInsight(userId: string, row: InsightRow) {
+    check(await this.sb.from('ai_insights').insert({ ...row, user_id: userId }), 'save insight');
+  }
 }
 
 /** In-memory store for dry runs and tests. */
@@ -228,4 +270,20 @@ export class MemoryStore implements Store {
     return row.user_id;
   }
   async setTelegramChat(userId: string, chatId: number) { this.telegram[userId] = chatId; }
+
+  screen: ScreenRow[] = [];
+  insights: (InsightRow & { user_id: string })[] = [];
+  async saveScreen(rows: ScreenRow[]) { this.screen = rows; }
+  async announcementsToRead(symbols: string[], since: string, limit: number) {
+    return this.announcements.filter((a) => symbols.includes(a.symbol) && READ_KINDS.includes(a.kind) && a.pdf_url
+      && a.published_at >= since && !(a as any).ai_checked_at).sort((a, b) => b.published_at.localeCompare(a.published_at)).slice(0, limit);
+  }
+  async saveAnnouncementDigest(id: string, d: { summary: string | null; figures: unknown; verified: boolean | null }) {
+    const a = this.announcements.find((x) => x.id === id);
+    if (a) Object.assign(a, { ai_summary: d.summary, ai_figures: d.figures, ai_verified: d.verified, ai_checked_at: new Date().toISOString() });
+  }
+  async recentDigests(symbols: string[], since: string) {
+    return this.announcements.filter((a) => symbols.includes(a.symbol) && a.ai_summary && a.published_at >= since);
+  }
+  async saveInsight(userId: string, row: InsightRow) { this.insights.push({ ...row, user_id: userId }); }
 }
