@@ -48,6 +48,28 @@ Quiet hours 23:00–07:00 PKT. Crash alerts (KSE-100 down 4%+ in a day, or below
 always go through. Everything, including alerts held back by these limits, appears under News → Alert history.
 Every alert has a `dedupe_key`, so nothing repeats; "below cost" repeats at most every 7 days.
 
+## AI Assistant (Google Gemini, free tier)
+
+With `GEMINI_API_KEY` set, every scheduled run also:
+- **Reads new PSX announcements** (dividends, results, board meetings) for everyone's stocks: downloads the
+  PDF, asks Gemini for a 2-sentence summary and key figures, and checks every number against the PDF text.
+  Scanned PDFs can't be checked and are labelled as such. Shown on News and used in announcement alerts.
+- **Writes "AI Assistant suggests"** for each user who has AI on (Settings): a headline, up to 4 suggestions
+  (buy/add/hold/trim/sell/watch/review) and a note on this month's plan. Shown on Today and Plan; strong
+  (high-confidence) buy/add/trim/sell calls are also notified, at most once a week per stock, within the 3/day limit.
+
+Guardrails (`worker/ai.ts`, tested in `worker/ai.test.ts`): the AI only sees facts we compute; any suggestion
+naming a stock outside your portfolio/watchlist/KSE-100 screen, citing a number not in the facts, adding to a
+`hold_no_add`/`review` or over-cap stock, buying non-Shariah when Shariah-only is on, or buying on a "Wait"
+(rally) day is dropped. The rules engine still decides the banner and every plan amount. Models are tried in
+order (`gemini-3.8-flash`, `gemini-3.5-flash-lite`, `gemini-2.5-flash`; override with `GEMINI_MODELS`), an
+overloaded model is skipped for the rest of the run, and if Gemini is down the run carries on without AI.
+Privacy: Gemini's free tier may use inputs to improve Google products. Announcement reading sends only public
+PSX documents; portfolio suggestions send symbols, share counts, costs and rules (no names or emails), so they
+are opt-in per user (on for accounts that existed when migration 0003 ran).
+
+Check it any time: Actions → PSX worker → Run workflow → `aicheck` (reads a real PDF and prints a suggestion; writes nothing).
+
 ## Data source (read this if prices stop updating)
 
 There is no official free PSX API. The worker reads the portal's ordinary public pages with an
@@ -74,7 +96,9 @@ If PSX changes its layout:
 
 ### 1. Supabase (database + login)
 1. Create a free project at supabase.com.
-2. SQL Editor → run `supabase/migrations/0001_schema.sql`, then `0002_worker_columns.sql`.
+2. SQL Editor → run `supabase/migrations/0001_schema.sql`, then `0002_worker_columns.sql`. Later migrations
+   apply themselves: add the `SUPABASE_DB_URL` secret (Connect → Session pooler URI with your DB password)
+   and `.github/workflows/migrate.yml` runs any new file in `supabase/migrations/` when it reaches `main`.
 3. SQL Editor → run `supabase/tests/rls_test.sql`. Expect "RLS test passed".
 4. Authentication → URL Configuration → **Site URL** = your app URL (e.g. `https://psx-assistant.pages.dev`)
    and add it under Redirect URLs. Confirmation and password-reset emails link there.

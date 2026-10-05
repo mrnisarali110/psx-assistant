@@ -135,7 +135,7 @@ export function PlanScreen({ data, source, reload }: ScreenProps) {
       {opportunities.length > 0 && (
         <Section title="Opportunities (KSE-100 screen)">
           <Card className="space-y-3">
-            <p className="text-xs text-slate-500 dark:text-slate-400">High dividend yield and low P/E stocks you don’t own or watch yet{data.settings.shariah_only ? ', Shariah only' : ''}. Add one to your watchlist and the plan will consider it.</p>
+            <p className="text-xs text-slate-500 dark:text-slate-400">High dividend yield and low P/E stocks you don’t own or watch yet{data.settings.shariah_only ? ', Shariah only' : ''}. Add one to your watchlist and the plan will consider it. Yields above about 12% often come from a one-off special dividend, so check the company’s payout history before buying.</p>
             {opportunities.map((o) => (
               <div key={o.symbol} className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
