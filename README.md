@@ -110,9 +110,13 @@ Public repository (free scheduled runs). Settings → Secrets and variables → 
 
 ```
 npm install
-npm run build        # -> dist/
-npx wrangler pages deploy dist --project-name psx-assistant   # Cloudflare Pages
+npm run deploy       # builds dist/ and uploads it with wrangler (first time: npx wrangler login)
 ```
+
+Hosting is Cloudflare Workers static assets (Cloudflare folded Pages into Workers), configured in
+`wrangler.jsonc`: no server code, just the built files. Static asset requests are free and unlimited
+on the Workers Free plan. Live at https://psx-assistant.psx-assistant.workers.dev.
+`public/_headers` keeps `sw.js` and `index.html` uncached so phones pick up new versions.
 
 ## Install on your phone
 - **iPhone (iOS 16.4+):** open the site in **Safari** → Share → **Add to Home Screen** → open the
