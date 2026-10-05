@@ -222,11 +222,12 @@ describe('delivery limits', () => {
     expect(r.suppressed).toEqual([dip]);
   });
 
-  it('respects quiet hours 23:00-07:00 PKT except for crash', () => {
+  it('respects quiet hours 23:00-07:00 PKT except for crash, and defers the rest', () => {
     const r = planDelivery([dip, crash], { ...base, now: midnightPkt });
     expect(r.send).toHaveLength(1);
     expect(r.send[0].urgent).toBe(true);
-    expect(r.suppressed).toEqual([dip]);
+    expect(r.deferred).toEqual([dip]);
+    expect(r.suppressed).toEqual([]);
   });
 
   it('sends nothing when the user turned notifications off', () => {

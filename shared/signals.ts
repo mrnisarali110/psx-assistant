@@ -171,7 +171,8 @@ export interface Notification {
 
 export interface DeliveryPlan {
   send: Notification[];
-  suppressed: AlertCandidate[]; // logged so they show in the app's alert history, never pushed
+  suppressed: AlertCandidate[]; // over the daily limit or notifications off: logged to the app's history, never pushed
+  deferred: AlertCandidate[]; // quiet hours: not logged, so the next run after quiet hours sends them
 }
 
 /**
@@ -181,13 +182,14 @@ export interface DeliveryPlan {
 export function planDelivery(cands: AlertCandidate[], o: {
   now: Date; sentToday: number; quiet: { start: string; end: string }; enabled: boolean; maxPerDay?: number;
 }): DeliveryPlan {
-  if (!cands.length) return { send: [], suppressed: [] };
-  if (!o.enabled) return { send: [], suppressed: cands };
+  if (!cands.length) return { send: [], suppressed: [], deferred: [] };
+  if (!o.enabled) return { send: [], suppressed: cands, deferred: [] };
   const max = o.maxPerDay ?? DEFAULT_RULES.notifications.max_per_day;
   const urgent = cands.filter((c) => c.urgent);
   const normal = cands.filter((c) => !c.urgent);
   const send: Notification[] = [];
   const suppressed: AlertCandidate[] = [];
+  const deferred: AlertCandidate[] = [];
   let used = o.sentToday;
 
   if (urgent.length) {
@@ -196,10 +198,11 @@ export function planDelivery(cands: AlertCandidate[], o: {
   }
   const quiet = inWindow(pktParts(o.now).minutes, o.quiet.start, o.quiet.end);
   if (normal.length) {
-    if (quiet || used >= max) suppressed.push(...normal);
+    if (quiet) deferred.push(...normal);
+    else if (used >= max) suppressed.push(...normal);
     else send.push(bundle(normal, false));
   }
-  return { send, suppressed };
+  return { send, suppressed, deferred };
 }
 
 export const SUMMARY_KINDS = new Set(['morning_brief', 'daily_summary', 'weekly_plan', 'data_unavailable']);

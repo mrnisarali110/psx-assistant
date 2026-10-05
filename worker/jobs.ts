@@ -105,7 +105,7 @@ export async function runJob(job: JobName, deps: JobDeps): Promise<RunReport> {
     let aiBudget = rules.ai.max_users_per_run;
     for (const u of users) {
       try {
-        const wantAi = !!deps.ai && !!u.settings.ai_enabled && !!idx && aiBudget > 0 && (tradedToday || job === 'morning' || job === 'weekly');
+        const wantAi = !!deps.ai && !!u.settings.ai_enabled && !!idx && aiBudget > 0;
         if (wantAi) aiBudget--;
         await processUser(u, { job, deps, now, today, prices, idx, usable, tradedToday, newAnns, digests, news, screen, wantAi, report });
       } catch (e) {
