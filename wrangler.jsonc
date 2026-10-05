@@ -7,6 +7,8 @@
   "compatibility_date": "2026-10-01",
   "assets": {
     "directory": "./dist",
-    "not_found_handling": "single-page-application"
+    // Routes are hash-based (/#/plan), so no SPA fallback: a missing file must be a real 404,
+    // never index.html served under an immutable /assets/ URL.
+    "not_found_handling": "none"
   }
 }
