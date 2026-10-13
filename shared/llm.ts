@@ -30,10 +30,16 @@ export interface ProviderStatus {
   until?: string; // ISO time the cooldown ends
 }
 
+export interface AskOpts {
+  ms?: number; // per-request timeout
+  /** Reject an answer that parsed but is useless (e.g. an empty holdings list); the next model / provider is tried. */
+  accept?: (data: any) => boolean;
+}
+
 export interface Provider {
   name: string;
   can(task: LlmTask, parts: LlmPart[]): boolean;
-  json<T>(task: LlmTask, system: string, parts: LlmPart[], schema: object, signalMs?: number): Promise<LlmResult<T>>;
+  json<T>(task: LlmTask, system: string, parts: LlmPart[], schema: object, opts?: AskOpts): Promise<LlmResult<T>>;
   /** Earliest moment this provider is worth calling again, if it is cooling down. */
   cooldown(): { until: number; reason: string } | null;
   /** Free check that the key works (no tokens spent). */
@@ -163,7 +169,8 @@ abstract class BaseProvider implements Provider {
     return { until: first.until, reason: first.reason };
   }
 
-  async json<T>(task: LlmTask, system: string, parts: LlmPart[], schema: object, ms = 90_000): Promise<LlmResult<T>> {
+  async json<T>(task: LlmTask, system: string, parts: LlmPart[], schema: object, opts: AskOpts = {}): Promise<LlmResult<T>> {
+    const ms = opts.ms ?? 90_000;
     const all = await this.modelsFor(task, parts);
     const whole = this.health.cooling(this.key('*'));
     const live = whole ? [] : all.filter((m) => !this.health.cooling(this.key(m)));
@@ -177,8 +184,13 @@ abstract class BaseProvider implements Provider {
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
           const data = await this.call(model, system, parts, schema, ms);
-          if (data != null && typeof data === 'object') return { data: data as T, model: `${this.name}/${this.answeredBy(model)}` };
-          last = `${model}: unparseable response`;
+          if (data != null && typeof data === 'object') {
+            if (!opts.accept || opts.accept(data)) return { data: data as T, model: `${this.name}/${this.answeredBy(model)}` };
+            last = `${this.answeredBy(model)}: answer rejected (useless)`;
+          } else {
+            last = `${model}: unparseable response`;
+          }
+          this.log(`${this.name} ${last}; trying next`);
           break;
         } catch (e) {
           const err = e instanceof ModelError ? e : new ModelError((e as Error).message, false, 0);
@@ -221,7 +233,8 @@ abstract class BaseProvider implements Provider {
   }
 
   /** Turn an error response into a ModelError with what to do about it. */
-  protected classify(status: number, text: string, retryAfter: string | null): ModelError {
+  protected classify(status: number, rawText: string, retryAfter: string | null): ModelError {
+    const text = rawText.replace(/"user_id"\s*:\s*"[^"]*",?/g, ''); // OpenRouter echoes its account id; keep it out of public logs
     const short = text.slice(0, 300).replace(/\s+/g, ' ');
     const fatal = [401, 403].includes(status) || (status === 400 && /api key|apikey|credential|unauthori/i.test(text));
     const e = new ModelError(`HTTP ${status} ${short}`, fatal, status);
@@ -396,8 +409,9 @@ export class OpenRouterProvider extends BaseProvider {
       : 'pdf' in p ? { type: 'text', text: `Document text:\n${p.pdf.text.slice(0, 60_000)}` }
       : { type: 'image_url', image_url: { url: `data:${p.image.mime};base64,${p.image.base64}` } });
     // OpenRouter falls back along `models` itself when the first one is down or rate limited: one round trip instead of several.
+    // The API allows at most 3 entries.
     const at = this.candidates.indexOf(model);
-    const fallbacks = at >= 0 ? this.candidates.slice(at) : [model];
+    const fallbacks = at >= 0 ? this.candidates.slice(at, at + 3) : [model];
     this.usedModel = undefined;
     const j = await this.post('https://openrouter.ai/api/v1/chat/completions', {
       Authorization: `Bearer ${this.apiKey}`, 'HTTP-Referer': 'https://github.com/mrnisarali110/psx-assistant', 'X-Title': 'PSX Assistant',
@@ -450,13 +464,13 @@ export class LlmRouter {
     return PREFERENCE[task].map((n) => this.providers.find((p) => p.name === n)).filter((p): p is Provider => !!p && p.can(task, parts));
   }
 
-  async json<T>(task: LlmTask, system: string, parts: LlmPart[], schema: object): Promise<LlmResult<T>> {
+  async json<T>(task: LlmTask, system: string, parts: LlmPart[], schema: object, opts: AskOpts = {}): Promise<LlmResult<T>> {
     const usable = this.ordered(task, parts);
     if (!usable.length) throw new Error(`no AI provider can handle a ${task} task`);
     const errors: string[] = [];
     for (const p of usable) {
       try {
-        return await p.json<T>(task, system, parts, schema);
+        return await p.json<T>(task, system, parts, schema, opts);
       } catch (e) {
         errors.push((e as Error).message);
       }

@@ -39,6 +39,20 @@ describe('OpenRouter provider', () => {
     expect(calls.length).toBe(1); // the model list is cached: only the one completion request went out
   });
 
+  it('sends at most 3 fallback models (the API limit) and moves on when an answer is rejected as useless', async () => {
+    const bodies: any[] = [];
+    const fetchImpl = (async (url: string, init?: RequestInit) => {
+      if (String(url).endsWith('/models')) return new Response(JSON.stringify(models));
+      bodies.push(JSON.parse(String(init?.body)));
+      return okOpenAi(bodies.length === 1 ? '{"is_portfolio":true,"holdings":[]}' : '{"is_portfolio":true,"holdings":[{"symbol":"SYS"}]}');
+    }) as unknown as typeof fetch;
+    const router = makeRouter({ openrouter: 'k' }, { fetchImpl, log: () => {}, health: new LlmHealth() });
+    const r = await router.json<any>('text', 's', [{ text: 'x' }], {}, { accept: (d) => d.holdings?.length > 0 });
+    expect(bodies.map((b) => b.model)).toEqual(['meta-llama/llama-4-maverick:free', 'new/vision-model:free']);
+    expect(bodies[0].models).toEqual(['meta-llama/llama-4-maverick:free', 'new/vision-model:free', 'some/text-only:free']); // 4 candidates, 3 sent
+    expect(r.data.holdings).toHaveLength(1);
+  });
+
   it('reports the model that actually answered and reads answers reasoning models hide in `reasoning`', async () => {
     const fetchImpl = (async (url: string) => {
       if (String(url).endsWith('/models')) return new Response(JSON.stringify(models));

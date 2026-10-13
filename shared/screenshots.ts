@@ -51,11 +51,14 @@ export function importParts(images: { mime: string; base64: string }[], known: s
   ];
 }
 
+/** An answer worth keeping: a portfolio with at least one clean row. Anything else sends the router to the next model / provider. */
+export const usableRead = (data: any) => data?.is_portfolio !== false && cleanImported(Array.isArray(data?.holdings) ? data.holdings : []).rows.length > 0;
+
 export async function readPortfolioScreenshots(ai: LlmRouter, images: { mime: string; base64: string }[], opts: { known?: string[] } = {}):
   Promise<{ rows: ImportedRow[]; dropped: string[]; isPortfolio: boolean; model: string }> {
   const { data, model } = await ai.json<any>('vision',
     'You read screenshots of a Pakistan Stock Exchange broker app portfolio. Copy each holding exactly as shown. Never guess a value you cannot read; skip that row instead.',
-    importParts(images, opts.known), SCHEMA);
+    importParts(images, opts.known), SCHEMA, { accept: usableRead });
   const { rows, dropped } = cleanImported(Array.isArray(data?.holdings) ? data.holdings : []);
   return { rows, dropped, isPortfolio: data?.is_portfolio !== false, model };
 }

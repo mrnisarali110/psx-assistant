@@ -151,6 +151,20 @@ describe('screenshot import endpoint', () => {
   it('says clearly when the AI key is missing', async () => {
     expect((await handleImport(req({ images: [img] }), { ...env, GEMINI_API_KEY: undefined }, fetchImpl)).status).toBe(503);
   });
+  it('an empty answer from the first reader is not accepted: the next provider gets the screenshots', async () => {
+    const order: string[] = [];
+    const spy = (async (url: string, init?: RequestInit) => {
+      const u = String(url);
+      if (u.endsWith('/models')) return new Response(JSON.stringify({ data: [{ id: 'x/vision:free', pricing: { prompt: '0', completion: '0' }, architecture: { input_modalities: ['text', 'image'] }, context_length: 1000 }] }));
+      if (u.includes('openrouter.ai/api/v1/chat')) { order.push('openrouter'); return new Response(JSON.stringify({ choices: [{ message: { content: '{"is_portfolio":true,"holdings":[]}' } }] })); }
+      if (u.includes('generateContent')) order.push('gemini');
+      return fetchImpl(url, init);
+    }) as unknown as typeof fetch;
+    const r = await handleImport(req({ images: [img] }), { ...env, OPENROUTER_API_KEY: 'k' }, spy);
+    expect(r.status).toBe(200);
+    expect(((await r.json()) as any).model).toBe('gemini/gemini-3.8-flash');
+    expect(order).toEqual(['openrouter', 'gemini']);
+  });
   it('passes the symbols you already hold as reading hints, never quantities or costs', async () => {
     let prompt = '';
     const spy = (async (url: string, init?: RequestInit) => {
