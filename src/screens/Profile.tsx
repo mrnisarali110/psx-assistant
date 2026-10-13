@@ -77,8 +77,11 @@ export function Profile({ data, source, reload, onExitDemo }: ScreenProps & { on
 
       <Section title="Money">
         <Card className="divide-y divide-slate-100 py-0 dark:divide-slate-800">
-          <Row icon="coins" label="Monthly investment" hint="Your SIP. The portfolio shows how much is invested so far this month.">
+          <Row icon="coins" label="Monthly investment" hint="Your SIP. Home shows how much is invested so far this month and the wealth projection builds on it.">
             <NumberInput label="Monthly investment" prefix="Rs" value={s.monthly_budget_pkr} min={0} max={10_000_000} width="w-36" onSave={(v) => save({ monthly_budget_pkr: v })} />
+          </Row>
+          <Row icon="up" label="Yearly increase" hint="Raise the monthly investment by this much every year, e.g. 10% as your income grows. The wealth projection on Home uses it.">
+            <NumberInput label="Yearly increase" suffix="%" value={s.sip_step_up_pct} min={0} max={100} width="w-24" onSave={(v) => save({ sip_step_up_pct: v })} />
           </Row>
           <Row icon="shield" label="Crash fund" hint="Kept apart; only suggested on a crash.">
             <NumberInput label="Crash fund" prefix="Rs" value={s.crash_fund_pkr} min={0} max={100_000_000} width="w-36" onSave={(v) => save({ crash_fund_pkr: v })} />
@@ -107,7 +110,7 @@ export function Profile({ data, source, reload, onExitDemo }: ScreenProps & { on
 
       <Section title="AI Assistant">
         <Card className="py-0">
-          <Row icon="sparkles" label="AI suggestions" hint="Uses Groq and Google Gemini free tiers, which may use what they receive to improve their products. They get symbols, share counts and costs, never your name or email.">
+          <Row icon="sparkles" label="AI suggestions" hint="Uses the Groq, Google Gemini and OpenRouter free tiers, which may use what they receive to improve their products. They get symbols, share counts and costs, never your name or email.">
             <Toggle label="AI suggestions" checked={!!s.ai_enabled} onChange={(v) => save({ ai_enabled: v })} />
           </Row>
         </Card>

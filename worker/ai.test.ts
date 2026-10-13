@@ -2,11 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { discoverPicks, guardInsight, numberSet, numbersGrounded } from './ai.ts';
 import { buildFacts } from './jobs.ts';
 import type { UserCtx } from './store.ts';
-import { GeminiProvider, GroqProvider, LlmRouter, makeRouter, parseJsonLoose } from '../shared/llm.ts';
+import { GeminiProvider, GroqProvider, LlmHealth, LlmRouter, makeRouter, parseJsonLoose } from '../shared/llm.ts';
 import { buildPortfolio } from '../shared/portfolio.ts';
 import { DEFAULT_SETTINGS } from '../shared/types.ts';
 import { SEED_HOLDINGS, SEED_INDEX, SEED_PRICES, SEED_WATCHLIST } from '../shared/fixtures/seed.ts';
-import { handleImport, type Env } from '../edge/index.ts';
+import { handleImport, handleStatus, importError, whenPkt, type Env } from '../edge/index.ts';
 
 const owner = (): UserCtx => ({ id: 'owner-1', settings: { ...DEFAULT_SETTINGS, ai_enabled: true }, holdings: SEED_HOLDINGS, watchlist: SEED_WATCHLIST, telegram_chat_id: null, subs: [] });
 const seedFacts = () => {
@@ -97,14 +97,14 @@ describe('AI router (Groq + Gemini)', () => {
 
   it('text tasks go to Groq first and fall back to Gemini', async () => {
     const r = recorder((u) => (u.includes('groq') ? new Response('rate limited', { status: 429 }) : ok('{"ok":1}')));
-    const router = makeRouter({ gemini: 'g', groq: 'q' }, { fetchImpl: r.fetchImpl, log: () => {} });
+    const router = makeRouter({ gemini: 'g', groq: 'q' }, { fetchImpl: r.fetchImpl, log: () => {}, health: new LlmHealth() });
     expect(await router.json('text', 's', [{ text: 'hi' }], {})).toEqual({ data: { ok: 1 }, model: 'gemini/gemini-3.8-flash' });
     expect(r.calls.filter((c) => c.includes('groq'))).toHaveLength(2); // both Groq models tried
   });
 
   it('PDFs go to Gemini first; Groq only gets them when there is extracted text', async () => {
     const r = recorder((u) => (u.includes('googleapis') ? new Response('overloaded', { status: 503 }) : ok('{"via":"groq"}')));
-    const router = makeRouter({ gemini: 'g', groq: 'q' }, { fetchImpl: r.fetchImpl, log: () => {} });
+    const router = makeRouter({ gemini: 'g', groq: 'q' }, { fetchImpl: r.fetchImpl, log: () => {}, health: new LlmHealth() });
     const withText = await router.json('pdf', 's', [{ pdf: { base64: 'x', text: 'profit '.repeat(50) } }, { text: 'q' }], {});
     expect(withText.model).toBe('groq/openai/gpt-oss-120b');
     expect(r.calls[0]).toContain('googleapis');
@@ -114,7 +114,7 @@ describe('AI router (Groq + Gemini)', () => {
   it('images are never sent to Groq; a bad key stops that provider at once', async () => {
     expect(new GroqProvider('q').can('vision', [{ image: { mime: 'image/png', base64: 'x' } }])).toBe(false);
     const r = recorder(() => new Response('API key not valid', { status: 400 }));
-    const g = new GeminiProvider('bad', { fetchImpl: r.fetchImpl, log: () => {} });
+    const g = new GeminiProvider('bad', { fetchImpl: r.fetchImpl, log: () => {}, health: new LlmHealth() });
     await expect(new LlmRouter([g]).json('vision', 's', [{ image: { mime: 'image/png', base64: 'x' } }], {})).rejects.toThrow();
     expect(r.calls).toHaveLength(1);
   });
@@ -150,5 +150,36 @@ describe('screenshot import endpoint', () => {
   });
   it('says clearly when the AI key is missing', async () => {
     expect((await handleImport(req({ images: [img] }), { ...env, GEMINI_API_KEY: undefined }, fetchImpl)).status).toBe(503);
+  });
+  it('passes the symbols you already hold as reading hints, never quantities or costs', async () => {
+    let prompt = '';
+    const spy = (async (url: string, init?: RequestInit) => {
+      if (String(url).includes('generateContent')) prompt = String(init?.body);
+      return fetchImpl(url, init);
+    }) as unknown as typeof fetch;
+    const r = await handleImport(req({ images: [img], known: ['sys', 'MEBL', 'bad symbol!', 'MEBL'] }), env, spy);
+    expect(r.status).toBe(200);
+    expect(prompt).toMatch(/already holds these symbols: MEBL, SYS\./);
+    expect(prompt).not.toMatch(/118|583/);
+  });
+  it('GET /api/ai-status reports each provider from free checks only', async () => {
+    const urls: string[] = [];
+    const spy = (async (url: string, init?: RequestInit) => { urls.push(String(url)); return fetchImpl(url, init); }) as unknown as typeof fetch;
+    const get = (auth: string) => new Request('https://app/api/ai-status', { headers: { Authorization: auth } });
+    const r = await handleStatus(get('Bearer good.token'), { ...env, OPENROUTER_API_KEY: 'k' }, spy);
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as any;
+    expect(body.vision).toEqual(['openrouter', 'gemini']);
+    expect(body.ready).toBe(true);
+    expect(body.providers.map((p: any) => `${p.name}:${p.state}`)).toEqual(['gemini:ready', 'openrouter:ready']);
+    expect(urls.some((u) => /generateContent|chat\/completions/.test(u))).toBe(false);
+    expect((await handleStatus(get('Bearer bad.token'), env, spy)).status).toBe(401);
+  });
+  it('turns provider errors into advice with a time to come back', () => {
+    expect(importError('AI unavailable: openrouter cooling down until 2026-10-15T00:01:00.000Z: HTTP 429 free-models-per-day', '2026-10-15T00:01:00.000Z'))
+      .toMatchObject({ reason: 'limit', retry_at: '2026-10-15T00:01:00.000Z', error: expect.stringMatching(/^The free AI limits are used up for now\. Try again after /) });
+    expect(importError('HTTP 503 overloaded')).toMatchObject({ reason: 'busy', retry_at: null });
+    expect(whenPkt('2026-10-14T05:30:00Z', new Date('2026-10-14T03:00:00Z'))).toBe('10:30 AM');
+    expect(whenPkt('2026-10-15T00:01:00Z', new Date('2026-10-14T03:00:00Z'))).toBe('tomorrow 5:01 AM');
   });
 });

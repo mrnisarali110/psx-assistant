@@ -93,7 +93,7 @@ export class SupabaseStore implements Store {
       id: s.user_id,
       settings: {
         ...DEFAULT_SETTINGS, ...s,
-        monthly_budget_pkr: Number(s.monthly_budget_pkr), crash_fund_pkr: Number(s.crash_fund_pkr),
+        monthly_budget_pkr: Number(s.monthly_budget_pkr), sip_step_up_pct: Number(s.sip_step_up_pct ?? 0), crash_fund_pkr: Number(s.crash_fund_pkr),
         crash_trigger_kse: Number(s.crash_trigger_kse), max_position_pct: Number(s.max_position_pct),
         drop_alert_pct: Number(s.drop_alert_pct),
       },

@@ -1,11 +1,12 @@
 /**
  * Cloudflare Worker in front of the static app. Everything is served from ./dist except:
- *   POST /api/import  — read holdings from broker screenshots with AI.
+ *   POST /api/import     — read holdings from broker screenshots with AI.
+ *   GET  /api/ai-status  — which AI providers are ready, cooling down or mis-configured (free checks, no tokens).
  * Screenshots exist only in this request's memory: never stored, never logged.
- * The AI keys are Worker secrets (wrangler secret put GEMINI_API_KEY / GROQ_API_KEY).
+ * The AI keys are Worker secrets (wrangler secret put OPENROUTER_API_KEY / GEMINI_API_KEY / GROQ_API_KEY).
  */
-import { makeRouter } from '../shared/llm.ts';
-import { readPortfolioScreenshots } from '../shared/screenshots.ts';
+import { PREFERENCE, makeRouter, type LlmRouter } from '../shared/llm.ts';
+import { cleanKnownSymbols, importParts, readPortfolioScreenshots } from '../shared/screenshots.ts';
 
 export interface Env {
   ASSETS: { fetch(req: Request): Promise<Response> };
@@ -13,6 +14,8 @@ export interface Env {
   SUPABASE_KEY: string; // publishable key, used only to verify the caller's session
   GEMINI_API_KEY?: string;
   GROQ_API_KEY?: string;
+  OPENROUTER_API_KEY?: string;
+  OPENROUTER_MODELS?: string; // optional comma list to pin models instead of discovering free ones
 }
 
 const MAX_IMAGES = 4;
@@ -32,43 +35,80 @@ async function userFor(req: Request, env: Env, fetchImpl: typeof fetch): Promise
   return u.id ? { id: u.id } : null;
 }
 
+function router(env: Env, fetchImpl: typeof fetch): LlmRouter {
+  const list = (s?: string) => s?.split(',').map((x) => x.trim()).filter(Boolean);
+  return makeRouter(
+    { gemini: env.GEMINI_API_KEY, groq: env.GROQ_API_KEY, openrouter: env.OPENROUTER_API_KEY, openrouterModels: list(env.OPENROUTER_MODELS) },
+    { fetchImpl, log: (m) => console.log(m) }, // provider error text only; never images or holdings
+  );
+}
+
+/** "3:05 PM" or "tomorrow 9:00 AM" in Pakistan time. */
+export function whenPkt(iso: string, now = new Date()): string {
+  const d = new Date(iso);
+  const day = (x: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Karachi', year: 'numeric', month: '2-digit', day: '2-digit' }).format(x);
+  const time = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Karachi', hour: 'numeric', minute: '2-digit' }).format(d);
+  return day(d) === day(now) ? time : `tomorrow ${time}`;
+}
+
 /** A message the user can act on, from the AI provider's error. */
-export function importError(msg: string): { error: string; reason: string } {
-  if (/\b429\b|quota|RESOURCE_EXHAUSTED|rate limit/i.test(msg)) return { error: "Today's free AI limit is used up. Try again later or tomorrow.", reason: 'limit' };
-  if (/\b503\b|overload|high demand|UNAVAILABLE/i.test(msg)) return { error: 'The AI is busy right now. Try again in a minute.', reason: 'busy' };
-  if (/\b40[13]\b|api key/i.test(msg)) return { error: "Screenshot reading isn't set up correctly (AI key).", reason: 'key' };
-  if (/\b400\b|invalid|unsupported/i.test(msg)) return { error: "The AI couldn't process these images. Try a clear screenshot of the holdings list.", reason: 'bad_request' };
-  return { error: "Couldn't read the screenshots this time. Try again.", reason: 'other' };
+export function importError(msg: string, retryAt: string | null = null): { error: string; reason: string; retry_at: string | null } {
+  const again = retryAt ? ` Try again after ${whenPkt(retryAt)}.` : '';
+  if (/\b429\b|\b402\b|quota|RESOURCE_EXHAUSTED|rate limit|cooling down/i.test(msg)) {
+    return { error: `The free AI limits are used up for now.${again || ' Try again in a few minutes.'}`, reason: 'limit', retry_at: retryAt };
+  }
+  if (/\b503\b|overload|high demand|UNAVAILABLE/i.test(msg)) return { error: `The AI is busy right now.${again || ' Try again in a minute.'}`, reason: 'busy', retry_at: retryAt };
+  if (/\b40[13]\b|api key/i.test(msg)) return { error: "Screenshot reading isn't set up correctly (AI key).", reason: 'key', retry_at: null };
+  if (/\b400\b|invalid|unsupported/i.test(msg)) return { error: "The AI couldn't process these images. Try a clear screenshot of the holdings list.", reason: 'bad_request', retry_at: null };
+  return { error: "Couldn't read the screenshots this time. Try again.", reason: 'other', retry_at: retryAt };
 }
 
 export async function handleImport(req: Request, env: Env, fetchImpl: typeof fetch = fetch): Promise<Response> {
   if (req.method !== 'POST') return json({ error: 'Use POST' }, 405);
   if (!(await userFor(req, env, fetchImpl))) return json({ error: 'Please sign in again.' }, 401);
-  const ai = makeRouter({ gemini: env.GEMINI_API_KEY, groq: env.GROQ_API_KEY }, { fetchImpl, log: () => {} });
+  const ai = router(env, fetchImpl);
   if (!ai.available) return json({ error: 'Screenshot reading is not set up yet (missing AI key).' }, 503);
 
-  let body: { images?: { mime?: string; base64?: string }[] };
+  let body: { images?: { mime?: string; base64?: string }[]; known?: unknown };
   try { body = await req.json(); } catch { return json({ error: 'Bad request' }, 400); }
   const images = (body.images ?? []).filter((i) => i && typeof i.base64 === 'string' && IMAGE_TYPES.has(String(i.mime)));
   if (!images.length) return json({ error: 'Add at least one screenshot (JPEG, PNG or WebP).' }, 400);
   if (images.length > MAX_IMAGES) return json({ error: `Up to ${MAX_IMAGES} screenshots at a time.` }, 400);
   if (images.some((i) => (i.base64 as string).length > MAX_IMAGE_BYTES)) return json({ error: 'A screenshot is too large.' }, 413);
+  const known = cleanKnownSymbols(body.known);
+  const pics = images.map((i) => ({ mime: i.mime as string, base64: i.base64 as string }));
 
   try {
-    const r = await readPortfolioScreenshots(ai, images.map((i) => ({ mime: i.mime as string, base64: i.base64 as string })));
+    const r = await readPortfolioScreenshots(ai, pics, { known });
     if (!r.isPortfolio || !r.rows.length) return json({ error: "Couldn't find a holdings list in these screenshots. Use the Portfolio screen of your broker app." }, 422);
     return json({ holdings: r.rows, dropped: r.dropped, model: r.model });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error('import failed:', msg.slice(0, 500)); // Cloudflare logs only; never the images
-    return json(importError(msg), 503);
+    return json(importError(msg, ai.nextReady('vision', importParts(pics))), 503);
   }
+}
+
+/** Provider states for the app: cooldowns from memory plus a free key check per provider (cached 10 min). */
+export async function handleStatus(req: Request, env: Env, fetchImpl: typeof fetch = fetch): Promise<Response> {
+  if (req.method !== 'GET') return json({ error: 'Use GET' }, 405);
+  if (!(await userFor(req, env, fetchImpl))) return json({ error: 'Please sign in again.' }, 401);
+  const ai = router(env, fetchImpl);
+  const providers = await ai.status({ probe: true });
+  const vision = PREFERENCE.vision.filter((n) => ai.names.includes(n));
+  const cooling = providers.filter((p) => vision.includes(p.name) && p.state === 'cooling' && p.until).map((p) => p.until!).sort();
+  return json({
+    providers, vision,
+    ready: providers.some((p) => vision.includes(p.name) && p.state === 'ready'),
+    retry_at: cooling[0] ?? null,
+  });
 }
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
     if (url.pathname === '/api/import') return handleImport(req, env);
+    if (url.pathname === '/api/ai-status') return handleStatus(req, env);
     if (url.pathname.startsWith('/api/')) return json({ error: 'Not found' }, 404);
     return env.ASSETS.fetch(req);
   },

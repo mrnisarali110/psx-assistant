@@ -15,7 +15,7 @@ on:
       job:
         description: Job to run now
         type: choice
-        options: [market, night, test, telegram, aicheck, diag]
+        options: [market, night, test, telegram, aicheck, aistatus, diag]
         default: market
       email:
         description: 'job=test only: account email to send a test crash alert to'
@@ -52,6 +52,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           APP_URL: ${{ vars.APP_URL }}
         run: npm run worker -- "$JOB"
       - name: Keep scheduled workflows alive

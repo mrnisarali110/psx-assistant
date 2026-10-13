@@ -51,6 +51,7 @@ export interface IndexSnapshot {
 
 export interface Settings {
   monthly_budget_pkr: number;
+  sip_step_up_pct: number; // raise the monthly investment by this much every year (wealth projection)
   crash_fund_pkr: number;
   crash_trigger_kse: number;
   max_position_pct: number;
@@ -63,6 +64,7 @@ export interface Settings {
 
 export const DEFAULT_SETTINGS: Settings = {
   monthly_budget_pkr: 50000,
+  sip_step_up_pct: 0,
   crash_fund_pkr: 50000,
   crash_trigger_kse: 155000,
   max_position_pct: 25,

@@ -1,4 +1,4 @@
-/** Wealth growth: today's value + monthly SIP, at a chosen yearly return. Tap the chart to read a year. */
+/** Wealth growth: today's value + monthly SIP (rising by the yearly step-up from Profile), at a chosen yearly return. Tap the chart to read a year. */
 import { useMemo, useState } from 'react';
 import { GROWTH_SCENARIOS, projectWealth, realValue } from '../../shared/growth.ts';
 import { rs, rsShort } from '../../shared/format.ts';
@@ -8,12 +8,12 @@ import { Segmented } from './ui.tsx';
 const YEARS = [5, 10, 15, 20] as const;
 const INFLATION = 8; // assumption for the "today's rupees" line
 
-export function GrowthCard({ start, monthly }: { start: number; monthly: number }) {
+export function GrowthCard({ start, monthly, stepUpPct = 0 }: { start: number; monthly: number; stepUpPct?: number }) {
   const [scenario, setScenario] = useState<(typeof GROWTH_SCENARIOS)[number]['id']>('steady');
   const [years, setYears] = useState<(typeof YEARS)[number]>(10);
   const [at, setAt] = useState<number | null>(null);
   const rate = GROWTH_SCENARIOS.find((s) => s.id === scenario)!.rate;
-  const g = useMemo(() => projectWealth({ start, monthly, annualReturnPct: rate, years }), [start, monthly, rate, years]);
+  const g = useMemo(() => projectWealth({ start, monthly, annualReturnPct: rate, years, stepUpPct }), [start, monthly, rate, years, stepUpPct]);
   const point = g.points[at ?? years];
 
   const w = 300, h = 120, pad = 4;
@@ -65,7 +65,7 @@ export function GrowthCard({ start, monthly }: { start: number; monthly: number 
         <span>{years}y · {rsShort(g.final)}</span>
       </div>
       <p className="text-[11px] leading-snug text-slate-500 dark:text-slate-400">
-        {rs(monthly)} a month at {rate}% a year, compounded monthly. About {rs(realValue(g.final, INFLATION, years))} in today’s money if inflation averages {INFLATION}%.
+        {rs(monthly)} a month{stepUpPct > 0 ? `, rising ${stepUpPct}% every year,` : ''} at {rate}% a year, compounded monthly. About {rs(realValue(g.final, INFLATION, years))} in today’s money if inflation averages {INFLATION}%.
         An illustration, not a forecast: PSX returns swing a lot from year to year.
       </p>
     </div>

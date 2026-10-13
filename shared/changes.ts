@@ -3,6 +3,7 @@
  * so "invested this month" and "x% below your last buy" stay consistent however the change came in.
  */
 import type { Holding, Price, PriceMap, Txn } from './types.ts';
+import { rs2 } from './format.ts';
 
 const r2 = (v: number) => Math.round(v * 100) / 100;
 
@@ -114,4 +115,17 @@ export function diffImport(current: Holding[], imported: ImportedRow[], today: s
   }
   const order = { new: 0, changed: 1, missing: 2, same: 3 };
   return changes.sort((a, b) => order[a.kind] - order[b.kind] || a.symbol.localeCompare(b.symbol));
+}
+
+/** One line in plain words for a change in the review list. For a missing holding, apply = "sold all". */
+export function describeChange(c: ImportChange, apply = true): string {
+  if (c.kind === 'new') return `${c.after!.shares} shares at ${rs2(c.after!.avg_cost)} average`;
+  if (c.kind === 'missing') {
+    return apply ? `Sold all ${c.before!.shares} shares${c.txn ? ` at ${rs2(c.txn.price)}` : ''}` : `${c.before!.shares} shares kept; not in these screenshots`;
+  }
+  if (c.kind === 'same') return 'Unchanged';
+  const b = c.before!, a = c.after!;
+  if (a.shares > b.shares) return `${b.shares} → ${a.shares} shares · bought ${a.shares - b.shares} more${c.txn ? ` at about ${rs2(c.txn.price)}` : ''}`;
+  if (a.shares < b.shares) return `${b.shares} → ${a.shares} shares · sold ${b.shares - a.shares}${c.txn ? ` at ${rs2(c.txn.price)}` : ''}`;
+  return `Average cost ${rs2(b.avg_cost)} → ${rs2(a.avg_cost)}`;
 }

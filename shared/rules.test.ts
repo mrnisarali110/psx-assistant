@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { allocationSlices, buildPortfolio, mergeCall } from './portfolio.ts';
-import { applyBuy, cleanImported, diffImport, investedThisMonth, txnFromChange, withLastBuy } from './changes.ts';
+import { applyBuy, cleanImported, describeChange, diffImport, investedThisMonth, txnFromChange, withLastBuy } from './changes.ts';
 import { dividendLeaders, frequencyOf, undervalued, upcomingDividends, workingDaysBefore, type ScreenRow } from './discover.ts';
 import { projectWealth, realValue } from './growth.ts';
 import { dayStance, holdingAlerts, marketAlerts, marketState, planDelivery, todayBanner, type AlertCandidate } from './signals.ts';
@@ -117,6 +117,18 @@ describe('holding changes and transactions', () => {
     expect(baseline.every((c) => c.kind === 'new' && c.txn === null)).toBe(true);
   });
 
+  it('describes each change in plain words, including sells and stocks that are gone', () => {
+    const imported = [{ symbol: 'SYS', shares: 130, avg_cost: 128.5 }, { symbol: 'MEBL', shares: 15, avg_cost: 583.06 }, { symbol: 'HUBC', shares: 26, avg_cost: 195.57 }];
+    const d = diffImport(SEED_HOLDINGS, imported, TODAY, SEED_PRICES, { removeMissing: true, recordTxns: true });
+    const by = (s: string) => d.find((c) => c.symbol === s)!;
+    expect(describeChange(by('HUBC'))).toBe('26 shares at Rs 195.57 average');
+    expect(describeChange(by('SYS'))).toMatch(/^118 → 130 shares · bought 12 more at about Rs /);
+    expect(describeChange(by('MEBL'))).toBe('20 → 15 shares · sold 5 at Rs 548.11');
+    expect(by('MEBL').txn).toMatchObject({ side: 'sell', shares: 5 });
+    expect(describeChange(by('AVN'))).toMatch(/^Sold all 100 shares at Rs /);
+    expect(describeChange(by('AVN'), false)).toBe('100 shares kept; not in these screenshots');
+  });
+
   it('rejects bad buys', () => {
     expect(() => applyBuy(undefined, 'X', 1.5, 10)).toThrow();
     expect(() => applyBuy(undefined, 'X', 1, 0)).toThrow();
@@ -180,6 +192,13 @@ describe('wealth growth', () => {
     expect(g.final).toBeLessThan(14_500_000);
     expect(projectWealth({ start: 1000, monthly: 0, annualReturnPct: 0, years: 5 }).final).toBe(1000);
     expect(realValue(1_000_000, 10, 1)).toBe(909091);
+  });
+  it('a yearly step-up raises the monthly amount each year', () => {
+    const flat = projectWealth({ start: 0, monthly: 10000, annualReturnPct: 0, years: 3 });
+    const up = projectWealth({ start: 0, monthly: 10000, annualReturnPct: 0, years: 3, stepUpPct: 10 });
+    expect(flat.invested).toBe(360_000);
+    expect(up.points.map((p) => p.invested)).toEqual([0, 120_000, 252_000, 397_200]);
+    expect(up.final).toBe(397_200);
   });
 });
 

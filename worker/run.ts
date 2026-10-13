@@ -1,15 +1,16 @@
 /**
  * Worker entry point.
  *   npm run worker -- <job> [--dry-run] [--email you@example.com] [--now ISO]
- * jobs: market | night | test | telegram | aicheck | diag | auto
+ * jobs: market | night | test | telegram | aicheck | aistatus | diag | auto
  * diag prints delivery settings and the last alerts per account: kinds, times, channels only (logs are public).
  * "auto" picks the job from the GitHub cron expression in $SCHEDULE.
  * --dry-run fetches live PSX data but uses the seed portfolio in memory and only prints alerts.
  * aicheck runs every AI task once on real PSX data and the seed portfolio, prints, and writes nothing.
+ * aistatus checks every AI key with a free call (no tokens) and prints which providers are ready or cooling down.
  */
 import { DEFAULT_SETTINGS } from '../shared/types.ts';
 import { SEED_HOLDINGS, SEED_WATCHLIST } from '../shared/fixtures/seed.ts';
-import { makeRouter } from '../shared/llm.ts';
+import { llmHealth, makeRouter } from '../shared/llm.ts';
 import { buildPortfolio } from '../shared/portfolio.ts';
 import { undervalued } from '../shared/discover.ts';
 import { pktDate } from '../shared/time.ts';
@@ -36,7 +37,7 @@ const flag = (name: string) => {
   return i >= 0 ? args[i + 1] : undefined;
 };
 const dryRun = args.includes('--dry-run');
-let job = (args.find((a) => !a.startsWith('--') && a !== flag('--email') && a !== flag('--now')) ?? 'auto') as JobName | 'telegram' | 'aicheck' | 'diag' | 'auto';
+let job = (args.find((a) => !a.startsWith('--') && a !== flag('--email') && a !== flag('--now')) ?? 'auto') as JobName | 'telegram' | 'aicheck' | 'aistatus' | 'diag' | 'auto';
 if (job === 'auto') {
   const sched = process.env.SCHEDULE ?? '';
   job = CRON_TO_JOB[sched] ?? (sched.includes('*/20') ? 'telegram' : 'market');
@@ -46,7 +47,10 @@ const env = process.env;
 const email = flag('--email') || env.TEST_EMAIL || undefined;
 const fetcher = new Fetcher();
 const list = (s?: string) => s?.split(',').map((x) => x.trim()).filter(Boolean);
-const ai = makeRouter({ gemini: env.GEMINI_API_KEY, groq: env.GROQ_API_KEY, geminiModels: list(env.GEMINI_MODELS), groqModels: list(env.GROQ_MODELS) });
+const ai = makeRouter({
+  gemini: env.GEMINI_API_KEY, groq: env.GROQ_API_KEY, openrouter: env.OPENROUTER_API_KEY,
+  geminiModels: list(env.GEMINI_MODELS), groqModels: list(env.GROQ_MODELS), openrouterModels: list(env.OPENROUTER_MODELS),
+});
 const snapshot = (s: string[], o?: { screener?: boolean }) => fetchSnapshot(s, { fetcher, ...o });
 
 const seedUser = (): UserCtx => ({
@@ -56,7 +60,7 @@ const seedUser = (): UserCtx => ({
 
 /** Live check of every AI task on real PSX data. Writes nothing. */
 async function aiCheck(): Promise<number> {
-  if (!ai.available) { console.error('No AI key set (GEMINI_API_KEY / GROQ_API_KEY)'); return 2; }
+  if (!ai.available) { console.error('No AI key set (OPENROUTER_API_KEY / GEMINI_API_KEY / GROQ_API_KEY)'); return 2; }
   const u = seedUser();
   const syms = [...SEED_HOLDINGS.map((h) => h.symbol), ...SEED_WATCHLIST.map((w) => w.symbol)];
   const snap = await snapshot(syms);
@@ -102,11 +106,29 @@ async function aiCheck(): Promise<number> {
 == Screenshot read (${r.model}): ${r.rows.length} rows, ${right}/${want.size} exactly right, unreadable ${r.dropped.length}`);
     if (right < want.size) ok = false;
   } catch (e) { ok = false; console.error('screenshot read failed:', (e as Error).message.slice(0, 300)); }
+  printHealth();
   return ok ? 0 : 1;
+}
+
+/** Cooldowns remembered during this run (which models hit a limit and until when). */
+function printHealth() {
+  const cool = llmHealth.snapshot();
+  console.log(cool.length ? `\n== Cooling down: ${cool.map((c) => `${c.key} until ${c.until} (${c.reason.slice(0, 80)})`).join('; ')}` : '\n== No model is cooling down.');
+}
+
+/** Free check of every configured AI key: list-models / key-info calls only, no prompts, no tokens. */
+async function aiStatus(): Promise<number> {
+  if (!ai.available) { console.error('No AI key set (OPENROUTER_API_KEY / GEMINI_API_KEY / GROQ_API_KEY)'); return 2; }
+  const st = await ai.status({ probe: true });
+  for (const p of st) console.log(`${p.name.padEnd(11)} ${p.state.padEnd(8)} ${p.detail ?? ''}${p.until ? ` (until ${p.until})` : ''}`);
+  const readers = ['openrouter', 'gemini'].filter((n) => ai.names.includes(n));
+  console.log(`providers: ${ai.names.join(', ')}; screenshots are read by: ${readers.join(' then ') || 'nobody (no vision-capable key)'}`);
+  return st.some((p) => p.state === 'ready') ? 0 : 1;
 }
 
 async function main(): Promise<number> {
   if (job === 'aicheck') return aiCheck();
+  if (job === 'aistatus') return aiStatus();
 
   if (dryRun) {
     const fakeNow = flag('--now'); // e.g. 2026-10-05T07:30:00Z to replay a trading day

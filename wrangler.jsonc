@@ -1,6 +1,7 @@
 // Cloudflare Workers: the built app (static assets, free and unlimited) plus a tiny API for
 // screenshot import (edge/index.ts). Deploy: npm run deploy
-// Secrets (set once, never in the repo): npx wrangler secret put GEMINI_API_KEY / GROQ_API_KEY
+// Secrets (set once, never in the repo): npx wrangler secret put OPENROUTER_API_KEY / GEMINI_API_KEY / GROQ_API_KEY
+// GET /api/ai-status shows which of them are ready (free checks, no AI tokens).
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "psx-assistant",

@@ -131,7 +131,7 @@ export function Home(props: ScreenProps) {
       </Card>
 
       <Section title="Wealth growth">
-        <Card><GrowthCard start={view.total_value} monthly={budget} /></Card>
+        <Card><GrowthCard start={view.total_value} monthly={budget} stepUpPct={data.settings.sip_step_up_pct} /></Card>
       </Section>
 
       {acts.ui}

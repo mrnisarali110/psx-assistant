@@ -14,7 +14,7 @@ import {
   SEED_ANNOUNCEMENTS, SEED_CAPTURED_AT, SEED_HOLDINGS, SEED_INDEX, SEED_PRICES, SEED_SCREEN, SEED_TXNS, SEED_WATCHLIST,
 } from '../../shared/fixtures/seed.ts';
 import { config } from './config.ts';
-import { readScreenshots } from './importer.ts';
+import { fetchAiStatus, readScreenshots, type AiStatus } from './importer.ts';
 
 export interface WorkerRun { job: string; started_at: string; finished_at: string | null; ok: boolean | null }
 
@@ -48,7 +48,10 @@ export interface DataSource {
   createTelegramCode(): Promise<string>;
   savePushSubscription(sub: PushSubscriptionJSON): Promise<void>;
   deletePushSubscription(endpoint: string): Promise<void>;
-  readScreenshots(files: File[]): Promise<{ holdings: ImportedRow[]; dropped: string[] }>;
+  /** known = symbols already held, sent as reading hints (never quantities or costs). */
+  readScreenshots(files: File[], known: string[]): Promise<{ holdings: ImportedRow[]; dropped: string[] }>;
+  /** Which AI providers can read screenshots right now (free check, no tokens). */
+  aiStatus(): Promise<AiStatus>;
 }
 
 let client: SupabaseClient | null = null;
@@ -115,7 +118,7 @@ export class LiveSource implements DataSource {
     const history = (ok(idx) as any[]).map(normIdx);
     return {
       settings: s ? {
-        ...DEFAULT_SETTINGS, ...s, monthly_budget_pkr: Number(s.monthly_budget_pkr), crash_fund_pkr: Number(s.crash_fund_pkr),
+        ...DEFAULT_SETTINGS, ...s, monthly_budget_pkr: Number(s.monthly_budget_pkr), sip_step_up_pct: Number(s.sip_step_up_pct ?? 0), crash_fund_pkr: Number(s.crash_fund_pkr),
         crash_trigger_kse: Number(s.crash_trigger_kse), max_position_pct: Number(s.max_position_pct), drop_alert_pct: Number(s.drop_alert_pct),
       } : { ...DEFAULT_SETTINGS },
       holdings: H,
@@ -164,10 +167,14 @@ export class LiveSource implements DataSource {
     }
   }
   async deletePushSubscription(endpoint: string) { ok(await supabase().from('push_subscriptions').delete().eq('endpoint', endpoint)); }
-  async readScreenshots(files: File[]) {
+  async readScreenshots(files: File[], known: string[]) {
+    return readScreenshots(files, await this.token(), known);
+  }
+  async aiStatus() { return fetchAiStatus(await this.token()); }
+  private async token() {
     const { data } = await supabase().auth.getSession();
     if (!data.session) throw new Error('Please sign in again.');
-    return readScreenshots(files, data.session.access_token);
+    return data.session.access_token;
   }
 }
 
@@ -209,4 +216,5 @@ export class DemoSource implements DataSource {
   async readScreenshots(): Promise<{ holdings: ImportedRow[]; dropped: string[] }> {
     throw new Error('Screenshot import needs an account. Sign in to use it.');
   }
+  async aiStatus(): Promise<AiStatus> { return { providers: [], vision: [], ready: false, retry_at: null }; }
 }
