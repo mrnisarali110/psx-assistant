@@ -8,8 +8,10 @@ import type { ProviderStatus } from '../../shared/llm.ts';
 
 const MAX_SIDE = 1600;
 
+/** The shape of a stored key (never the key itself). */
+export interface KeyShape { length: number; expected_prefix: boolean; clean: boolean }
 /** What /api/ai-status reports: who can read screenshots right now. */
-export interface AiStatus { providers: ProviderStatus[]; vision: string[]; ready: boolean; retry_at: string | null }
+export interface AiStatus { providers: ProviderStatus[]; vision: string[]; ready: boolean; retry_at: string | null; keys?: Record<string, KeyShape | null> }
 
 async function shrink(file: File): Promise<{ mime: string; base64: string }> {
   const bitmap = await createImageBitmap(file);
@@ -46,5 +48,5 @@ export async function fetchAiStatus(accessToken: string): Promise<AiStatus> {
   const r = await fetch('/api/ai-status', { headers: { Authorization: `Bearer ${accessToken}` } });
   const body = (await r.json().catch(() => ({}))) as Partial<AiStatus> & { error?: string };
   if (!r.ok || !body.providers) throw new Error(body.error ?? `Status check failed (${r.status}).`);
-  return { providers: body.providers, vision: body.vision ?? [], ready: !!body.ready, retry_at: body.retry_at ?? null };
+  return { providers: body.providers, vision: body.vision ?? [], ready: !!body.ready, retry_at: body.retry_at ?? null, keys: body.keys };
 }

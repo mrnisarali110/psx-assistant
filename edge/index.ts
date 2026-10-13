@@ -115,6 +115,12 @@ export async function handleImport(req: Request, env: Env, fetchImpl: typeof fet
   }
 }
 
+/** The shape of a stored key, never the key: enough to spot a paste gone wrong (line break, quotes, a NAME= prefix). */
+export function keyShape(value: string | undefined, prefix: RegExp): { length: number; expected_prefix: boolean; clean: boolean } | null {
+  if (!value) return null;
+  return { length: value.length, expected_prefix: prefix.test(value), clean: !/[\s"'=]/.test(value) };
+}
+
 /** Provider states for the app: cooldowns from memory plus a free key check per provider (cached 10 min). */
 export async function handleStatus(req: Request, env: Env, fetchImpl: typeof fetch = fetch): Promise<Response> {
   if (req.method !== 'GET') return json({ error: 'Use GET' }, 405);
@@ -127,6 +133,7 @@ export async function handleStatus(req: Request, env: Env, fetchImpl: typeof fet
     providers, vision,
     ready: providers.some((p) => vision.includes(p.name) && p.state === 'ready'),
     retry_at: cooling[0] ?? null,
+    keys: { openrouter: keyShape(env.OPENROUTER_API_KEY, /^sk-or-/), gemini: keyShape(env.GEMINI_API_KEY, /^AIza/), groq: keyShape(env.GROQ_API_KEY, /^gsk_/) },
   });
 }
 

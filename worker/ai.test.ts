@@ -6,7 +6,7 @@ import { GeminiProvider, GroqProvider, LlmHealth, LlmRouter, makeRouter, parseJs
 import { buildPortfolio } from '../shared/portfolio.ts';
 import { DEFAULT_SETTINGS } from '../shared/types.ts';
 import { SEED_HOLDINGS, SEED_INDEX, SEED_PRICES, SEED_WATCHLIST } from '../shared/fixtures/seed.ts';
-import { handleImport, handleStatus, importError, whenPkt, type Env } from '../edge/index.ts';
+import { handleImport, handleStatus, importError, keyShape, whenPkt, type Env } from '../edge/index.ts';
 
 const owner = (): UserCtx => ({ id: 'owner-1', settings: { ...DEFAULT_SETTINGS, ai_enabled: true }, holdings: SEED_HOLDINGS, watchlist: SEED_WATCHLIST, telegram_chat_id: null, subs: [] });
 const seedFacts = () => {
@@ -187,6 +187,11 @@ describe('screenshot import endpoint', () => {
     expect(body.ready).toBe(true);
     expect(body.providers.map((p: any) => `${p.name}:${p.state}`)).toEqual(['gemini:ready', 'openrouter:ready']);
     expect(urls.some((u) => /generateContent|chat\/completions/.test(u))).toBe(false);
+    // key shapes, never keys: 'g' has the wrong prefix, 'k' too; nothing in the body equals a key value
+    expect(body.keys).toEqual({ openrouter: { length: 1, expected_prefix: false, clean: true }, gemini: { length: 1, expected_prefix: false, clean: true }, groq: null });
+    expect(keyShape('sk-or-v1-abc\n', /^sk-or-/)).toEqual({ length: 13, expected_prefix: true, clean: false });
+    expect(keyShape('OPENROUTER_API_KEY=sk-or-v1-abc', /^sk-or-/)).toEqual({ length: 31, expected_prefix: false, clean: false });
+    expect(keyShape(undefined, /^x/)).toBeNull();
     expect((await handleStatus(get('Bearer bad.token'), env, spy)).status).toBe(401);
   });
   it('turns provider errors into advice with a time to come back', () => {

@@ -31,7 +31,16 @@ export function aiStatusLine(st: AiStatus): { tone: 'ok' | 'warn'; text: string 
     return { tone: 'ok', text: `AI ready: ${ready.join(', ')}${rest}` };
   }
   if (cooling.length) return { tone: 'warn', text: `All AI readers are over their free limit. Try again after ${asOfLabel(st.retry_at ?? cooling[0].until)}.` };
-  if (badKey.length) return { tone: 'warn', text: `AI key problem (${badKey.map((p) => name(p.name)).join(', ')}). Reading may fail.` };
+  // A key the provider rejects: say what is visibly wrong with the stored value, so re-entering it fixes it.
+  const PREFIX: Record<string, string> = { openrouter: 'sk-or-', gemini: 'AIza', groq: 'gsk_' };
+  const why = (n: string) => {
+    const k = st.keys?.[n];
+    if (!k) return 'rejected';
+    if (!k.clean) return 'contains a space, line break, quote or "=" (paste only the key)';
+    if (!k.expected_prefix) return `does not start with ${PREFIX[n]} (wrong key pasted?)`;
+    return `${k.length} characters, rejected by ${name(n)} (revoked or mistyped?)`;
+  };
+  if (badKey.length) return { tone: 'warn', text: `AI key problem: ${badKey.map((p) => `${name(p.name)} key ${why(p.name)}`).join(' · ')}. Re-enter it with: npx wrangler secret put ${badKey.map((p) => `${p.name.toUpperCase()}_API_KEY`).join(' / ')}` };
   if (failed.length) return { tone: 'warn', text: `AI check failed: ${failed.map((p) => `${name(p.name)}: ${p.detail ?? 'unknown'}`).join(' · ')}` };
   return null;
 }
