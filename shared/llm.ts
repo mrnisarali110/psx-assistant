@@ -145,8 +145,12 @@ abstract class BaseProvider implements Provider {
   retryMs = 1500;
 
   constructor(protected apiKey: string, protected models: string[], opts: ProviderOpts = {}) {
-    this.fetchImpl = opts.fetchImpl ?? fetch;
-    this.log = opts.log ?? console.log;
+    // Always call fetch as a plain function: in browsers and Cloudflare Workers, `this.fetchImpl(...)` with a
+    // provider as `this` throws "Illegal invocation" (Node is lenient, so tests alone never caught it).
+    const f = opts.fetchImpl ?? fetch;
+    this.fetchImpl = (input, init) => f(input, init);
+    const l = opts.log ?? ((m: string) => console.log(m));
+    this.log = (m) => l(m);
     this.health = opts.health ?? llmHealth;
   }
   abstract can(task: LlmTask, parts: LlmPart[]): boolean;

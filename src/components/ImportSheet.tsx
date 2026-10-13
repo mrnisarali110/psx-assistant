@@ -24,13 +24,15 @@ export function aiStatusLine(st: AiStatus): { tone: 'ok' | 'warn'; text: string 
   const name = (n: string) => PROVIDER[n] ?? n;
   const ready = vision.filter((p) => p.state === 'ready').map((p) => name(p.name));
   const cooling = vision.filter((p) => p.state === 'cooling');
-  const broken = vision.filter((p) => p.state === 'bad_key' || p.state === 'error');
+  const badKey = vision.filter((p) => p.state === 'bad_key');
+  const failed = vision.filter((p) => p.state === 'error');
   if (ready.length) {
     const rest = cooling.length ? ` · ${cooling.map((p) => `${name(p.name)} back ${asOfLabel(p.until)}`).join(', ')}` : '';
     return { tone: 'ok', text: `AI ready: ${ready.join(', ')}${rest}` };
   }
   if (cooling.length) return { tone: 'warn', text: `All AI readers are over their free limit. Try again after ${asOfLabel(st.retry_at ?? cooling[0].until)}.` };
-  if (broken.length) return { tone: 'warn', text: `AI key problem (${broken.map((p) => name(p.name)).join(', ')}). Reading may fail.` };
+  if (badKey.length) return { tone: 'warn', text: `AI key problem (${badKey.map((p) => name(p.name)).join(', ')}). Reading may fail.` };
+  if (failed.length) return { tone: 'warn', text: `AI check failed: ${failed.map((p) => `${name(p.name)}: ${p.detail ?? 'unknown'}`).join(' · ')}` };
   return null;
 }
 

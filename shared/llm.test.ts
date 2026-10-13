@@ -104,6 +104,22 @@ describe('OpenRouter provider', () => {
   });
 });
 
+describe('runtime rules browsers and Cloudflare Workers enforce', () => {
+  it('never calls fetch with the provider as `this` (Illegal invocation)', async () => {
+    // Node lets any `this` through; this stand-in enforces the Workers / browser rule.
+    const strict = function (this: unknown, url: string) {
+      if (this !== undefined && this !== globalThis) throw new TypeError('Illegal invocation: function called with incorrect `this` reference');
+      if (String(url).endsWith('/models')) return Promise.resolve(new Response(JSON.stringify(models)));
+      if (String(url).includes('/key')) return Promise.resolve(new Response(JSON.stringify({ data: {} })));
+      return Promise.resolve(new Response(JSON.stringify({ choices: [{ message: { content: '{"ok":1}' } }], candidates: [{ content: { parts: [{ text: '{"ok":1}' }] } }], models: [] })));
+    } as unknown as typeof fetch;
+    const router = makeRouter({ gemini: 'g', groq: 'q', openrouter: 'k' }, { fetchImpl: strict, log: () => {}, health: new LlmHealth() });
+    expect((await router.json('vision', 's', [image], {})).data).toEqual({ ok: 1 });
+    expect((await router.json('text', 's', [{ text: 'x' }], {})).data).toEqual({ ok: 1 });
+    expect((await router.status({ probe: true })).map((p) => p.state)).toEqual(['ready', 'ready', 'ready']);
+  });
+});
+
 describe('cooldowns (be frugal with free tiers)', () => {
   it('a Gemini daily quota rests that model until Google\'s midnight; the next call skips it without a request', async () => {
     let now = Date.parse('2026-10-14T10:00:00Z'); // 03:00 in Los Angeles
