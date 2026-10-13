@@ -79,7 +79,7 @@ abstract class BaseProvider implements Provider {
 
 export class GeminiProvider extends BaseProvider {
   name = 'gemini';
-  static MODELS = ['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-2.5-flash'];
+  static MODELS = ['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite'];
   constructor(apiKey: string, opts: { models?: string[]; fetchImpl?: Fetch; log?: (m: string) => void } = {}) {
     super(apiKey, opts.models?.length ? opts.models : GeminiProvider.MODELS, opts.fetchImpl ?? fetch, opts.log ?? console.log);
   }

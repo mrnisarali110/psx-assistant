@@ -82,7 +82,7 @@ export async function runJob(job: JobName, deps: JobDeps): Promise<RunReport> {
         readSymbols = [...userSymbols, ...extra];
       }
     }
-    report.errors.push(...snap.errors);
+    report.errors.push(...publicErrors(snap.errors, [...userSymbols, ...readSymbols]));
     const usable = isUsable(snap);
     let prices: PriceMap;
     let idx: IndexSnapshot | null;
@@ -110,7 +110,7 @@ export async function runJob(job: JobName, deps: JobDeps): Promise<RunReport> {
 
     // ---- AI reads filings (summaries + dividends) ---------------------
     if (deps.ai?.available && deps.fetchPdf) {
-      await readFilings(readSymbols, today, job === 'night' ? rules.ai.announcements_per_night_run : rules.ai.announcements_per_market_run, deps, report, log);
+      await readFilings(readSymbols, today, job === 'night' ? rules.ai.announcements_per_night_run : rules.ai.announcements_per_market_run, deps, report);
     }
     const news = await store.recentAnnouncements(userSymbols, addDays(today, -14)).catch(() => [] as Announcement[]);
     const dividends = await store.dividends(null, addDays(today, -400)).catch(() => [] as DividendEvent[]);
@@ -137,7 +137,16 @@ export async function runJob(job: JobName, deps: JobDeps): Promise<RunReport> {
   }
 }
 
-async function readFilings(symbols: string[], today: string, limit: number, deps: JobDeps, report: RunReport, log: (m: string) => void) {
+/** Feed errors without stock symbols (the repo and its run logs are public): per-stock failures become a count. */
+export function publicErrors(errors: string[], symbols: string[]): string[] {
+  const set = new Set(symbols);
+  const perStock = errors.filter((e) => set.has(e.split(':')[0]));
+  const rest = errors.filter((e) => !set.has(e.split(':')[0]));
+  const reasons = [...new Set(perStock.map((e) => /HTTP \d+|no price|timeout|fetch failed/i.exec(e)?.[0] ?? 'error'))];
+  return perStock.length ? [...rest, `${perStock.length} company page(s) failed (${reasons.join(', ')})`] : rest;
+}
+
+async function readFilings(symbols: string[], today: string, limit: number, deps: JobDeps, report: RunReport) {
   let toRead: Announcement[] = [];
   try {
     toRead = await deps.store.announcementsToRead(symbols, addDays(today, -rules.ai.announcement_max_age_days), limit);
@@ -152,7 +161,7 @@ async function readFilings(symbols: string[], today: string, limit: number, deps
     } catch (e) {
       // The document itself is unavailable: record that, so we don't retry it every run.
       if (e instanceof FetchError) await deps.store.saveAnnouncementDigest(a.id, { summary: null, figures: null, verified: null }).catch(() => {});
-      report.errors.push(`ai: ${a.symbol} pdf: ${errMsg(e)}`);
+      report.errors.push(`ai: filing ${a.id} pdf: ${errMsg(e)}`);
       continue;
     }
     try {
@@ -166,9 +175,8 @@ async function readFilings(symbols: string[], today: string, limit: number, deps
         });
         report.ai.dividends++;
       }
-      log(`ai read ${a.symbol} "${a.title.slice(0, 50)}" (${d.model}, verified=${d.verified}${d.dividend ? `, dividend Rs ${d.dividend.dps}` : ''})`);
     } catch (e) {
-      report.errors.push(`ai: ${a.symbol}: ${errMsg(e)}`);
+      report.errors.push(`ai: filing ${a.id}: ${errMsg(e)}`);
       if (/AI unavailable/.test(errMsg(e))) break; // both providers down or rate limited: try next run
     }
   }
@@ -351,7 +359,7 @@ async function makeInsight(u: UserCtx, view: PortfolioView, mine: Set<string>, c
   }).catch((e) => c.report.errors.push(`ai: save insight: ${errMsg(e)}`));
   c.report.ai.insights++;
   c.report.ai.suggestions_dropped += res.dropped;
-  if (res.reasons.length) c.deps.log?.(`ai guardrails dropped for ${u.id.slice(0, 8)}: ${res.reasons.join(' | ')}`);
+  if (res.reasons.length) c.deps.log?.(`ai guardrails dropped ${res.reasons.length} item(s)`); // no symbols: logs are public
   return res.insight;
 }
 

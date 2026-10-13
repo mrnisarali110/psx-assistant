@@ -1,7 +1,8 @@
 /**
  * Worker entry point.
  *   npm run worker -- <job> [--dry-run] [--email you@example.com] [--now ISO]
- * jobs: market | night | test | telegram | aicheck | auto
+ * jobs: market | night | test | telegram | aicheck | diag | auto
+ * diag prints delivery settings and the last alerts per account: kinds, times, channels only (logs are public).
  * "auto" picks the job from the GitHub cron expression in $SCHEDULE.
  * --dry-run fetches live PSX data but uses the seed portfolio in memory and only prints alerts.
  * aicheck runs every AI task once on real PSX data and the seed portfolio, prints, and writes nothing.
@@ -33,7 +34,7 @@ const flag = (name: string) => {
   return i >= 0 ? args[i + 1] : undefined;
 };
 const dryRun = args.includes('--dry-run');
-let job = (args.find((a) => !a.startsWith('--') && a !== flag('--email') && a !== flag('--now')) ?? 'auto') as JobName | 'telegram' | 'aicheck' | 'auto';
+let job = (args.find((a) => !a.startsWith('--') && a !== flag('--email') && a !== flag('--now')) ?? 'auto') as JobName | 'telegram' | 'aicheck' | 'diag' | 'auto';
 if (job === 'auto') {
   const sched = process.env.SCHEDULE ?? '';
   job = CRON_TO_JOB[sched] ?? (sched.includes('*/20') ? 'telegram' : 'market');
@@ -118,6 +119,16 @@ async function main(): Promise<number> {
   if (job === 'telegram') {
     if (!env.TELEGRAM_BOT_TOKEN) { console.log('TELEGRAM_BOT_TOKEN not set, nothing to do'); return 0; }
     await processTelegramUpdates(env.TELEGRAM_BOT_TOKEN, store);
+    return 0;
+  }
+
+  if (job === 'diag') {
+    const users = await store.loadUsers();
+    for (const [i, u] of users.entries()) {
+      const recent = await store.recentAlerts(u.id, new Date(Date.now() - 2 * 86400000).toISOString());
+      console.log(`account ${i + 1}: quiet ${JSON.stringify(u.settings.quiet_hours)} alerts=${u.settings.notifications_enabled} ai=${!!u.settings.ai_enabled} push_devices=${u.subs.length} telegram=${!!u.telegram_chat_id}`);
+      for (const a of recent.sort((x, y) => y.sent_at.localeCompare(x.sent_at)).slice(0, 12)) console.log(`  ${a.sent_at}  ${a.kind.padEnd(22)} ${a.channel ?? '-'}${a.batch_id ? ' (pushed batch)' : ''}`);
+    }
     return 0;
   }
 

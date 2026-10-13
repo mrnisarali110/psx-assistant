@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { runJob } from './jobs.ts';
+import { publicErrors, runJob } from './jobs.ts';
 import { dedupeFilings } from '../shared/news.ts';
 import { ConsoleNotifier } from './notify.ts';
 import { MemoryStore, type UserCtx } from './store.ts';
@@ -175,6 +175,14 @@ describe('night job', () => {
 
   it('collapses PSX\'s duplicate notices', () => {
     expect(dedupeFilings([{ symbol: 'UBL', title: 'Disclosure of Interest' }, { symbol: 'UBL', title: 'Disclosure of interest ' }, { symbol: 'SYS', title: 'Disclosure of Interest' }])).toHaveLength(2);
+  });
+});
+
+describe('public logs', () => {
+  it('never name your stocks in errors (the repo logs are public)', () => {
+    const e = publicErrors(['SYS: GET https://dps.psx.com.pk/company/SYS failed: HTTP 503', 'MEBL: no price on company page', 'indices: GET / failed: HTTP 500'], ['SYS', 'MEBL']);
+    expect(e).toEqual(['indices: GET / failed: HTTP 500', '2 company page(s) failed (HTTP 503, no price)']);
+    expect(e.join(' ')).not.toMatch(/SYS|MEBL/);
   });
 });
 
