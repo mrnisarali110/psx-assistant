@@ -23,17 +23,22 @@ async function shrink(file: File): Promise<{ mime: string; base64: string }> {
   return { mime: 'image/jpeg', base64: dataUrl.slice(dataUrl.indexOf(',') + 1) };
 }
 
+/** The server's advice plus, when it has one, the technical reason per provider (shown small under the message). */
+export class ImportError extends Error {
+  constructor(message: string, readonly detail: string | null = null, readonly reason: string | null = null) { super(message); }
+}
+
 export async function readScreenshots(files: File[], accessToken: string, known: string[] = []): Promise<{ holdings: ImportedRow[]; dropped: string[] }> {
-  if (!files.length) throw new Error('Pick at least one screenshot.');
-  if (files.length > 4) throw new Error('Up to 4 screenshots at a time.');
+  if (!files.length) throw new ImportError('Pick at least one screenshot.');
+  if (files.length > 4) throw new ImportError('Up to 4 screenshots at a time.');
   const images = await Promise.all(files.map(shrink));
   const r = await fetch('/api/import', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
     body: JSON.stringify({ images, known }),
   });
-  const body = (await r.json().catch(() => ({}))) as { holdings?: ImportedRow[]; dropped?: string[]; error?: string };
-  if (!r.ok || !body.holdings) throw new Error(body.error ?? `Import failed (${r.status}).`);
+  const body = (await r.json().catch(() => ({}))) as { holdings?: ImportedRow[]; dropped?: string[]; error?: string; detail?: string; reason?: string };
+  if (!r.ok || !body.holdings) throw new ImportError(body.error ?? `Import failed (${r.status}).`, body.detail ?? null, body.reason ?? null);
   return { holdings: body.holdings, dropped: body.dropped ?? [] };
 }
 

@@ -7,7 +7,10 @@ const models = {
     { id: 'meta-llama/llama-4-maverick:free', pricing: { prompt: '0', completion: '0' }, architecture: { input_modalities: ['text', 'image'] }, context_length: 1_000_000 },
     { id: 'some/text-only:free', pricing: { prompt: '0', completion: '0' }, architecture: { input_modalities: ['text'] }, context_length: 32_000 },
     { id: 'paid/vision', pricing: { prompt: '0.001', completion: '0.002' }, architecture: { input_modalities: ['text', 'image'] }, context_length: 128_000 },
-    { id: 'new/vision-model:free', pricing: { prompt: '0', completion: '0', image: '0' }, architecture: { input_modalities: ['text', 'image'] }, context_length: 64_000 },
+    { id: 'new/vision-model:free', pricing: { prompt: '0', completion: '0', image: '0' }, architecture: { input_modalities: ['text', 'image'], output_modalities: ['text'] }, context_length: 64_000 },
+    { id: 'google/lyria-3-pro-preview', pricing: { prompt: '0', completion: '0' }, architecture: { input_modalities: ['text', 'image'], output_modalities: ['text', 'audio'] }, context_length: 1_048_576 }, // music model
+    { id: 'nvidia/nemotron-3.5-content-safety:free', pricing: { prompt: '0', completion: '0' }, architecture: { input_modalities: ['text', 'image'], output_modalities: ['text'] }, context_length: 128_000 }, // guardrail
+    { id: 'openrouter/free', pricing: { prompt: '0', completion: '0' }, architecture: { input_modalities: ['text', 'image'], output_modalities: ['text'] }, context_length: 200_000 },
   ],
 };
 const image = { image: { mime: 'image/png', base64: 'AAAA' } };
@@ -27,18 +30,42 @@ describe('OpenRouter provider', () => {
     expect(calls[0].url).toBe('https://openrouter.ai/api/v1/chat/completions');
     expect(calls[0].body.messages[1].content[0]).toEqual({ type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } });
     expect(calls[0].body.messages[0].content).toMatch(/JSON object .*"OBJECT"/);
+    expect(calls[0].body.models).toEqual(['meta-llama/llama-4-maverick:free', 'new/vision-model:free', 'openrouter/free']); // OpenRouter falls back itself
 
     const p = new OpenRouterProvider('k', { fetchImpl, log: () => {}, health });
-    expect(await (p as any).modelsFor('vision', [image])).toEqual(['meta-llama/llama-4-maverick:free', 'new/vision-model:free']); // never paid or text-only
-    expect(await (p as any).modelsFor('text', [{ text: 'x' }])).toEqual(['meta-llama/llama-4-maverick:free', 'new/vision-model:free', 'some/text-only:free']);
-    expect(await (p as any).modelsFor('vision', [image])).toEqual(['meta-llama/llama-4-maverick:free', 'new/vision-model:free']);
+    // never paid, text-only, music or guardrail models; OpenRouter's own free router last
+    expect(await (p as any).modelsFor('vision', [image])).toEqual(['meta-llama/llama-4-maverick:free', 'new/vision-model:free', 'openrouter/free']);
+    expect(await (p as any).modelsFor('text', [{ text: 'x' }])).toEqual(['meta-llama/llama-4-maverick:free', 'new/vision-model:free', 'some/text-only:free', 'openrouter/free']);
     expect(calls.length).toBe(1); // the model list is cached: only the one completion request went out
+  });
+
+  it('reports the model that actually answered and reads answers reasoning models hide in `reasoning`', async () => {
+    const fetchImpl = (async (url: string) => {
+      if (String(url).endsWith('/models')) return new Response(JSON.stringify(models));
+      return new Response(JSON.stringify({ model: 'new/vision-model:free', choices: [{ message: { content: '', reasoning: 'thinking... {"ok":true}' } }] }));
+    }) as unknown as typeof fetch;
+    const router = makeRouter({ openrouter: 'k' }, { fetchImpl, log: () => {}, health: new LlmHealth() });
+    expect(await router.json('vision', 's', [image], {})).toEqual({ data: { ok: true }, model: 'openrouter/new/vision-model:free' });
+  });
+
+  it('a privacy-policy refusal (HTTP 404) rests the whole key briefly instead of trying every model', async () => {
+    const health = new LlmHealth(() => 5_000_000);
+    let n = 0;
+    const fetchImpl = (async (url: string) => {
+      if (String(url).endsWith('/models')) return new Response(JSON.stringify(models));
+      n++;
+      return new Response(JSON.stringify({ error: { code: 404, message: 'No endpoints found matching your data policy (Free model training). Configure: https://openrouter.ai/settings/privacy' } }), { status: 404 });
+    }) as unknown as typeof fetch;
+    const router = makeRouter({ openrouter: 'k' }, { fetchImpl, log: () => {}, health });
+    await expect(router.json('vision', 's', [image], {})).rejects.toThrow(/data policy/);
+    expect(n).toBe(1);
+    expect((await router.status())[0]).toMatchObject({ state: 'cooling', until: new Date(5_000_000 + 120_000).toISOString() });
   });
 
   it('falls back to the known names when the model list is unreachable, and pinned models skip discovery', async () => {
     const fetchImpl = (async () => { throw new TypeError('fetch failed'); }) as unknown as typeof fetch;
     const p = new OpenRouterProvider('k', { fetchImpl, log: () => {}, health: new LlmHealth() });
-    expect(await (p as any).modelsFor('vision', [image])).toEqual(OpenRouterProvider.VISION.slice(0, OpenRouterProvider.MAX_TRY));
+    expect(await (p as any).modelsFor('vision', [image])).toEqual([...OpenRouterProvider.VISION.slice(0, OpenRouterProvider.MAX_TRY - 1), 'openrouter/free']);
     const pinned = new OpenRouterProvider('k', { fetchImpl, models: ['x/y:free'], health: new LlmHealth() });
     expect(await (pinned as any).modelsFor('vision', [image])).toEqual(['x/y:free']);
     expect(new OpenRouterProvider('k').can('vision', [image])).toBe(true);
@@ -139,7 +166,7 @@ describe('free probes (no tokens)', () => {
     expect(await router.status({ probe: true })).toEqual([
       { name: 'groq', state: 'bad_key', detail: 'bad API key (HTTP 401)' },
       { name: 'gemini', state: 'ready', detail: 'key valid' },
-      { name: 'openrouter', state: 'ready', detail: 'key valid (free tier); 2 free vision models, 3 free in all' },
+      { name: 'openrouter', state: 'ready', detail: 'key valid (free tier); 3 free vision models, 4 free in all' },
     ]);
     expect(urls.some((u) => /generateContent|chat\/completions/.test(u))).toBe(false);
     const before = urls.length;

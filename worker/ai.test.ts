@@ -179,6 +179,13 @@ describe('screenshot import endpoint', () => {
     expect(importError('AI unavailable: openrouter cooling down until 2026-10-15T00:01:00.000Z: HTTP 429 free-models-per-day', '2026-10-15T00:01:00.000Z'))
       .toMatchObject({ reason: 'limit', retry_at: '2026-10-15T00:01:00.000Z', error: expect.stringMatching(/^The free AI limits are used up for now\. Try again after /) });
     expect(importError('HTTP 503 overloaded')).toMatchObject({ reason: 'busy', retry_at: null });
+    expect(importError('openrouter unavailable: x: HTTP 404 No endpoints found matching your data policy')).toMatchObject({ reason: 'policy' });
+    // one provider over its limit does not mean "limits used up": the other failure wins and both are named
+    const mixed = importError('AI unavailable: openrouter unavailable: google/lyria-3-pro-preview: HTTP 404 no such model | gemini unavailable: gemini-3.8-flash: HTTP 400 API key not valid', '2026-10-15T00:01:00.000Z');
+    expect(mixed).toMatchObject({ reason: 'key', retry_at: null });
+    expect(mixed.detail).toBe('openrouter: google/lyria-3-pro-preview: HTTP 404 no such model · gemini: gemini-3.8-flash: HTTP 400 API key not valid');
+    expect(importError('AI unavailable: openrouter unavailable: m: HTTP 429 upstream | gemini unavailable: m: HTTP 429 quota')).toMatchObject({ reason: 'limit' });
+    expect(importError('AI unavailable: openrouter unavailable: m: unparseable response | gemini unavailable: m: HTTP 429 quota')).toMatchObject({ reason: 'limit', detail: 'openrouter: m: unparseable response · gemini: m: HTTP 429 quota' });
     expect(whenPkt('2026-10-14T05:30:00Z', new Date('2026-10-14T03:00:00Z'))).toBe('10:30 AM');
     expect(whenPkt('2026-10-15T00:01:00Z', new Date('2026-10-14T03:00:00Z'))).toBe('tomorrow 5:01 AM');
   });

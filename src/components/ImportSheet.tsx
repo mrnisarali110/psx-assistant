@@ -43,6 +43,7 @@ export function ImportSheet({ open, onClose, source, holdings, prices, onApplied
   const [ticked, setTicked] = useState<Set<string>>(new Set());
   const [recordTxns, setRecordTxns] = useState(holdings.length > 0); // first import = baseline, not new buys
   const [error, setError] = useState<string | null>(null);
+  const [detail, setDetail] = useState<string | null>(null); // which provider failed how, from the server
   const [status, setStatus] = useState<AiStatus | null>(null);
   const input = useRef<HTMLInputElement>(null);
 
@@ -59,13 +60,14 @@ export function ImportSheet({ open, onClose, source, holdings, prices, onApplied
   const actionable = shown.filter((c) => ticked.has(c.symbol));
   const unchanged = changes.length - shown.length;
 
-  const reset = () => { setStep('pick'); setRows([]); setDropped([]); setError(null); setTicked(new Set()); setRecordTxns(holdings.length > 0); };
+  const reset = () => { setStep('pick'); setRows([]); setDropped([]); setError(null); setDetail(null); setTicked(new Set()); setRecordTxns(holdings.length > 0); };
   const close = () => { reset(); onClose(); };
   const toggle = (symbol: string) => setTicked((t) => { const n = new Set(t); if (n.has(symbol)) n.delete(symbol); else n.add(symbol); return n; });
 
   async function read(files: FileList | null) {
     if (!files?.length) return;
     setError(null);
+    setDetail(null);
     setStep('reading');
     try {
       const r = await source.readScreenshots([...files].slice(0, 4), holdings.map((h) => h.symbol));
@@ -77,6 +79,7 @@ export function ImportSheet({ open, onClose, source, holdings, prices, onApplied
       setStep('review');
     } catch (e) {
       setError((e as Error).message);
+      setDetail((e as { detail?: string | null }).detail ?? null);
       setStep('pick');
     } finally {
       if (input.current) input.current.value = '';
@@ -119,6 +122,7 @@ export function ImportSheet({ open, onClose, source, holdings, prices, onApplied
               </p>
             )}
             <ErrorNote error={error} />
+            {error && detail && <p className="break-words px-1 font-mono text-[11px] leading-snug text-slate-500 dark:text-slate-400">{detail}</p>}
           </>
         )}
         {step === 'reading' && (

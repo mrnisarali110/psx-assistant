@@ -51,16 +51,42 @@ export function whenPkt(iso: string, now = new Date()): string {
   return day(d) === day(now) ? time : `tomorrow ${time}`;
 }
 
-/** A message the user can act on, from the AI provider's error. */
-export function importError(msg: string, retryAt: string | null = null): { error: string; reason: string; retry_at: string | null } {
+type Reason = 'policy' | 'key' | 'limit' | 'busy' | 'bad_request' | 'other';
+
+/** Strip our own "<provider> unavailable: " / "<provider> cooling down until …: " prefix: only the provider's words count. */
+const bodyOf = (seg: string) => seg.replace(/^\w+ (unavailable|cooling down until \S+): /, '');
+
+function classify(seg: string): Reason {
+  const s = bodyOf(seg);
+  if (/data policy|privacy/i.test(s)) return 'policy';
+  if (/\b40[13]\b|api key/i.test(s)) return 'key';
+  if (/\b429\b|\b402\b|quota|RESOURCE_EXHAUSTED|rate limit/i.test(s) || /cooling down/.test(seg)) return 'limit';
+  if (/\b503\b|overload|high demand/i.test(s) || /\bUNAVAILABLE\b/.test(s)) return 'busy';
+  if (/\b400\b|invalid|unsupported/i.test(s)) return 'bad_request';
+  return 'other';
+}
+
+/**
+ * A message the user can act on, from the router's error (one segment per provider, joined by " | "),
+ * plus a short technical detail naming each provider's actual failure (status codes and error text, never images).
+ */
+export function importError(msg: string, retryAt: string | null = null): { error: string; reason: Reason; retry_at: string | null; detail: string } {
+  const segs = msg.replace(/^AI unavailable: /, '').split(' | ').map((s) => s.trim()).filter(Boolean);
+  const kinds = segs.map(classify);
+  const all = (k: Reason) => kinds.length > 0 && kinds.every((x) => x === k);
+  const reason: Reason = kinds.includes('policy') ? 'policy' : kinds.includes('key') ? 'key' : all('limit') ? 'limit'
+    : kinds.includes('busy') ? 'busy' : all('bad_request') ? 'bad_request' : kinds.includes('limit') ? 'limit' : 'other';
   const again = retryAt ? ` Try again after ${whenPkt(retryAt)}.` : '';
-  if (/\b429\b|\b402\b|quota|RESOURCE_EXHAUSTED|rate limit|cooling down/i.test(msg)) {
-    return { error: `The free AI limits are used up for now.${again || ' Try again in a few minutes.'}`, reason: 'limit', retry_at: retryAt };
-  }
-  if (/\b503\b|overload|high demand|UNAVAILABLE/i.test(msg)) return { error: `The AI is busy right now.${again || ' Try again in a minute.'}`, reason: 'busy', retry_at: retryAt };
-  if (/\b40[13]\b|api key/i.test(msg)) return { error: "Screenshot reading isn't set up correctly (AI key).", reason: 'key', retry_at: null };
-  if (/\b400\b|invalid|unsupported/i.test(msg)) return { error: "The AI couldn't process these images. Try a clear screenshot of the holdings list.", reason: 'bad_request', retry_at: null };
-  return { error: "Couldn't read the screenshots this time. Try again.", reason: 'other', retry_at: retryAt };
+  const error = {
+    policy: 'OpenRouter is blocking its free models for this key. On openrouter.ai → Settings → Privacy, allow "Free model training", then try again.',
+    key: "Screenshot reading isn't set up correctly (an AI key is wrong).",
+    limit: `The free AI limits are used up for now.${again || ' Try again in a few minutes.'}`,
+    busy: `The AI is busy right now.${again || ' Try again in a minute.'}`,
+    bad_request: "The AI couldn't process these images. Try a clear screenshot of the holdings list.",
+    other: "Couldn't read the screenshots this time. Try again.",
+  }[reason];
+  const detail = segs.map((s) => `${s.split(' ')[0]}: ${bodyOf(s)}`.replace(/\s+/g, ' ').slice(0, 120)).join(' · ');
+  return { error, reason, retry_at: reason === 'limit' || reason === 'busy' ? retryAt : null, detail };
 }
 
 export async function handleImport(req: Request, env: Env, fetchImpl: typeof fetch = fetch): Promise<Response> {

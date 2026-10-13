@@ -148,6 +148,8 @@ abstract class BaseProvider implements Provider {
   protected abstract call(model: string, system: string, parts: LlmPart[], schema: object, ms: number): Promise<unknown>;
   /** Models to try for this task, best first. */
   protected async modelsFor(_task: LlmTask, _parts: LlmPart[]): Promise<string[]> { return this.models; }
+  /** The model that actually answered (a provider may route to a fallback itself). */
+  protected answeredBy(model: string) { return model; }
   protected key(model: string) { return `${this.name}/${model}`; }
 
   cooldown() {
@@ -175,7 +177,7 @@ abstract class BaseProvider implements Provider {
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
           const data = await this.call(model, system, parts, schema, ms);
-          if (data != null && typeof data === 'object') return { data: data as T, model: `${this.name}/${model}` };
+          if (data != null && typeof data === 'object') return { data: data as T, model: `${this.name}/${this.answeredBy(model)}` };
           last = `${model}: unparseable response`;
           break;
         } catch (e) {
@@ -188,6 +190,8 @@ abstract class BaseProvider implements Provider {
           if (err.status === 503 && attempt === 0) { await new Promise((r) => setTimeout(r, this.retryMs)); continue; }
           const cool = cooldownFor(err, this.health.now(), this.quotaZone);
           if (cool > 0) this.health.mark(this.key(err.daily && this.dailyScope === 'provider' ? '*' : model), cool, last, err.status);
+          // OpenRouter refuses every free model until "Free model training" is allowed in its privacy settings: not a per-model matter.
+          if (err.status === 404 && /data policy|privacy/i.test(err.message)) this.health.mark(this.key('*'), 2 * 60_000, last, err.status);
           this.log(`${this.name} ${last.slice(0, 160)}; trying next`);
           break;
         }
@@ -321,18 +325,28 @@ export class GroqProvider extends BaseProvider {
 export class OpenRouterProvider extends BaseProvider {
   name = 'openrouter';
   protected dailyScope = 'provider' as const; // the free daily request limit is per key, across all free models
+  /** Best first. Names from the 2026-10-14 free list come first; older names stay in case they return. */
   static VISION = [
+    'google/gemma-4-31b-it:free', 'google/gemma-4-26b-a4b-it:free', 'thinkingmachines/inkling:free', 'thinkingmachines/inkling-small:free',
+    'dots-studio/dots-3-note-preview:free', 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
     'meta-llama/llama-4-maverick:free', 'qwen/qwen2.5-vl-72b-instruct:free', 'google/gemma-3-27b-it:free',
-    'mistralai/mistral-small-3.2-24b-instruct:free', 'meta-llama/llama-4-scout:free', 'nvidia/nemotron-nano-12b-v2-vl:free',
-    'qwen/qwen2.5-vl-32b-instruct:free', 'google/gemini-2.0-flash-exp:free',
+    'mistralai/mistral-small-3.2-24b-instruct:free', 'meta-llama/llama-4-scout:free', 'qwen/qwen2.5-vl-32b-instruct:free',
   ];
   static TEXT = [
+    'nvidia/nemotron-3-super-120b-a12b:free', 'nvidia/nemotron-3-ultra-550b-a55b:free', 'google/gemma-4-31b-it:free', 'thinkingmachines/inkling:free',
     'openai/gpt-oss-120b:free', 'meta-llama/llama-4-maverick:free', 'qwen/qwen3-235b-a22b:free', 'deepseek/deepseek-chat-v3.1:free',
-    'meta-llama/llama-3.3-70b-instruct:free', 'google/gemma-3-27b-it:free', 'openai/gpt-oss-20b:free',
+    'meta-llama/llama-3.3-70b-instruct:free', 'google/gemma-3-27b-it:free',
   ];
+  /** OpenRouter's own "any free model that fits" router: the last resort. */
+  static ANY_FREE = 'openrouter/free';
+  /** Guardrail, music, speech and embedding models answer nothing useful however their modalities read. */
+  static JUNK = /safety|guard|moderation|lyria|music|audio|tts|speech|whisper|embed|rerank|image-gen|diffusion/i;
   /** Models tried per request; a long chain of free models would make a request crawl. */
   static MAX_TRY = 4;
   static MODELS_URL = 'https://openrouter.ai/api/v1/models';
+
+  private candidates: string[] = [];
+  private usedModel?: string;
 
   constructor(apiKey: string, opts: ProviderOpts = {}) {
     super(apiKey, opts.models ?? [], opts); // explicit models (OPENROUTER_MODELS) switch discovery off
@@ -341,7 +355,7 @@ export class OpenRouterProvider extends BaseProvider {
     return parts.every((p) => 'text' in p || 'image' in p || ('pdf' in p && p.pdf.text.trim().length > 200));
   }
 
-  /** Free models right now (price 0 for prompt, completion, image and request). */
+  /** Free chat models right now: price 0 for prompt, completion, image and request; text out; no guardrail/music/speech models. */
   async freeModels(): Promise<FreeModel[]> {
     const cached = this.health.modelLists.get(this.name);
     if (cached && this.health.now() - cached.at < MODEL_LIST_TTL_MS) return cached.list;
@@ -350,8 +364,10 @@ export class OpenRouterProvider extends BaseProvider {
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const j: any = await r.json();
       const zero = (v: unknown) => v == null || Number(v) === 0;
+      const textOnly = (out: unknown) => !Array.isArray(out) || (out.includes('text') && out.every((o) => o === 'text'));
       const list: FreeModel[] = (Array.isArray(j?.data) ? j.data : [])
         .filter((m: any) => m?.id && m.pricing && zero(m.pricing.prompt) && zero(m.pricing.completion) && zero(m.pricing.image) && zero(m.pricing.request))
+        .filter((m: any) => textOnly(m.architecture?.output_modalities) && !OpenRouterProvider.JUNK.test(String(m.id)))
         .map((m: any) => ({ id: String(m.id), image: (m.architecture?.input_modalities ?? []).includes('image'), context: Number(m.context_length) || 0 }));
       this.health.modelLists.set(this.name, { at: this.health.now(), list });
       return list;
@@ -362,34 +378,45 @@ export class OpenRouterProvider extends BaseProvider {
   }
 
   protected async modelsFor(_task: LlmTask, parts: LlmPart[]) {
-    if (this.models.length) return this.models;
+    if (this.models.length) return (this.candidates = this.models);
     const vision = parts.some((p) => 'image' in p);
     const prefs = vision ? OpenRouterProvider.VISION : OpenRouterProvider.TEXT;
     const free = await this.freeModels();
-    if (!free.length) return prefs.slice(0, OpenRouterProvider.MAX_TRY); // list unavailable: try the known names
+    if (!free.length) return (this.candidates = [...prefs.slice(0, OpenRouterProvider.MAX_TRY - 1), OpenRouterProvider.ANY_FREE]); // list unavailable
     const pool = free.filter((m) => !vision || m.image);
     const ids = new Set(pool.map((m) => m.id));
-    const rest = pool.filter((m) => !prefs.includes(m.id)).sort((a, b) => b.context - a.context).map((m) => m.id);
-    return [...prefs.filter((id) => ids.has(id)), ...rest].slice(0, OpenRouterProvider.MAX_TRY);
+    const rest = pool.filter((m) => !prefs.includes(m.id) && m.id !== OpenRouterProvider.ANY_FREE).sort((a, b) => b.context - a.context).map((m) => m.id);
+    const ordered = [...prefs.filter((id) => ids.has(id)), ...rest].slice(0, OpenRouterProvider.MAX_TRY - 1);
+    if (ids.has(OpenRouterProvider.ANY_FREE) || !ordered.length) ordered.push(OpenRouterProvider.ANY_FREE);
+    return (this.candidates = ordered);
   }
 
   protected async call(model: string, system: string, parts: LlmPart[], schema: object, ms: number) {
     const content = parts.map((p) => 'text' in p ? { type: 'text', text: p.text }
       : 'pdf' in p ? { type: 'text', text: `Document text:\n${p.pdf.text.slice(0, 60_000)}` }
       : { type: 'image_url', image_url: { url: `data:${p.image.mime};base64,${p.image.base64}` } });
+    // OpenRouter falls back along `models` itself when the first one is down or rate limited: one round trip instead of several.
+    const at = this.candidates.indexOf(model);
+    const fallbacks = at >= 0 ? this.candidates.slice(at) : [model];
+    this.usedModel = undefined;
     const j = await this.post('https://openrouter.ai/api/v1/chat/completions', {
       Authorization: `Bearer ${this.apiKey}`, 'HTTP-Referer': 'https://github.com/mrnisarali110/psx-assistant', 'X-Title': 'PSX Assistant',
     }, {
       model,
+      ...(fallbacks.length > 1 ? { models: fallbacks } : {}),
       temperature: 0.2,
       messages: [
         { role: 'system', content: `${system}\nReply with only one JSON object (no prose, no markdown fences) matching this schema (OpenAPI style): ${JSON.stringify(schema)}` },
         { role: 'user', content },
       ],
     }, ms);
-    const c = j?.choices?.[0]?.message?.content;
-    return parseJsonLoose(typeof c === 'string' ? c : Array.isArray(c) ? c.map((x: any) => x?.text ?? '').join('') : '');
+    if (typeof j?.model === 'string' && j.model) this.usedModel = j.model;
+    const msg = j?.choices?.[0]?.message;
+    const c = msg?.content;
+    const text = typeof c === 'string' ? c : Array.isArray(c) ? c.map((x: any) => x?.text ?? '').join('') : '';
+    return parseJsonLoose(text) ?? parseJsonLoose(typeof msg?.reasoning === 'string' ? msg.reasoning : ''); // reasoning models sometimes answer there
   }
+  protected answeredBy(model: string) { return this.usedModel ?? model; }
 
   probe() {
     return this.cachedProbe(async () => {
