@@ -4,7 +4,7 @@
 // GET /api/ai-status shows which of them are ready (free checks, no AI tokens).
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "psx-assistant",
+  "name": "app", // https://app.psxasst.workers.dev (account subdomain psxasst)
   "main": "edge/index.ts",
   "compatibility_date": "2026-10-01",
   // Workers Logs (free): import errors are logged here, never the screenshots.
