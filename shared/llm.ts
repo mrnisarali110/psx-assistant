@@ -34,8 +34,8 @@ export function parseJsonLoose(text: string | undefined | null): unknown {
   }
 }
 
-class ModelError extends Error {
-  constructor(message: string, readonly fatal: boolean) { super(message); }
+export class ModelError extends Error {
+  constructor(message: string, readonly fatal: boolean, readonly status = 0) { super(message); }
 }
 
 /** Tries each model of one provider in order; remembers overloaded ones. */
@@ -50,19 +50,29 @@ abstract class BaseProvider implements Provider {
     let last = 'no model';
     const order = [...this.models.filter((m) => !this.skip.has(m)), ...this.models.filter((m) => this.skip.has(m))];
     for (const model of order) {
-      try {
-        const data = await this.call(model, system, parts, schema, ms);
-        if (data != null && typeof data === 'object') return { data: data as T, model: `${this.name}/${model}` };
-        last = `${model}: unparseable response`;
-      } catch (e) {
-        last = `${model}: ${(e as Error).message}`;
-        if (e instanceof ModelError && e.fatal) break; // bad key: other models of this provider won't help
-        if (!this.skip.has(model)) this.log(`${this.name} ${last.slice(0, 160)}; trying next`);
-        this.skip.add(model);
+      // "Overloaded" spikes usually pass within seconds: one short retry before moving to the next model.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const data = await this.call(model, system, parts, schema, ms);
+          if (data != null && typeof data === 'object') return { data: data as T, model: `${this.name}/${model}` };
+          last = `${model}: unparseable response`;
+          break;
+        } catch (e) {
+          last = `${model}: ${(e as Error).message}`;
+          if (e instanceof ModelError && e.fatal) throw new Error(`${this.name} unavailable: ${last.slice(0, 200)}`); // bad key
+          const overloaded = e instanceof ModelError && e.status === 503;
+          if (overloaded && attempt === 0 && !this.skip.has(model)) { await new Promise((r) => setTimeout(r, this.retryMs)); continue; }
+          if (!this.skip.has(model)) this.log(`${this.name} ${last.slice(0, 160)}; trying next`);
+          this.skip.add(model);
+          break;
+        }
       }
     }
     throw new Error(`${this.name} unavailable: ${last.slice(0, 200)}`);
   }
+
+  /** Delay before retrying an overloaded model (tests set it to 0). */
+  retryMs = 1500;
 
   protected async post(url: string, headers: Record<string, string>, body: unknown, ms: number) {
     const r = await this.fetchImpl(url, {
@@ -71,7 +81,7 @@ abstract class BaseProvider implements Provider {
     if (!r.ok) {
       const text = (await r.text().catch(() => '')).slice(0, 200).replace(/\s+/g, ' ');
       const fatal = [401, 403].includes(r.status) || (r.status === 400 && /api key|apikey|credential/i.test(text));
-      throw new ModelError(`HTTP ${r.status} ${text}`, fatal);
+      throw new ModelError(`HTTP ${r.status} ${text}`, fatal, r.status);
     }
     return r.json() as Promise<any>;
   }

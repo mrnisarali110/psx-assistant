@@ -30,8 +30,8 @@ export function News({ data }: ScreenProps) {
 
   return (
     <>
-      <header className="space-y-3 pt-1">
-        <h1 className="text-2xl font-bold tracking-tight">News</h1>
+      <header className="space-y-3">
+        <h1 className="text-xl font-bold tracking-tight">News</h1>
         <Segmented label="News" value={tab} onChange={setTab} options={[{ value: 'news', label: 'Company news' }, { value: 'alerts', label: 'Your alerts' }]} />
       </header>
       <div {...swipe} className="touch-pan-y space-y-5">

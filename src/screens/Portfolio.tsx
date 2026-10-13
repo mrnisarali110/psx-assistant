@@ -25,8 +25,8 @@ export function Portfolio(props: ScreenProps) {
 
   return (
     <>
-      <header className="flex items-center justify-between pt-1">
-        <h1 className="text-2xl font-bold tracking-tight">Portfolio</h1>
+      <header className="flex items-center justify-between">
+        <h1 className="text-xl font-bold tracking-tight">Portfolio</h1>
         <div className="flex gap-1">
           <Button kind="ghost" label="Update from screenshots" onClick={() => setImporting(true)}><Icon name="camera" /></Button>
           <Button kind="ghost" label="Add a holding" onClick={acts.add}><Icon name="plus" /></Button>
@@ -36,12 +36,12 @@ export function Portfolio(props: ScreenProps) {
       <div className="grid grid-cols-2 gap-3">
         <Card>
           <p className="text-xs text-slate-500 dark:text-slate-400">Value</p>
-          <p className="num text-xl font-bold">{rs(view.total_value)}</p>
+          <p className="num text-lg font-bold">{rs(view.total_value)}</p>
           <p className={`num text-xs font-semibold ${changeTone(view.total_pnl)}`}>{signedRs(view.total_pnl)} ({pct(view.total_pnl_pct)})</p>
         </Card>
         <Card>
           <p className="text-xs text-slate-500 dark:text-slate-400">Invested this month</p>
-          <p className="num text-xl font-bold">{rs(invested)}</p>
+          <p className="num text-lg font-bold">{rs(invested)}</p>
           <p className="num text-xs text-slate-500 dark:text-slate-400">of {rs(budget)} · {rs(Math.max(0, budget - invested))} left</p>
         </Card>
       </div>

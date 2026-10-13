@@ -35,7 +35,7 @@ describe('portfolio', () => {
     expect(row('MEBL', v).call.call).toBe('average_down'); // 6.0% below, core
     expect(row('DCR', v).call.call).toBe('hold'); // above
     expect(row('LUCK', v).call.call).toBe('hold'); // 11% below but hold_no_add
-    expect(row('LUCK', v).call.text).toMatch(/hold, no add/);
+    expect(row('LUCK', v).call.text).toBe('11.1% below your last buy · hold only');
     expect(row('AVN', v).call.call).toBe('review');
   });
 

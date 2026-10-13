@@ -57,6 +57,9 @@ export function addBlockedReason(h: Pick<Holding, 'status' | 'is_shariah'> | und
   return null;
 }
 
+/** Short forms of addBlockedReason() for one-line labels. */
+const SHORT: Record<string, string> = { 'you set it to hold, no add': 'hold only', 'it is under review': 'under review', 'it is not Shariah compliant': 'not Shariah' };
+
 function ruleCall(h: Holding, weight: number | null, vsRef: number | null, settings: Settings, rules: Rules): HoldingCall {
   const below = vsRef != null && vsRef < 0 ? Math.abs(vsRef) : 0;
   const blocked = addBlockedReason(h, weight, settings);
@@ -68,9 +71,9 @@ function ruleCall(h: Holding, weight: number | null, vsRef: number | null, setti
     return { call: 'opportunity', text: `${below.toFixed(1)}% below your last buy`, source: 'rules' };
   }
   if (below >= rules.holding.average_down_pct && !blocked) {
-    return { call: 'average_down', text: `${below.toFixed(1)}% below your last buy: average down`, source: 'rules' };
+    return { call: 'average_down', text: `${below.toFixed(1)}% below your last buy`, source: 'rules' };
   }
-  if (below > 0) return { call: 'hold', text: `${below.toFixed(1)}% below your last buy${blocked ? ` (${blocked})` : ''}`, source: 'rules' };
+  if (below > 0) return { call: 'hold', text: `${below.toFixed(1)}% below your last buy${blocked ? ` · ${SHORT[blocked] ?? blocked}` : ''}`, source: 'rules' };
   return { call: 'hold', text: vsRef == null ? 'No live price yet' : `${vsRef.toFixed(1)}% above your last buy`, source: 'rules' };
 }
 

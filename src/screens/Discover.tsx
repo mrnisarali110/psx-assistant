@@ -46,8 +46,8 @@ export function Discover({ data, source, reload }: ScreenProps) {
 
   return (
     <>
-      <header className="space-y-3 pt-1">
-        <h1 className="text-2xl font-bold tracking-tight">Discover</h1>
+      <header className="space-y-3">
+        <h1 className="text-xl font-bold tracking-tight">Discover</h1>
         <Segmented label="Discover" value={tab} onChange={setTab} options={TABS} />
         <p className="px-1 text-xs text-slate-500 dark:text-slate-400">
           {tab === 'undervalued' && 'KSE-100 stocks trading below their sector’s usual P/E that still pay dividends.'}

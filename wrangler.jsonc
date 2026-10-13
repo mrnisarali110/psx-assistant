@@ -6,6 +6,8 @@
   "name": "psx-assistant",
   "main": "edge/index.ts",
   "compatibility_date": "2026-10-01",
+  // Workers Logs (free): import errors are logged here, never the screenshots.
+  "observability": { "enabled": true },
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",

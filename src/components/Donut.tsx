@@ -16,8 +16,8 @@ export function Donut({ slices, total, caption }: { slices: { label: string; val
   const pick = (i: number) => { haptic(); setSel(sel === i ? null : i); };
   const shown = sel == null ? null : slices[sel];
   return (
-    <div className="flex items-center gap-4">
-      <div className="relative h-36 w-36 shrink-0">
+    <div className="flex items-center gap-3">
+      <div className="relative h-28 w-28 shrink-0">
         <svg viewBox="0 0 100 100" className="h-full w-full -rotate-90" role="img"
           aria-label={`Portfolio split: ${slices.map((s) => `${s.label} ${s.pct.toFixed(0)}%`).join(', ')}`}>
           <circle cx="50" cy="50" r={r} fill="none" strokeWidth="13" className="stroke-slate-100 dark:stroke-slate-800" />
@@ -33,7 +33,7 @@ export function Donut({ slices, total, caption }: { slices: { label: string; val
           })}
         </svg>
         <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center">
-          <span className="num text-base leading-tight font-bold">{shown ? `${shown.pct.toFixed(0)}%` : rsShort(total)}</span>
+          <span className="num text-sm leading-tight font-bold">{shown ? `${shown.pct.toFixed(0)}%` : rsShort(total)}</span>
           <span className="max-w-20 truncate text-[11px] text-slate-500 dark:text-slate-400">{shown ? shown.label : caption}</span>
         </div>
       </div>
@@ -41,11 +41,11 @@ export function Donut({ slices, total, caption }: { slices: { label: string; val
         {slices.map((s, i) => (
           <li key={s.label}>
             <button type="button" onClick={() => pick(i)} aria-pressed={sel === i}
-              className={`flex min-h-8 w-full cursor-pointer items-center gap-2 rounded-lg px-1.5 text-sm transition ${sel === i ? 'bg-slate-100 dark:bg-slate-800' : ''}`}>
+              className={`flex min-h-7 w-full cursor-pointer items-center gap-2 rounded-lg px-1.5 text-[13px] transition ${sel === i ? 'bg-slate-100 dark:bg-slate-800' : ''}`}>
               <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: COLORS[Math.min(i, COLORS.length - 1)] }} aria-hidden="true" />
-              <span className="truncate font-medium">{s.label}</span>
+              <span className="font-medium whitespace-nowrap">{s.label}</span>
               <span className={`num ml-auto font-semibold ${i === 0 ? 'text-rose-600 dark:text-rose-400' : ''}`}>{s.pct.toFixed(0)}%</span>
-              <span className="num hidden w-16 text-right text-xs text-slate-500 min-[380px]:inline dark:text-slate-400">{rs(s.value).replace('Rs ', '')}</span>
+              <span className="num hidden w-14 text-right text-[11px] text-slate-500 min-[420px]:inline dark:text-slate-400">{rs(s.value).replace('Rs ', '')}</span>
             </button>
           </li>
         ))}

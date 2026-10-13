@@ -32,6 +32,15 @@ async function userFor(req: Request, env: Env, fetchImpl: typeof fetch): Promise
   return u.id ? { id: u.id } : null;
 }
 
+/** A message the user can act on, from the AI provider's error. */
+export function importError(msg: string): { error: string; reason: string } {
+  if (/\b429\b|quota|RESOURCE_EXHAUSTED|rate limit/i.test(msg)) return { error: "Today's free AI limit is used up. Try again later or tomorrow.", reason: 'limit' };
+  if (/\b503\b|overload|high demand|UNAVAILABLE/i.test(msg)) return { error: 'The AI is busy right now. Try again in a minute.', reason: 'busy' };
+  if (/\b40[13]\b|api key/i.test(msg)) return { error: "Screenshot reading isn't set up correctly (AI key).", reason: 'key' };
+  if (/\b400\b|invalid|unsupported/i.test(msg)) return { error: "The AI couldn't process these images. Try a clear screenshot of the holdings list.", reason: 'bad_request' };
+  return { error: "Couldn't read the screenshots this time. Try again.", reason: 'other' };
+}
+
 export async function handleImport(req: Request, env: Env, fetchImpl: typeof fetch = fetch): Promise<Response> {
   if (req.method !== 'POST') return json({ error: 'Use POST' }, 405);
   if (!(await userFor(req, env, fetchImpl))) return json({ error: 'Please sign in again.' }, 401);
@@ -49,8 +58,10 @@ export async function handleImport(req: Request, env: Env, fetchImpl: typeof fet
     const r = await readPortfolioScreenshots(ai, images.map((i) => ({ mime: i.mime as string, base64: i.base64 as string })));
     if (!r.isPortfolio || !r.rows.length) return json({ error: "Couldn't find a holdings list in these screenshots. Use the Portfolio screen of your broker app." }, 422);
     return json({ holdings: r.rows, dropped: r.dropped, model: r.model });
-  } catch {
-    return json({ error: 'The AI is busy right now. Try again in a minute.' }, 503);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error('import failed:', msg.slice(0, 500)); // Cloudflare logs only; never the images
+    return json(importError(msg), 503);
   }
 }
 

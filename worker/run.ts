@@ -13,6 +13,8 @@ import { makeRouter } from '../shared/llm.ts';
 import { buildPortfolio } from '../shared/portfolio.ts';
 import { undervalued } from '../shared/discover.ts';
 import { pktDate } from '../shared/time.ts';
+import { readFileSync } from 'node:fs';
+import { readPortfolioScreenshots } from '../shared/screenshots.ts';
 import { discoverPicks, portfolioInsight, readAnnouncement } from './ai.ts';
 import { Fetcher, fetchSnapshot, toPrice, toScreenRows } from './feed.ts';
 import { buildFacts, runJob, type JobName } from './jobs.ts';
@@ -90,6 +92,16 @@ async function aiCheck(): Promise<number> {
     console.log(`\n== Undervalued picks (${p.model})`);
     for (const i of p.items) console.log(`  ${i.symbol.padEnd(8)} ${i.why}`);
   } catch (e) { ok = false; console.error('picks failed:', (e as Error).message); }
+  try {
+    // Same code path as /api/import, on a mock broker screenshot of the seed portfolio.
+    const shot = readFileSync(new URL('./fixtures/portfolio-sample.jpg', import.meta.url)).toString('base64');
+    const r = await readPortfolioScreenshots(ai, [{ mime: 'image/jpeg', base64: shot }]);
+    const want = new Map(SEED_HOLDINGS.map((h) => [h.symbol, h]));
+    const right = r.rows.filter((x) => want.get(x.symbol)?.shares === x.shares && Math.abs(want.get(x.symbol)!.avg_cost - x.avg_cost) < 0.01).length;
+    console.log(`
+== Screenshot read (${r.model}): ${r.rows.length} rows, ${right}/${want.size} exactly right, unreadable ${r.dropped.length}`);
+    if (right < want.size) ok = false;
+  } catch (e) { ok = false; console.error('screenshot read failed:', (e as Error).message.slice(0, 300)); }
   return ok ? 0 : 1;
 }
 

@@ -130,7 +130,7 @@ export default function App() {
             <Icon name="refresh" className="h-4 w-4 text-teal-600" />
           </span>
         </div>
-        <main key={route} className={`flex-1 animate-rise space-y-5 px-4 pb-28 ${demo ? 'pt-3' : 'safe-top pt-3'}`}>
+        <main key={route} className={`flex-1 animate-rise space-y-4 px-4 pb-24 ${demo ? 'pt-3' : 'safe-top pt-3'}`}>
           {error && !data && (
             <div className="space-y-3 pt-10 text-center">
               <p className="text-sm text-rose-700 dark:text-rose-400">Couldn't load your data: {error}</p>
@@ -165,7 +165,7 @@ function ScreenSkeleton() {
     <div className="space-y-4 pt-2" aria-label="Loading">
       <Skeleton className="h-8 w-40" />
       <Skeleton className="h-32 w-full rounded-3xl" />
-      <div className="flex gap-3">{[0, 1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-14 w-14 rounded-full" />)}</div>
+      <div className="flex gap-3">{[0, 1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-12 w-12 rounded-full" />)}</div>
       <Skeleton className="h-48 w-full rounded-3xl" />
     </div>
   );

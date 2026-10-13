@@ -60,10 +60,10 @@ export function Profile({ data, source, reload, onExitDemo }: ScreenProps & { on
 
   return (
     <>
-      <header className="flex items-center gap-4 pt-1">
-        <span className="flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-teal-500 to-emerald-600 text-2xl font-bold text-white">{source.kind === 'demo' ? 'D' : initial}</span>
+      <header className="flex items-center gap-4">
+        <span className="flex h-14 w-14 items-center justify-center rounded-full bg-gradient-to-br from-teal-500 to-emerald-600 text-xl font-bold text-white">{source.kind === 'demo' ? 'D' : initial}</span>
         <div className="min-w-0">
-          <h1 className="truncate text-xl font-bold">{source.kind === 'demo' ? 'Demo account' : data.email}</h1>
+          <h1 className="truncate text-lg font-bold">{source.kind === 'demo' ? 'Demo account' : data.email}</h1>
           <p className="text-xs text-slate-500 dark:text-slate-400">
             Last market check {data.lastRun ? `${asOfLabel(data.lastRun.started_at)}${data.lastRun.ok === false ? ' (PSX unavailable)' : ''}` : 'not yet'}
           </p>
