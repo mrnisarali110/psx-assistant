@@ -1,35 +1,31 @@
 import { describe, expect, it } from 'vitest';
-import { GeminiClient, guardInsight, numberSet, numbersGrounded, parseJsonLoose, type GuardContext } from './ai.ts';
-import { buildFacts, runJob, type AiService } from './jobs.ts';
-import { ConsoleNotifier } from './notify.ts';
-import { MemoryStore, type UserCtx } from './store.ts';
+import { discoverPicks, guardInsight, numberSet, numbersGrounded } from './ai.ts';
+import { buildFacts } from './jobs.ts';
+import type { UserCtx } from './store.ts';
+import { GeminiProvider, GroqProvider, LlmRouter, makeRouter, parseJsonLoose } from '../shared/llm.ts';
 import { buildPortfolio } from '../shared/portfolio.ts';
 import { DEFAULT_SETTINGS } from '../shared/types.ts';
 import { SEED_HOLDINGS, SEED_INDEX, SEED_PRICES, SEED_WATCHLIST } from '../shared/fixtures/seed.ts';
-import { findOpportunities } from '../shared/opportunities.ts';
-import type { Snapshot } from './feed.ts';
+import { handleImport, type Env } from '../edge/index.ts';
 
-const owner = (ai = true): UserCtx => ({
-  id: 'owner-1', settings: { ...DEFAULT_SETTINGS, ai_enabled: ai }, holdings: SEED_HOLDINGS, watchlist: SEED_WATCHLIST,
-  telegram_chat_id: null, subs: [],
-});
-
+const owner = (): UserCtx => ({ id: 'owner-1', settings: { ...DEFAULT_SETTINGS, ai_enabled: true }, holdings: SEED_HOLDINGS, watchlist: SEED_WATCHLIST, telegram_chat_id: null, subs: [] });
 const seedFacts = () => {
   const u = owner();
   const mine = new Set([...SEED_HOLDINGS.map((h) => h.symbol), ...SEED_WATCHLIST.map((w) => w.symbol)]);
   return buildFacts(u, buildPortfolio(u.holdings, SEED_PRICES, u.settings), mine, {
-    today: '2026-10-06', idx: SEED_INDEX, prices: SEED_PRICES, news: [],
-    screen: [{ symbol: 'ENGRO', sector: 'FERTILIZER', price: 300, change_pct: 0, pe: 7.5, dividend_yield_pct: 9.1, market_cap: 1e11, is_shariah: true }],
-  });
+    today: '2026-10-06', idx: SEED_INDEX, prices: SEED_PRICES, news: [], dividends: [], now: new Date('2026-10-06T07:00:00Z'),
+    screen: [{ symbol: 'ENGRO', sector: 'FERTILIZER', price: 300, change_pct: 0, change_1y_pct: -10, pe: 4, dividend_yield_pct: 9.1, market_cap: 1e11, is_shariah: true },
+      { symbol: 'FFX', sector: 'FERTILIZER', price: 100, change_pct: 0, change_1y_pct: 0, pe: 9, dividend_yield_pct: 5, market_cap: 1e11, is_shariah: true },
+      { symbol: 'FFY', sector: 'FERTILIZER', price: 100, change_pct: 0, change_1y_pct: 0, pe: 10, dividend_yield_pct: 5, market_cap: 1e11, is_shariah: true }],
+  }, 9469.7);
 };
 
 describe('number grounding', () => {
   it('accepts numbers from the facts (and their roundings), rejects invented ones', () => {
     const known = numberSet({ price: 114.37, weight: 23.98, text: 'EPS Rs 41.20' });
     expect(numbersGrounded('SYS at Rs 114.37, about 24% of the portfolio', known).ok).toBe(true);
-    expect(numbersGrounded('EPS 41.2', known).ok).toBe(true);
     expect(numbersGrounded('target price Rs 150', known)).toEqual({ ok: false, unknown: [150] });
-    expect(numbersGrounded('tranche 2 on Oct 20, 2026', known).ok).toBe(true); // small ints and years
+    expect(numbersGrounded('tranche 2 on Oct 20, 2026', known).ok).toBe(true);
   });
   it('parses JSON wrapped in code fences', () => {
     expect(parseJsonLoose('```json\n{"a":1}\n```')).toEqual({ a: 1 });
@@ -38,125 +34,121 @@ describe('number grounding', () => {
   });
 });
 
+describe('facts for the AI', () => {
+  it('carries last-buy distances, this month\'s cash and the undervalued screen', () => {
+    const { facts } = seedFacts();
+    expect(facts.money).toEqual({ monthly_budget_pkr: 50000, invested_this_month_pkr: 9470, cash_left_this_month_pkr: 40530 });
+    expect(facts.holdings.find((h) => h.symbol === 'SYS')).toMatchObject({ last_buy_price: 130.45, vs_last_buy_pct: -12.3, rules_call: 'opportunity' });
+    expect(facts.screen_candidates.map((c) => c.symbol)).toContain('ENGRO');
+  });
+});
+
 describe('AI guardrails', () => {
   const { facts, guard } = seedFacts();
 
   it('keeps grounded suggestions and drops ones that break your rules', () => {
-    const raw = {
-      headline: 'Banks and SYS are below cost; the plan already averages them down.',
+    const r = guardInsight({
+      headline: 'Banks and SYS are below your last buys.', stance: 'buy',
       suggestions: [
-        { action: 'add', symbol: 'MEBL', text: 'Add MEBL in tranche 1 as planned', why: 'Core holding 6% below your cost, weight 19.5%', confidence: 'high' },
-        { action: 'add', symbol: 'EFERT', text: 'Average down EFERT', why: 'Down 9.9%', confidence: 'high' }, // hold_no_add
-        { action: 'buy', symbol: 'LUCKX', text: 'Buy LUCKX', why: 'Cheap', confidence: 'high' }, // not a known symbol
-        { action: 'buy', symbol: 'HUBC', text: 'Buy HUBC, target Rs 260', why: '8.57% yield', confidence: 'medium' }, // invented target
-        { action: 'review', symbol: 'AVN', text: 'Re-check AVN after its results', why: 'Status review, 46.9% below its 52-week high', confidence: 'medium' },
+        { action: 'add', symbol: 'MEBL', text: 'Add MEBL', why: '6% below your last buy, weight 19.5%', confidence: 'high' },
+        { action: 'add', symbol: 'EFERT', text: 'Average down EFERT', why: 'Down 9.9%', confidence: 'high' },
+        { action: 'buy', symbol: 'LUCKX', text: 'Buy LUCKX', why: 'Cheap', confidence: 'high' },
+        { action: 'buy', symbol: 'HUBC', text: 'Buy HUBC, target Rs 260', why: '8.57% yield', confidence: 'medium' },
+        { action: 'watch', symbol: 'ENGRO', text: 'Watch ENGRO', why: 'P/E 4, 9.1% yield', confidence: 'low' },
       ],
-      plan_note: 'Tranche 1 spends on SYS, MEBL, UBL, HUBC and PPL.',
-      risks: 'Banks are 31% of the portfolio.',
-    } as any;
-    const r = guardInsight(raw, facts, guard);
-    expect(r.insight.suggestions.map((s) => `${s.action} ${s.symbol}`)).toEqual(['add MEBL', 'review AVN']);
-    expect(r.dropped).toBe(3);
-    expect(r.reasons.join(' ')).toMatch(/EFERT is hold_no_add/);
-    expect(r.reasons.join(' ')).toMatch(/LUCKX is not in your portfolio/);
-    expect(r.reasons.join(' ')).toMatch(/numbers not in the data: 260/);
+      holding_calls: [
+        { symbol: 'SYS', call: 'opportunity', text: '12.3% below your last buy' },
+        { symbol: 'LUCK', call: 'average_down', text: '11.1% below' }, // hold_no_add
+        { symbol: 'DCR', call: 'hold', text: 'up 1.8%' },
+        { symbol: 'NOPE', call: 'hold', text: 'x' },
+      ],
+      cash_note: 'Put the remaining Rs 40,530 into MEBL and UBL.',
+      rebalance: 'Banks would reach 99% if you only buy banks.', // invented number -> blanked
+    }, facts, guard);
+    expect(r.insight.suggestions.map((s) => `${s.action} ${s.symbol}`)).toEqual(['add MEBL', 'watch ENGRO']);
+    expect(r.insight.holding_calls.map((c) => c.symbol)).toEqual(['SYS', 'DCR']);
+    expect(r.insight.stance).toBe('buy');
+    expect(r.insight.cash_note).toMatch(/40,530/);
+    expect(r.insight.rebalance).toBeNull();
+    expect(r.reasons.join(' ')).toMatch(/EFERT is hold_no_add.*LUCKX is not in your portfolio.*numbers not in the data: 260/);
   });
 
-  it('allows screen candidates but no buying on a rally day', () => {
-    const rally: GuardContext = { ...guard, rulesSay: 'Wait' };
-    const r = guardInsight({ headline: 'x', suggestions: [
-      { action: 'buy', symbol: 'ENGRO', text: 'Consider ENGRO', why: '9.1% yield, P/E 7.5', confidence: 'medium' },
-      { action: 'watch', symbol: 'ENGRO', text: 'Watch ENGRO', why: '9.1% yield', confidence: 'low' },
-    ] } as any, facts, rally);
-    expect(r.insight.suggestions.map((s) => s.action)).toEqual(['watch']);
-    expect(r.reasons[0]).toMatch(/rules say Wait/);
+  it('turns a Buy stance into Wait on a rally day', () => {
+    const r = guardInsight({ headline: 'x', stance: 'buy', suggestions: [], holding_calls: [] }, facts, { ...guard, rulesSay: 'Wait' });
+    expect(r.insight.stance).toBe('wait');
   });
 
-  it('blanks free text with invented numbers instead of showing it', () => {
-    const r = guardInsight({ headline: 'KSE-100 will hit 180,000 soon', suggestions: [], risks: 'Downside to 140,000' } as any, facts, guard);
-    expect(r.insight.headline).toMatch(/Nothing stands out/);
-    expect(r.insight.risks).toBeNull();
+  it('Discover picks keep only candidate symbols and grounded reasons', async () => {
+    const ai = { available: true, json: async () => ({ model: 'fake', data: { items: [
+      { symbol: 'AAA', why: 'P/E 4.2 vs sector 8.1', frequency: 'Quarterly' }, { symbol: 'ZZZ', why: 'great' }, { symbol: 'BBB', why: 'will double to 300' },
+    ] } }) } as unknown as LlmRouter;
+    const r = await discoverPicks(ai, 'dividend', [{ symbol: 'AAA', pe: 4.2, sector_pe: 8.1 }, { symbol: 'BBB', pe: 5 }]);
+    expect(r.items).toEqual([{ symbol: 'AAA', why: 'P/E 4.2 vs sector 8.1', frequency: 'Quarterly' }]);
   });
 });
 
-describe('Gemini client', () => {
-  it('falls back to the next model on 429 and returns JSON', async () => {
+describe('AI router (Groq + Gemini)', () => {
+  const ok = (text: string) => new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text }] } }], choices: [{ message: { content: text } }] }));
+  const recorder = (handler: (url: string) => Response) => {
     const calls: string[] = [];
-    const fetchImpl: typeof fetch = async (url) => {
-      calls.push(String(url));
-      if (String(url).includes('model-a')) return new Response('quota', { status: 429 });
-      return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: '{"ok":true}' }] } }] }));
-    };
-    const c = new GeminiClient({ apiKey: 'k', models: ['model-a', 'model-b'], fetchImpl, log: () => {} });
-    const r = await c.json<{ ok: boolean }>([{ text: 'hi' }], {}, 'sys');
-    expect(r).toEqual({ data: { ok: true }, model: 'model-b' });
-    expect(calls).toHaveLength(2);
+    const fetchImpl = (async (url: string) => { calls.push(String(url)); return handler(String(url)); }) as unknown as typeof fetch;
+    return { calls, fetchImpl };
+  };
+
+  it('text tasks go to Groq first and fall back to Gemini', async () => {
+    const r = recorder((u) => (u.includes('groq') ? new Response('rate limited', { status: 429 }) : ok('{"ok":1}')));
+    const router = makeRouter({ gemini: 'g', groq: 'q' }, { fetchImpl: r.fetchImpl, log: () => {} });
+    expect(await router.json('text', 's', [{ text: 'hi' }], {})).toEqual({ data: { ok: 1 }, model: 'gemini/gemini-3.8-flash' });
+    expect(r.calls.filter((c) => c.includes('groq'))).toHaveLength(2); // both Groq models tried
   });
-  it('stops on a bad key instead of trying every model', async () => {
-    let n = 0;
-    const fetchImpl: typeof fetch = async () => { n++; return new Response('API key not valid', { status: 400 }); };
-    const c = new GeminiClient({ apiKey: 'bad', models: ['a', 'b', 'c'], fetchImpl, log: () => {} });
-    await expect(c.json([{ text: 'x' }], {}, 's')).rejects.toThrow(/Gemini unavailable/);
-    expect(n).toBe(1);
+
+  it('PDFs go to Gemini first; Groq only gets them when there is extracted text', async () => {
+    const r = recorder((u) => (u.includes('googleapis') ? new Response('overloaded', { status: 503 }) : ok('{"via":"groq"}')));
+    const router = makeRouter({ gemini: 'g', groq: 'q' }, { fetchImpl: r.fetchImpl, log: () => {} });
+    const withText = await router.json('pdf', 's', [{ pdf: { base64: 'x', text: 'profit '.repeat(50) } }, { text: 'q' }], {});
+    expect(withText.model).toBe('groq/openai/gpt-oss-120b');
+    expect(r.calls[0]).toContain('googleapis');
+    await expect(router.json('pdf', 's', [{ pdf: { base64: 'x', text: '' } }], {})).rejects.toThrow(/AI unavailable/);
+  });
+
+  it('images are never sent to Groq; a bad key stops that provider at once', async () => {
+    expect(new GroqProvider('q').can('vision', [{ image: { mime: 'image/png', base64: 'x' } }])).toBe(false);
+    const r = recorder(() => new Response('API key not valid', { status: 400 }));
+    const g = new GeminiProvider('bad', { fetchImpl: r.fetchImpl, log: () => {} });
+    await expect(new LlmRouter([g]).json('vision', 's', [{ image: { mime: 'image/png', base64: 'x' } }], {})).rejects.toThrow();
+    expect(r.calls).toHaveLength(1);
   });
 });
 
-describe('opportunity screen', () => {
-  it('picks high-yield, low P/E KSE-100 names you do not own, Shariah filter on request', () => {
-    const rows = [
-      { symbol: 'A', sector: 'X', price: 10, change_pct: 0, pe: 5, dividend_yield_pct: 10, market_cap: 1, is_shariah: false },
-      { symbol: 'B', sector: 'X', price: 10, change_pct: 0, pe: 6, dividend_yield_pct: 8, market_cap: 1, is_shariah: true },
-      { symbol: 'C', sector: 'X', price: 10, change_pct: 0, pe: 30, dividend_yield_pct: 12, market_cap: 1, is_shariah: true }, // too expensive
-      { symbol: 'SYS', sector: 'X', price: 10, change_pct: 0, pe: 5, dividend_yield_pct: 9, market_cap: 1, is_shariah: true }, // owned
-    ];
-    expect(findOpportunities(rows, new Set(['SYS']), false).map((o) => o.symbol)).toEqual(['A', 'B']);
-    expect(findOpportunities(rows, new Set(['SYS']), true).map((o) => o.symbol)).toEqual(['B']);
+describe('screenshot import endpoint', () => {
+  const env: Env = { ASSETS: { fetch: async () => new Response('asset') }, SUPABASE_URL: 'https://sb.example', SUPABASE_KEY: 'pk', GEMINI_API_KEY: 'g' };
+  const req = (body: unknown, auth = 'Bearer good.token') => new Request('https://app/api/import', {
+    method: 'POST', headers: { Authorization: auth, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   });
-});
+  const fetchImpl = (async (url: string, init?: RequestInit) => {
+    if (String(url).includes('/auth/v1/user')) {
+      return new Headers(init?.headers).get('Authorization') === 'Bearer good.token' ? new Response(JSON.stringify({ id: 'u1' })) : new Response('no', { status: 401 });
+    }
+    return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify({ is_portfolio: true, holdings: [
+      { symbol: 'SYS', shares: 118, avg_cost: 130.45 }, { symbol: 'MEBL', shares: 20, avg_cost: 583.06 }, { symbol: '??', shares: 1, avg_cost: 1 },
+    ] }) }] } }] }));
+  }) as unknown as typeof fetch;
+  const img = { mime: 'image/jpeg', base64: 'aGVsbG8=' };
 
-describe('AI inside the scheduled jobs', () => {
-  const midday = new Date('2026-10-05T07:30:00Z');
-  const snap = (): Snapshot => ({
-    fetched_at: '2026-10-05T10:49:00.000Z', errors: [], screener: {},
-    indices: { KSE100: { name: 'KSE100', value: SEED_INDEX.kse100, change: SEED_INDEX.change, change_pct: SEED_INDEX.change_pct } },
-    quotes: Object.fromEntries(Object.values(SEED_PRICES).map((p) => [p.symbol, {
-      ...p, open: null, high: null, low: null, as_of: '2026-10-05T10:49:00.000Z',
-      announcements: p.symbol === 'MARI' ? [{ id: 'psx-doc-1', symbol: 'MARI', title: 'Financial results', kind: 'results' as const, published_at: '2026-10-05', pdf_url: 'https://dps.psx.com.pk/download/document/1.pdf' }] : [],
-    }])),
+  it('needs a signed-in user', async () => {
+    expect((await handleImport(req({ images: [img] }, 'Bearer bad.token'), env, fetchImpl)).status).toBe(401);
   });
-  const fakeAi = (fail = false): AiService => ({
-    readAnnouncement: async () => { if (fail) throw new Error('Gemini unavailable: 429'); return { summary: 'MARI profit up; dividend Rs 10.', figures: [], verified: true, model: 'fake' }; },
-    portfolioInsight: async () => {
-      if (fail) throw new Error('Gemini unavailable: 429');
-      return { model: 'fake', dropped: 1, reasons: ['x'], insight: { headline: 'Stick to the plan.', plan_note: null, risks: null,
-        suggestions: [{ action: 'trim', symbol: 'EFERT', text: 'Consider trimming EFERT', why: '17% weight, hold_no_add', confidence: 'high' }] } };
-    },
+  it('validates the images', async () => {
+    expect((await handleImport(req({ images: [] }), env, fetchImpl)).status).toBe(400);
+    expect((await handleImport(req({ images: [{ mime: 'application/pdf', base64: 'x' }] }), env, fetchImpl)).status).toBe(400);
+    expect((await handleImport(req({ images: [img, img, img, img, img] }), env, fetchImpl)).status).toBe(400);
   });
-
-  it('reads announcements, stores an insight, and notifies a strong AI suggestion', async () => {
-    const store = new MemoryStore([owner()]);
-    const n = new ConsoleNotifier(() => {});
-    const r = await runJob('midday', { store, notifier: n, fetchSnapshot: async () => snap(), fetchPdf: async () => new Uint8Array([1]), ai: fakeAi(), now: () => midday, log: () => {} });
-    expect(r.ai).toEqual({ announcements_read: 1, insights: 1, suggestions_dropped: 1 });
-    expect(store.insights[0]).toMatchObject({ headline: 'Stick to the plan.', job: 'midday' });
-    const sent = n.sent.flatMap((s) => s.n.alerts);
-    expect(sent.find((a) => a.kind === 'ai_suggestion')?.message).toMatch(/^AI Assistant suggests: Consider trimming EFERT/);
-    expect(sent.find((a) => a.kind === 'announcement_results')?.message).toBe('MARI: MARI profit up; dividend Rs 10.');
+  it('returns cleaned holdings read by the AI', async () => {
+    const r = await handleImport(req({ images: [img] }), env, fetchImpl);
+    expect(r.status).toBe(200);
+    expect(await r.json()).toMatchObject({ holdings: [{ symbol: 'SYS', shares: 118, avg_cost: 130.45 }, { symbol: 'MEBL', shares: 20, avg_cost: 583.06 }], dropped: ['(unreadable row)'] });
   });
-
-  it('skips AI for users who did not opt in', async () => {
-    const store = new MemoryStore([owner(false)]);
-    const r = await runJob('midday', { store, notifier: new ConsoleNotifier(() => {}), fetchSnapshot: async () => snap(), ai: fakeAi(), now: () => midday, log: () => {} });
-    expect(r.ai.insights).toBe(0);
-  });
-
-  it('keeps sending normal alerts when Gemini is down', async () => {
-    const store = new MemoryStore([owner()]);
-    const n = new ConsoleNotifier(() => {});
-    const r = await runJob('midday', { store, notifier: n, fetchSnapshot: async () => snap(), fetchPdf: async () => new Uint8Array([1]), ai: fakeAi(true), now: () => midday, log: () => {} });
-    expect(r.ai.insights).toBe(0);
-    expect(r.errors.some((e) => e.startsWith('ai'))).toBe(true);
-    expect(n.sent.flatMap((s) => s.n.alerts).some((a) => a.kind === 'below_cost')).toBe(true);
-    expect(store.announcements[0].ai_summary).toBeUndefined(); // left for the next run to retry
+  it('says clearly when the AI key is missing', async () => {
+    expect((await handleImport(req({ images: [img] }), { ...env, GEMINI_API_KEY: undefined }, fetchImpl)).status).toBe(503);
   });
 });

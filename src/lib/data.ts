@@ -1,17 +1,21 @@
 /**
  * App data access. LiveSource uses the signed-in user's Supabase session, so row-level security
- * decides what is visible. DemoSource serves the seed portfolio with saved PSX prices in memory.
+ * decides what is visible. DemoSource serves the seed portfolio with saved PSX data in memory.
  */
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import type { AiInsight, Announcement, AlertLogRow, Holding, IndexSnapshot, PriceMap, Settings, WatchItem } from '../../shared/types.ts';
+import type {
+  AiInsight, AiPicks, Announcement, AlertLogRow, DividendEvent, Holding, IndexSnapshot, PriceMap, Settings, Txn, WatchItem,
+} from '../../shared/types.ts';
 import { DEFAULT_SETTINGS } from '../../shared/types.ts';
-import type { ScreenRow } from '../../shared/opportunities.ts';
+import type { ScreenRow } from '../../shared/discover.ts';
+import type { ImportedRow } from '../../shared/changes.ts';
+import { addDays, pktDate } from '../../shared/time.ts';
 import {
-  SEED_ANNOUNCEMENTS, SEED_CAPTURED_AT, SEED_HOLDINGS, SEED_INDEX, SEED_PRICES, SEED_SCREEN, SEED_WATCHLIST,
+  SEED_ANNOUNCEMENTS, SEED_CAPTURED_AT, SEED_HOLDINGS, SEED_INDEX, SEED_PRICES, SEED_SCREEN, SEED_TXNS, SEED_WATCHLIST,
 } from '../../shared/fixtures/seed.ts';
 import { config } from './config.ts';
+import { readScreenshots } from './importer.ts';
 
-export interface SavedPlan { id: string; created_at: string; amount_pkr: number; payload: any }
 export interface WorkerRun { job: string; started_at: string; finished_at: string | null; ok: boolean | null }
 
 export interface AppData {
@@ -20,29 +24,31 @@ export interface AppData {
   watchlist: WatchItem[];
   prices: PriceMap;
   index: IndexSnapshot | null;
-  indexHistory: IndexSnapshot[]; // oldest first, for the tiny trend line
+  indexHistory: IndexSnapshot[]; // oldest first
   announcements: Announcement[];
   alerts: AlertLogRow[];
-  latestPlan: SavedPlan | null;
   lastRun: WorkerRun | null;
   telegramLinked: boolean;
   email: string | null;
   aiInsight: AiInsight | null;
   screen: ScreenRow[];
+  transactions: Txn[]; // this month
+  dividends: DividendEvent[];
+  picks: { undervalued: AiPicks | null; dividend: AiPicks | null };
 }
 
 export interface DataSource {
   kind: 'live' | 'demo';
   load(): Promise<AppData>;
-  saveHolding(h: Holding): Promise<void>;
-  deleteHolding(id: string): Promise<void>;
+  /** One write path for every holding change: edit, delete, record buy, import. */
+  saveHoldingChange(before: Holding | undefined, after: Holding | null, txn: Txn | null): Promise<void>;
   addWatch(symbol: string, note?: string): Promise<void>;
   deleteWatch(id: string): Promise<void>;
   saveSettings(s: Partial<Settings>): Promise<void>;
-  savePlan(amount: number, payload: unknown): Promise<void>;
   createTelegramCode(): Promise<string>;
   savePushSubscription(sub: PushSubscriptionJSON): Promise<void>;
   deletePushSubscription(endpoint: string): Promise<void>;
+  readScreenshots(files: File[]): Promise<{ holdings: ImportedRow[]; dropped: string[] }>;
 }
 
 let client: SupabaseClient | null = null;
@@ -65,6 +71,16 @@ const normPrice = (p: any) => ({
   high_52w: n(p.high_52w), low_52w: n(p.low_52w), dividend_yield_pct: n(p.dividend_yield_pct), pe: n(p.pe),
 });
 const normIdx = (r: any): IndexSnapshot => ({ ts: r.ts, kse100: Number(r.kse100), change: n(r.change), change_pct: n(r.change_pct) });
+const normHolding = (h: any): Holding => ({ ...h, shares: Number(h.shares), avg_cost: Number(h.avg_cost), last_buy_price: n(h.last_buy_price) });
+const holdingRow = (h: Holding) => ({
+  symbol: h.symbol, shares: h.shares, avg_cost: h.avg_cost, status: h.status, sector: h.sector || null,
+  is_shariah: h.is_shariah, note: h.note || null, last_buy_price: h.last_buy_price ?? null, last_buy_on: h.last_buy_on ?? null,
+});
+
+/** Optional extras (AI, screen, dividends): if a table is missing or empty, the app still works. */
+async function optional<T>(q: PromiseLike<{ data: T | null; error: unknown }>, fallback: T): Promise<T> {
+  try { const r = await q; return r.error || r.data == null ? fallback : r.data; } catch { return fallback; }
+}
 
 export class LiveSource implements DataSource {
   kind = 'live' as const;
@@ -72,34 +88,31 @@ export class LiveSource implements DataSource {
 
   async load(): Promise<AppData> {
     const sb = supabase();
-    // AI and screen tables are optional extras: if they are missing or empty, the app still works.
-    const optional = async <T,>(q: PromiseLike<{ data: T | null; error: unknown }>, fallback: T): Promise<T> => {
-      try { const r = await q; return r.error || r.data == null ? fallback : r.data; } catch { return fallback; }
-    };
-    const insightP = optional(sb.from('ai_insights').select('created_at, job, headline, suggestions, plan_note, risks, model').order('created_at', { ascending: false }).limit(1), [] as any[]);
-    const screenP = optional(sb.from('market_screen').select('*'), [] as any[]);
-    const [settings, holdings, watchlist, idx, alerts, plan, run, profile] = await Promise.all([
+    const today = pktDate(new Date());
+    const [settings, holdings, watchlist, idx, alerts, run, profile] = await Promise.all([
       sb.from('settings').select('*').maybeSingle(),
       sb.from('holdings').select('*').order('symbol'),
       sb.from('watchlist').select('*').order('symbol'),
-      sb.from('index_snapshots').select('ts, kse100, change, change_pct').order('ts', { ascending: false }).limit(30),
-      sb.from('alerts_log').select('*').order('sent_at', { ascending: false }).limit(60),
-      sb.from('recommendations').select('id, created_at, amount_pkr, payload').order('created_at', { ascending: false }).limit(1),
+      sb.from('index_snapshots').select('ts, kse100, change, change_pct').order('ts', { ascending: false }).limit(60),
+      sb.from('alerts_log').select('*').order('sent_at', { ascending: false }).limit(80),
       sb.from('worker_runs').select('job, started_at, finished_at, ok').order('started_at', { ascending: false }).limit(1),
       sb.from('profiles').select('telegram_chat_id').maybeSingle(),
     ]);
-    const H = (ok(holdings) as any[]).map((h) => ({ ...h, shares: Number(h.shares), avg_cost: Number(h.avg_cost) }));
+    const H = (ok(holdings) as any[]).map(normHolding);
     const W = ok(watchlist) as WatchItem[];
     const symbols = [...new Set([...H.map((h) => h.symbol), ...W.map((w) => w.symbol)])];
-    const [prices, anns] = symbols.length
-      ? await Promise.all([
-        sb.from('prices').select('*').in('symbol', symbols),
-        sb.from('announcements').select('*').in('symbol', symbols).order('published_at', { ascending: false }).limit(120),
-      ])
-      : [{ data: [], error: null }, { data: [], error: null }];
+    const [prices, anns, insights, screen, txns, divs, uv, dv] = await Promise.all([
+      symbols.length ? optional(sb.from('prices').select('*').in('symbol', symbols), [] as any[]) : Promise.resolve([] as any[]),
+      symbols.length ? optional(sb.from('announcements').select('*').in('symbol', symbols).gte('published_at', addDays(today, -60)).order('published_at', { ascending: false }).limit(150), [] as any[]) : Promise.resolve([] as any[]),
+      optional(sb.from('ai_insights').select('created_at, job, headline, stance, suggestions, holding_calls, rebalance, cash_note, risks, model').order('created_at', { ascending: false }).limit(1), [] as any[]),
+      optional(sb.from('market_screen').select('*'), [] as any[]),
+      optional(sb.from('transactions').select('*').gte('executed_on', `${today.slice(0, 7)}-01`), [] as any[]),
+      optional(sb.from('dividends').select('*').gte('announced_on', addDays(today, -400)).order('announced_on', { ascending: false }).limit(500), [] as any[]),
+      optional(sb.from('ai_picks').select('*').eq('kind', 'undervalued').order('created_at', { ascending: false }).limit(1), [] as any[]),
+      optional(sb.from('ai_picks').select('*').eq('kind', 'dividend').order('created_at', { ascending: false }).limit(1), [] as any[]),
+    ]);
     const s = ok(settings) as any;
     const history = (ok(idx) as any[]).map(normIdx);
-    const [insights, screen] = await Promise.all([insightP, screenP]);
     return {
       settings: s ? {
         ...DEFAULT_SETTINGS, ...s, monthly_budget_pkr: Number(s.monthly_budget_pkr), crash_fund_pkr: Number(s.crash_fund_pkr),
@@ -107,38 +120,35 @@ export class LiveSource implements DataSource {
       } : { ...DEFAULT_SETTINGS },
       holdings: H,
       watchlist: W,
-      prices: Object.fromEntries((ok(prices) as any[]).map((p) => [p.symbol, normPrice(p)])),
+      prices: Object.fromEntries(prices.map((p: any) => [p.symbol, normPrice(p)])),
       index: history[0] ?? null,
       indexHistory: [...history].reverse(),
-      announcements: ok(anns) as Announcement[],
+      announcements: anns as Announcement[],
       alerts: ok(alerts) as AlertLogRow[],
-      latestPlan: ((ok(plan) as any[])[0] ?? null) as SavedPlan | null,
       lastRun: ((ok(run) as any[])[0] ?? null) as WorkerRun | null,
       telegramLinked: !!(ok(profile) as any)?.telegram_chat_id,
       email: this.email,
-      aiInsight: (insights[0] ?? null) as AiInsight | null,
+      aiInsight: insights[0] ? { holding_calls: [], suggestions: [], ...insights[0] } as AiInsight : null,
       screen: screen.map((r: any) => ({
-        symbol: r.symbol, sector: r.sector, price: n(r.price), change_pct: n(r.change_pct), pe: n(r.pe),
+        symbol: r.symbol, sector: r.sector, price: n(r.price), change_pct: n(r.change_pct), change_1y_pct: n(r.change_1y_pct), pe: n(r.pe),
         dividend_yield_pct: n(r.dividend_yield_pct), market_cap: n(r.market_cap), is_shariah: r.is_shariah,
       })),
+      transactions: txns.map((t: any) => ({ ...t, shares: Number(t.shares), price: Number(t.price), amount: Number(t.amount) })),
+      dividends: divs.map((d: any) => ({ ...d, dps: n(d.dps) })),
+      picks: { undervalued: (uv[0] ?? null) as AiPicks | null, dividend: (dv[0] ?? null) as AiPicks | null },
     };
   }
 
-  async saveHolding(h: Holding) {
-    const row = {
-      symbol: h.symbol, shares: h.shares, avg_cost: h.avg_cost, status: h.status,
-      sector: h.sector || null, is_shariah: h.is_shariah, note: h.note || null,
-    };
-    if (h.id) ok(await supabase().from('holdings').update(row).eq('id', h.id));
-    else ok(await supabase().from('holdings').insert({ ...row, user_id: this.userId }));
+  async saveHoldingChange(before: Holding | undefined, after: Holding | null, txn: Txn | null) {
+    const sb = supabase();
+    if (!after) ok(await sb.from('holdings').delete().eq('id', before!.id!));
+    else if (before?.id) ok(await sb.from('holdings').update(holdingRow(after)).eq('id', before.id));
+    else ok(await sb.from('holdings').insert({ ...holdingRow(after), user_id: this.userId }));
+    if (txn) ok(await sb.from('transactions').insert({ ...txn, user_id: this.userId }));
   }
-  async deleteHolding(id: string) { ok(await supabase().from('holdings').delete().eq('id', id)); }
   async addWatch(symbol: string, note?: string) { ok(await supabase().from('watchlist').insert({ symbol, note: note || null, user_id: this.userId })); }
   async deleteWatch(id: string) { ok(await supabase().from('watchlist').delete().eq('id', id)); }
   async saveSettings(s: Partial<Settings>) { ok(await supabase().from('settings').update(s).eq('user_id', this.userId)); }
-  async savePlan(amount: number, payload: unknown) {
-    ok(await supabase().from('recommendations').insert({ amount_pkr: amount, payload, user_id: this.userId }));
-  }
   async createTelegramCode() {
     const sb = supabase();
     ok(await sb.from('telegram_link_codes').delete().eq('user_id', this.userId));
@@ -154,45 +164,49 @@ export class LiveSource implements DataSource {
     }
   }
   async deletePushSubscription(endpoint: string) { ok(await supabase().from('push_subscriptions').delete().eq('endpoint', endpoint)); }
+  async readScreenshots(files: File[]) {
+    const { data } = await supabase().auth.getSession();
+    if (!data.session) throw new Error('Please sign in again.');
+    return readScreenshots(files, data.session.access_token);
+  }
 }
 
-/** In-memory demo with the owner's seed portfolio and the PSX close of 2026-10-05. */
+/** In-memory demo: the owner's seed portfolio and the PSX close of 2026-10-05. Nothing is saved. */
 export class DemoSource implements DataSource {
   kind = 'demo' as const;
   private holdings: Holding[] = SEED_HOLDINGS.map((h, i) => ({ ...h, id: `demo-h${i}` }));
   private watch: WatchItem[] = SEED_WATCHLIST.map((w, i) => ({ ...w, id: `demo-w${i}` }));
   private settings: Settings = { ...DEFAULT_SETTINGS };
-  private plan: SavedPlan | null = null;
+  // Recorded buys, moved into the current month so "invested this month" shows something.
+  private txns: Txn[] = SEED_TXNS.map((t) => ({ ...t, executed_on: pktDate(new Date()) }));
   private alerts: AlertLogRow[] = [
-    { kind: 'below_cost', symbol: 'SYS', message: 'SYS at Rs 114.37 is 12.3% below your average cost of Rs 130.45. Core holding: eligible for averaging down.', channel: 'push', sent_at: '2026-10-05T07:30:00Z', dedupe_key: 'd1' },
-    { kind: 'below_cost', symbol: 'LUCK', message: 'LUCK at Rs 407.54 is 11.1% below your average cost of Rs 458.39.', channel: 'push', sent_at: '2026-10-05T07:30:00Z', dedupe_key: 'd2' },
-    { kind: 'daily_summary', symbol: null, message: 'KSE-100 closed at 165,867. Your portfolio Rs 56,279, today -Rs 593, total P/L -Rs 4,836 (-7.9%).', channel: 'push', sent_at: '2026-10-05T12:00:00Z', dedupe_key: 'd3' },
+    { kind: 'buy_chance', symbol: 'SYS', message: 'SYS Rs 114.37: 12.3% below your last buy.', channel: 'push', sent_at: '2026-10-05T07:30:00Z', dedupe_key: 'd1' },
+    { kind: 'night_digest', symbol: null, message: 'KSE-100 closed at 165,867. Your portfolio Rs 56,279, today -Rs 593, total -Rs 4,836.', channel: 'push', sent_at: '2026-10-05T16:00:00Z', dedupe_key: 'd3' },
   ];
 
   async load(): Promise<AppData> {
-    // Only the one real captured close: the trend line appears once real snapshots accumulate.
-    const history = [SEED_INDEX];
     return {
       settings: { ...this.settings }, holdings: this.holdings.map((h) => ({ ...h })), watchlist: [...this.watch],
-      prices: SEED_PRICES, index: SEED_INDEX, indexHistory: history, announcements: SEED_ANNOUNCEMENTS,
-      alerts: [...this.alerts], latestPlan: this.plan, telegramLinked: false, email: 'demo',
+      prices: SEED_PRICES, index: SEED_INDEX, indexHistory: [SEED_INDEX], announcements: SEED_ANNOUNCEMENTS,
+      alerts: [...this.alerts], telegramLinked: false, email: 'demo',
+      lastRun: { job: 'market', started_at: SEED_CAPTURED_AT, finished_at: SEED_CAPTURED_AT, ok: true },
       aiInsight: null, // never show made-up AI text; real suggestions appear after the first signed-in run
-      screen: SEED_SCREEN,
-      lastRun: { job: 'eod', started_at: SEED_CAPTURED_AT, finished_at: SEED_CAPTURED_AT, ok: true },
+      screen: SEED_SCREEN, transactions: [...this.txns], dividends: [], picks: { undervalued: null, dividend: null },
     };
   }
-  async saveHolding(h: Holding) {
-    if (h.id) this.holdings = this.holdings.map((x) => (x.id === h.id ? { ...h } : x));
-    else this.holdings.push({ ...h, id: `demo-h${Date.now()}` });
+  async saveHoldingChange(before: Holding | undefined, after: Holding | null, txn: Txn | null) {
+    if (!after) this.holdings = this.holdings.filter((h) => h.id !== before?.id);
+    else if (before?.id) this.holdings = this.holdings.map((h) => (h.id === before.id ? { ...after, id: before.id } : h));
+    else this.holdings.push({ ...after, id: `demo-h${Date.now()}` });
+    if (txn) this.txns.push(txn);
   }
-  async deleteHolding(id: string) { this.holdings = this.holdings.filter((h) => h.id !== id); }
   async addWatch(symbol: string, note?: string) { this.watch.push({ id: `demo-w${Date.now()}`, symbol, note }); }
   async deleteWatch(id: string) { this.watch = this.watch.filter((w) => w.id !== id); }
   async saveSettings(s: Partial<Settings>) { this.settings = { ...this.settings, ...s }; }
-  async savePlan(amount: number, payload: unknown) {
-    this.plan = { id: 'demo-plan', created_at: new Date().toISOString(), amount_pkr: amount, payload };
-  }
   async createTelegramCode() { return 'DEMO1234'; }
-  async savePushSubscription() { throw new Error('Notifications are not available in demo mode. Sign in to enable them.'); }
+  async savePushSubscription() { throw new Error('Notifications need an account. Sign in to turn them on.'); }
   async deletePushSubscription() {}
+  async readScreenshots(): Promise<{ holdings: ImportedRow[]; dropped: string[] }> {
+    throw new Error('Screenshot import needs an account. Sign in to use it.');
+  }
 }

@@ -1,172 +1,122 @@
 # PSX Personal Investing Assistant
 
-A free, installable phone app (PWA) for iPhone and Android. A scheduled worker checks the
-Pakistan Stock Exchange on weekdays, sends alerts to your locked phone, and turns each month's
-cash into a concrete plan: stock, rupees, whole shares and a reason. **It never trades and never
-asks for broker logins. You place orders yourself in your broker app. Not licensed financial advice.**
+A free, installable phone app (PWA) for iPhone and Android. A scheduled worker checks the Pakistan
+Stock Exchange every 30 minutes while it trades, sends actionable alerts to your locked phone, and a
+digest at 9 PM. Two free AIs (Groq + Google Gemini) read company filings, suggest what to do with each
+holding, and find undervalued and dividend stocks. **It never trades and never asks for broker logins.
+You place orders yourself. Not licensed financial advice.**
 
-Running cost: Rs 0 (free tiers of Supabase, GitHub Actions, Cloudflare Pages or Vercel Hobby, Telegram).
+Running cost: Rs 0 (free tiers of Supabase, GitHub Actions, Cloudflare Workers, Groq, Gemini, Telegram).
 
 ## How it works
 
 ```
- PSX data portal ──(weekday cron)──▶ worker (GitHub Actions) ──▶ Supabase (prices, alerts, plans)
- (public HTML pages)                    │                                 ▲
-                                        ├──▶ Web Push ──▶ phone           │ reads (row-level security)
-                                        └──▶ Telegram bot ──▶ phone       │
-                                                                  PWA (React) on Cloudflare/Vercel
+ PSX data portal ──(cron)──▶ worker (GitHub Actions) ──▶ Supabase (prices, filings, dividends, AI, alerts)
+ (public HTML pages)              │   ▲                              ▲
+                                  │   └─ Groq / Gemini (AI)          │ reads (row-level security)
+                                  ├──▶ Web Push ──▶ phone            │
+                                  └──▶ Telegram ──▶ phone      PWA (React) on Cloudflare Workers
+                                                               + /api/import (screenshot reader)
 ```
 
 | Folder | What |
 | --- | --- |
-| `shared/` | Rules engine: allocation, alert rules, notification limits, `rules.json`. Pure functions with unit tests. Used by both app and worker. |
-| `worker/` | PSX feed (HTML parsing), jobs, Supabase store, Web Push + Telegram delivery. |
-| `src/` | The app: Today, Portfolio, Plan, News, Settings. Hash routes like `/#/plan`. |
-| `public/` | Manifest, service worker (`sw.js`, offline shell + push), icons. |
-| `supabase/` | SQL migrations and the privacy (RLS) test. |
-| `.github/workflows/` | `worker.yml` (schedule), `telegram.yml` (link polling), `ci.yml` (tests + build). |
+| `shared/` | Pure logic used by app and worker: portfolio + per-holding calls (`portfolio.ts`), transactions + screenshot diff (`changes.ts`), Discover screens and dividends (`discover.ts`), alerts and delivery (`signals.ts`), wealth projection (`growth.ts`), AI router (`llm.ts`), `rules.json`. Tested. |
+| `worker/` | PSX feed (HTML parsing), jobs, AI tasks with guardrails (`ai.ts`), Supabase store, Web Push + Telegram. |
+| `edge/` | Cloudflare Worker: serves the app, plus `POST /api/import` (reads broker screenshots with AI; never stores them). |
+| `src/` | The app: Home, Portfolio, Discover, News, Profile. Hash routes like `/#/discover`. |
+| `supabase/` | SQL migrations (applied automatically) and the privacy (RLS) test. |
+| `.github/workflows/` | `worker.yml` (schedule), `telegram.yml` (link polling), `migrate.yml` (DB migrations), `ci.yml` (tests + build). |
 
-### Schedule (PKT = UTC+5)
+## The app
 
-| Job | PKT | UTC cron | Does |
-| --- | --- | --- | --- |
-| morning | 09:00 Mon–Fri | `0 4 * * 1-5` | Refresh data and announcements, morning brief |
-| midday | 12:30 Mon–Fri | `30 7 * * 1-5` | Refresh prices, market + holding alerts |
-| preclose | 15:00 Mon–Fri | `0 10 * * 1-5` | Same, last dip warning of the day |
-| eod | 17:00 Mon–Fri | `0 12 * * 1-5` | Closing snapshot, daily summary |
-| weekly | Sun 18:00 | `0 13 * * 0` | Weekly plan, review of past suggestions, keep-alive |
-| telegram | every 20 min, 08:00–23:59 | `*/20 3-18 * * *` | Link Telegram chats |
+- **Home:** Buy / Hold / Wait for today (the AI's stance when fresh, never "Buy" on a rally day), portfolio
+  value, invested this month vs your monthly SIP, story-style circles per holding (ring = today's move),
+  allocation donut (biggest slice red), rebalance tips, AI Assistant suggestions, KSE-100, wealth growth.
+- **Portfolio:** each holding shows a call: *Hold*, *Buy more* (average down) or *Opportunity*, from how far
+  the price is below **your last buy**, or *Trim* / *Review*. The AI can refine calls but never against your
+  own rules (hold-no-add, review, cap, Shariah). Swipe left: edit / remove (with Undo). Swipe right: record a
+  buy. Long-press: menu. Tap: details. Camera button: **update from JS InvestPro screenshots** (AI reads
+  symbol, quantity, average cost; you review every change; screenshots are never stored).
+- **Discover:** *Undervalued* (P/E well below sector, still paying dividends), *Dividends* (yield, yearly
+  dividend per share, last declared amount, how often they pay), *Upcoming* (declared dividends with the last
+  day to buy = book closure minus 3 working days, an estimate; confirm with your broker).
+- **News:** company filings grouped by day, AI summaries with figures checked against the PDF, and your alert history.
+- **Profile:** System / Light / Dark, monthly investment, crash fund, your rules, notifications, Telegram, AI on/off.
 
-End of day runs at 17:00, not 16:30: on Fridays PSX trades until 16:30 with a post-close session to 16:50
-([PSX trading hours](https://www.psx.com.pk/psx/exchange/general/trading-hours), checked 2026-10-06).
-Session hours live in `shared/rules.json` (`market_hours_pkt`); Ramadan hours differ, so update them then.
+Gestures always have a button alternative (detail sheet buttons, `…` menu). Respects reduced motion.
 
-### Notification rules
+## Schedule (PKT = UTC+5)
 
-At most 3 notifications per user per day. Alerts found in the same run are bundled into one.
-Quiet hours 23:00–07:00 PKT. Crash alerts (KSE-100 down 4%+ in a day, or below your crash level)
-always go through. Everything, including alerts held back by these limits, appears under News → Alert history.
-Every alert has a `dedupe_key`, so nothing repeats; "below cost" repeats at most every 7 days.
+| Job | PKT | Sends |
+| --- | --- | --- |
+| market | every 30 min, 09:45–15:45 Mon–Thu; Fri to 16:45 | Actionable only: crash (always), dip, buying chances below your last buy, strong AI buy/trim calls, big moves. Last run before close is titled "Before close". Max 3 a day, bundled. |
+| night | 21:00 Mon–Fri | One digest: close, your portfolio, company news, upcoming dividends, rebalance notes. Outside the 3-a-day limit. |
+| telegram | every 20 min | Links Telegram chats. |
 
-## AI Assistant (Google Gemini, free tier)
+Crons and the job map live in `.github/workflows/worker.yml` and `worker/run.ts` (`CRON_TO_JOB`). PSX hours are
+in `shared/rules.json` ([source](https://www.psx.com.pk/psx/exchange/general/trading-hours); Ramadan hours differ).
+Nothing repeats: every alert has a dedupe key; buying chances repeat at most weekly per stock; quiet-hours alerts wait.
 
-With `GEMINI_API_KEY` set, every scheduled run also:
-- **Reads new PSX announcements** (dividends, results, board meetings) for everyone's stocks: downloads the
-  PDF, asks Gemini for a 2-sentence summary and key figures, and checks every number against the PDF text.
-  Scanned PDFs can't be checked and are labelled as such. Shown on News and used in announcement alerts.
-- **Writes "AI Assistant suggests"** for each user who has AI on (Settings): a headline, up to 4 suggestions
-  (buy/add/hold/trim/sell/watch/review) and a note on this month's plan. Shown on Today and Plan; strong
-  (high-confidence) buy/add/trim/sell calls are also notified, at most once a week per stock, within the 3/day limit.
+## AI (Groq + Gemini, free tiers)
 
-Guardrails (`worker/ai.ts`, tested in `worker/ai.test.ts`): the AI only sees facts we compute; any suggestion
-naming a stock outside your portfolio/watchlist/KSE-100 screen, citing a number not in the facts, adding to a
-`hold_no_add`/`review` or over-cap stock, buying non-Shariah when Shariah-only is on, or buying on a "Wait"
-(rally) day is dropped. The rules engine still decides the banner and every plan amount. Models are tried in
-order (`gemini-3.8-flash`, `gemini-3.5-flash-lite`, `gemini-2.5-flash`; override with `GEMINI_MODELS`), an
-overloaded model is skipped for the rest of the run, and if Gemini is down the run carries on without AI.
-Privacy: Gemini's free tier may use inputs to improve Google products. Announcement reading sends only public
-PSX documents; portfolio suggestions send symbols, share counts, costs and rules (no names or emails), so they
-are opt-in per user (on for accounts that existed when migration 0003 ran).
+`shared/llm.ts` routes each task: text (suggestions, Discover) → Groq first (`openai/gpt-oss-120b`,
+`llama-3.3-70b-versatile`), Gemini as backup; PDFs → Gemini first (reads scans too), Groq gets the extracted text;
+screenshots → Gemini. Overloaded models are skipped for the rest of a run; if both fail, everything else still runs.
 
-Check it any time: Actions → PSX worker → Run workflow → `aicheck` (reads a real PDF and prints a suggestion; writes nothing).
+Guardrails (`worker/ai.ts`, tests in `worker/ai.test.ts`): the AI only sees facts we compute; anything quoting a number
+not in those facts, naming a stock outside your portfolio / watchlist / screen, or breaking your rules is dropped.
+Filing figures are marked ✓ only when found in the PDF text. Privacy: free tiers may use inputs to improve the
+providers' products; portfolio suggestions send symbols, share counts and costs (never names or emails) and are opt-in.
+
+Live check: Actions → PSX worker → Run workflow → `aicheck` (prints every AI task; writes nothing).
 
 ## Data source (read this if prices stop updating)
 
-There is no official free PSX API. The worker reads the portal's ordinary public pages with an
-honest User-Agent (`psx-personal-assistant/1.0`), about 15 requests per run:
+No official free PSX API. The worker reads ordinary public pages with an honest User-Agent: the homepage
+(indices), `/screener` (all stocks, P/E, yield, 1-year change, KMI All Share = Shariah) and `/company/<SYMBOL>`
+(quote, 52-week range, filings). PSX's JSON endpoints and payouts data block scripts unless they imitate a
+browser and replay an anti-bot token; **we deliberately don't**. Dividend amounts and book closures therefore come
+from the AI reading the filings themselves. If PSX changes its layout: the app keeps the last good prices (marked
+stale), you get one "data unavailable" notice a day, and `worker_runs` shows the errors. Fix the selectors in
+`worker/feed.ts`, refresh `worker/fixtures/`, run `npm test`. If the pages get blocked too, stop; don't add browser impersonation.
 
-- `https://dps.psx.com.pk/`: KSE-100 and other indices
-- `https://dps.psx.com.pk/screener`: all stocks: price, P/E, dividend yield, index membership (KMI All Share = Shariah)
-- `https://dps.psx.com.pk/company/<SYMBOL>`: live quote, 52-week range, "as of" time, announcements with PDF links
+## Setup and secrets
 
-The portal's JSON endpoints (`/timeseries`, `/market-watch`, `/symbols`) block scripts since 2026-09-24
-unless they imitate a browser and replay an anti-bot token. **We deliberately don't**, and that is also
-why the `psxdata` library is not used.
+GitHub → Settings → Secrets and variables → Actions:
 
-If PSX changes its layout:
-1. The app keeps showing the last good prices with their "as of" time, marked stale during market hours.
-2. Users get one "PSX data unavailable" notice per day (not per run).
-3. `worker_runs` rows in Supabase show `ok = false` with the errors.
-4. Fix: run `npx tsx scripts/capture-fixture.ts` to see what parses, update the selectors in
-   `worker/feed.ts`, refresh the saved pages (`worker/fixtures/`) and run `npm test`.
-5. If the HTML pages also get blocked, stop. Do not add browser impersonation; look for an
-   official or licensed source instead.
-
-## Setup (one time)
-
-### 1. Supabase (database + login)
-1. Create a free project at supabase.com.
-2. SQL Editor → run `supabase/migrations/0001_schema.sql`, then `0002_worker_columns.sql`. Later migrations
-   apply themselves: add the `SUPABASE_DB_URL` secret (Connect → Session pooler URI with your DB password)
-   and `.github/workflows/migrate.yml` runs any new file in `supabase/migrations/` when it reaches `main`.
-3. SQL Editor → run `supabase/tests/rls_test.sql`. Expect "RLS test passed".
-4. Authentication → URL Configuration → **Site URL** = your app URL (e.g. `https://psx-assistant.pages.dev`)
-   and add it under Redirect URLs. Confirmation and password-reset emails link there.
-5. Create your account in the app (or Authentication → Users → Add user), then in SQL Editor:
-   `select public.seed_owner_portfolio('you@example.com');`
-
-### 2. Keys
-- Web Push: `npm run vapid` (once). Writes the public key to `.env` and the private key to
-  `.secrets/github-secrets.txt`. Never regenerate it: that breaks every phone's subscription.
-- Telegram (optional backup): message [@BotFather](https://t.me/BotFather), `/newbot`, keep the token.
-- Gemini (optional): free key from aistudio.google.com. Only rewords the weekly summary; numbers
-  never change (the reworded text is rejected if any number differs).
-
-### 3. GitHub (the worker)
-Public repository (free scheduled runs). Settings → Secrets and variables → Actions:
-
-| Secret | Value |
+| Secret | Purpose |
 | --- | --- |
-| `SUPABASE_URL` | `https://<project>.supabase.co` |
-| `SUPABASE_SERVICE_ROLE_KEY` | Supabase → Project Settings → API keys → service_role / secret key. **Only here, never in the app or repo.** |
-| `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | from `.secrets/github-secrets.txt` |
-| `TELEGRAM_BOT_TOKEN` | from BotFather (optional) |
-| `GEMINI_API_KEY` | optional |
+| `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | worker database access (service key only here, never in the app) |
+| `SUPABASE_DB_URL` | Session pooler URI; lets `migrate.yml` apply new migrations automatically |
+| `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | Web Push (generated once by `npm run vapid`; never regenerate) |
+| `GROQ_API_KEY`, `GEMINI_API_KEY` | AI (either works alone; both is best) |
+| `TELEGRAM_BOT_TOKEN` | optional Telegram backup |
 
-| Variable | Value |
-| --- | --- |
-| `APP_URL` | your app URL, used in Telegram links and as the VAPID contact |
-| `TELEGRAM_BOT` | bot username without `@` (turns on the Telegram link workflow) |
+Variables: `APP_URL`, `TELEGRAM_BOT` (bot username; turns on the Telegram workflow).
 
-### 4. The app
-`.env` (not committed) holds the public values bundled into the app:
-`VITE_SUPABASE_URL`, `VITE_SUPABASE_KEY` (publishable/anon key), `VITE_VAPID_PUBLIC_KEY`, `VITE_TELEGRAM_BOT`.
+Cloudflare Worker secrets (screenshot import), set once: `npx wrangler secret put GEMINI_API_KEY` (and `GROQ_API_KEY`).
+Public app config lives in `.env` (not committed): `VITE_SUPABASE_URL`, `VITE_SUPABASE_KEY`, `VITE_VAPID_PUBLIC_KEY`, `VITE_TELEGRAM_BOT`.
+
+Supabase → Authentication → URL Configuration → Site URL = the app URL (for sign-up and reset emails).
+
+## Commands
 
 ```
-npm install
-npm run deploy       # builds dist/ and uploads it with wrangler (first time: npx wrangler login)
+npm test                       # rules, AI guardrails, jobs, parsers, import endpoint
+npm run dev                    # app at http://localhost:5173/?demo=1 (demo data, no account)
+npm run worker -- market --dry-run --now 2026-10-13T07:30:00Z   # live PSX data, prints instead of sending
+npm run deploy                 # build + deploy app and /api to Cloudflare
 ```
-
-Hosting is Cloudflare Workers static assets (Cloudflare folded Pages into Workers), configured in
-`wrangler.jsonc`: no server code, just the built files. Static asset requests are free and unlimited
-on the Workers Free plan. Live at https://psx-assistant.psx-assistant.workers.dev.
-`public/_headers` keeps `sw.js` and `index.html` uncached so phones pick up new versions.
 
 ## Install on your phone
-- **iPhone (iOS 16.4+):** open the site in **Safari** → Share → **Add to Home Screen** → open the
-  installed app → Settings → **Enable notifications**. iOS only shows the permission prompt after a tap,
-  and only inside the installed app. Link Telegram too, as a backup.
-- **Android:** open in Chrome → **Install** (or menu → Add to Home screen) → Settings → Enable notifications.
+- **iPhone (iOS 16.4+):** Safari → Share → Add to Home Screen → open the installed app → Profile → Push on.
+- **Android:** Chrome → Install → Profile → Push on.
+- Dynamic Island / Live Activities need a native App Store app (paid Apple developer account), so this web app
+  can't use them; notifications still show on the lock screen and in Notification Center.
 
-## Running things by hand
-- GitHub → Actions → **PSX worker** → Run workflow → pick a job. `test` + your email sends a test
-  crash alert to your phone (enable notifications first).
-- Locally, without the database: `npm run worker -- midday --dry-run` fetches live PSX data, runs the
-  rules on the seed portfolio and prints what would be sent. Add `--now 2026-10-05T07:30:00Z` to replay a time.
-- Tests: `npm test` (rules incl. the section 9 acceptance test, parsers on saved PSX pages, jobs, Telegram linking).
-- App with demo data: `npm run dev`, then open `http://localhost:5173/?demo=1`.
-
-## Free-tier notes (checked 2026-10-06; terms change, so re-check)
-- **Supabase Free:** $0, 500 MB database, paused after 1 week of inactivity. The worker writes a
-  `worker_runs` heartbeat every weekday run, which keeps it awake.
-- **GitHub Actions:** free for public repos. Scheduled runs can start late; schedules are disabled after
-  60 days without repo activity. The Sunday run commits `.github/keepalive` after 40 quiet days.
-  If a schedule is ever disabled, Actions → the workflow → **Enable workflow**.
-- **Supabase built-in email** is rate limited (a few per hour). Fine for you and a few friends.
-- If any service starts asking for payment, stop and decide before continuing.
-
-## Security
-- Row-level security on every table: each user sees only their own portfolio, settings, alerts and plans.
-  Market tables are read-only for signed-in users; anonymous visitors see nothing.
-- Users can't set their own Telegram chat ID (only the worker can, after a valid one-time code).
-- The service-role key exists only in GitHub Actions secrets. The app uses the publishable key.
+## Free-tier notes (re-check; terms change)
+- Supabase Free: 500 MB, pauses after 7 idle days; the worker's heartbeat keeps it awake.
+- GitHub Actions: free for public repos; schedules pause after 60 days without commits (night run commits a keep-alive).
+- Cloudflare Workers Free: static files free and unlimited; `/api/import` uses a tiny share of 100k requests/day.
+- Groq / Gemini free tiers: daily limits shown in their consoles; the worker uses a handful of calls per run.

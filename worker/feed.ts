@@ -12,6 +12,7 @@
  */
 import * as cheerio from 'cheerio';
 import type { Announcement, AnnouncementKind, Price } from '../shared/types.ts';
+import type { ScreenRow } from '../shared/discover.ts';
 
 export const BASE_URL = 'https://dps.psx.com.pk';
 export const USER_AGENT = 'psx-personal-assistant/1.0 (personal, non-commercial)';
@@ -22,7 +23,7 @@ const POLITE_DELAY_MS = 600;
 export interface IndexQuote { name: string; value: number | null; change: number | null; change_pct: number | null }
 export interface ScreenerRow {
   symbol: string; sector_code: string; sector: string | null; listed_in: string[]; price: number | null;
-  change_pct: number | null; pe: number | null; dividend_yield_pct: number | null; market_cap: number | null;
+  change_pct: number | null; change_1y_pct: number | null; pe: number | null; dividend_yield_pct: number | null; market_cap: number | null;
 }
 export interface Quote {
   symbol: string; name: string | null; sector: string | null; price: number | null; change: number | null;
@@ -123,10 +124,12 @@ export function parseScreener(html: string): Record<string, ScreenerRow> {
     if (!heads.includes('SYMBOL') || !heads.includes('PRICE') || Object.keys(out).length) return;
     const col = (name: string) => heads.indexOf(name);
     $(table).find('tr').each((_, tr) => {
-      const cells = $(tr).find('td').map((_, td) => txt($(td).text()) ?? '').get();
+      const tds = $(tr).find('td');
+      const cells = tds.map((_, td) => txt($(td).text()) ?? '').get();
       if (!cells.length) return;
       const at = (name: string) => (col(name) >= 0 ? cells[col(name)] ?? null : null);
-      const symbol = (at('SYMBOL') ?? '').toUpperCase();
+      // data-order holds the bare symbol; the visible text can carry a badge such as "XD" (ex-dividend).
+      const symbol = ($(tds[col('SYMBOL')]).attr('data-order') ?? at('SYMBOL') ?? '').toUpperCase().trim();
       if (!symbol) return;
       const code = at('SECTOR') ?? '';
       out[symbol] = {
@@ -136,6 +139,7 @@ export function parseScreener(html: string): Record<string, ScreenerRow> {
         listed_in: (at('LISTED IN') ?? '').split(',').map((s) => s.trim()).filter(Boolean),
         price: parseNum(at('PRICE')),
         change_pct: parseNum(at('CHANGE (%)')),
+        change_1y_pct: parseNum(at('1-YEAR CH. (%) *') ?? at('1-YEAR CH. (%)')),
         pe: parseNum(at('PE RATIO (TTM)')),
         dividend_yield_pct: parseNum(at('DIVIDEND YIELD (%)')),
         market_cap: parseNum(at('MARKET CAP.')),
@@ -343,4 +347,12 @@ export function toPrice(q: Quote, s: ScreenerRow | undefined): Price {
 
 export function isUsable(s: Snapshot): boolean {
   return !!s.indices.KSE100?.value && Object.values(s.quotes).some((q) => q.price != null);
+}
+
+/** KSE-100 members from the screener, in the shape Discover and the AI use. */
+export function toScreenRows(screener: Record<string, ScreenerRow>): ScreenRow[] {
+  return Object.values(screener).filter((s) => s.listed_in.includes('KSE100')).map((s) => ({
+    symbol: s.symbol, sector: s.sector, price: s.price, change_pct: s.change_pct, change_1y_pct: s.change_1y_pct,
+    pe: s.pe, dividend_yield_pct: s.dividend_yield_pct, market_cap: s.market_cap, is_shariah: s.listed_in.includes('KMIALLSHR'),
+  }));
 }

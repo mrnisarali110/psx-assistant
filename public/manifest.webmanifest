@@ -1,9 +1,9 @@
 {
   "name": "PSX Assistant",
   "short_name": "PSX Assist",
-  "description": "Buy, hold or wait: PSX alerts and a monthly plan. Advice only.",
+  "description": "Buy, hold or wait: PSX alerts, AI suggestions and dividends. Advice only.",
   "id": "/",
-  "start_url": "/#/today",
+  "start_url": "/#/home",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",

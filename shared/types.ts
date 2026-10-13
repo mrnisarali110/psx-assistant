@@ -14,6 +14,8 @@ export interface Holding {
   sector: string | null;
   is_shariah: boolean;
   note?: string | null;
+  last_buy_price?: number | null; // price of the most recent buy; "x% below your last buy" uses it
+  last_buy_on?: string | null;
 }
 
 export interface WatchItem {
@@ -47,18 +49,12 @@ export interface IndexSnapshot {
   change_pct: number | null;
 }
 
-export interface TrancheSplitItem {
-  pct: number;
-  after_days: number;
-}
-
 export interface Settings {
   monthly_budget_pkr: number;
   crash_fund_pkr: number;
   crash_trigger_kse: number;
   max_position_pct: number;
   drop_alert_pct: number;
-  tranche_split: TrancheSplitItem[];
   quiet_hours: { start: string; end: string };
   shariah_only: boolean;
   notifications_enabled: boolean;
@@ -71,11 +67,6 @@ export const DEFAULT_SETTINGS: Settings = {
   crash_trigger_kse: 155000,
   max_position_pct: 25,
   drop_alert_pct: 10,
-  tranche_split: [
-    { pct: 40, after_days: 0 },
-    { pct: 40, after_days: 14 },
-    { pct: 20, after_days: 25 },
-  ],
   quiet_hours: { start: '23:00', end: '07:00' },
   shariah_only: false,
   notifications_enabled: true,
@@ -95,6 +86,43 @@ export interface Announcement {
   ai_verified?: boolean | null;
 }
 
+export interface AlertLogRow {
+  id?: number;
+  kind: string;
+  symbol: string | null;
+  message: string;
+  channel: string | null;
+  sent_at: string;
+  dedupe_key: string;
+}
+
+/** One buy or sell, recorded when holdings change (manual edit, screenshot import, "record buy"). */
+export interface Txn {
+  id?: string;
+  symbol: string;
+  side: 'buy' | 'sell';
+  shares: number;
+  price: number;
+  amount: number;
+  executed_on: string; // YYYY-MM-DD (PKT)
+  source: 'manual' | 'import';
+}
+
+/** A cash dividend declared in a PSX announcement, read by the AI and checked against the PDF. */
+export interface DividendEvent {
+  id: string; // announcement id
+  symbol: string;
+  announced_on: string;
+  dps: number | null; // rupees per share
+  dividend_type: 'interim' | 'final' | 'special' | null;
+  book_closure_from: string | null;
+  book_closure_to: string | null;
+  verified: boolean;
+  pdf_url: string | null;
+}
+
+export type HoldingCallKind = 'hold' | 'average_down' | 'opportunity' | 'trim' | 'review';
+
 export interface AiSuggestion {
   action: 'buy' | 'add' | 'hold' | 'trim' | 'sell' | 'watch' | 'review';
   symbol: string | null;
@@ -107,20 +135,21 @@ export interface AiInsight {
   created_at: string;
   job: string;
   headline: string;
+  stance: 'buy' | 'hold' | 'wait' | null;
   suggestions: AiSuggestion[];
-  plan_note: string | null;
+  holding_calls: { symbol: string; call: HoldingCallKind; text: string }[];
+  rebalance: string | null;
+  cash_note: string | null;
   risks: string | null;
   model: string | null;
 }
 
-export interface AlertLogRow {
-  id?: number;
-  kind: string;
-  symbol: string | null;
-  message: string;
-  channel: string | null;
-  sent_at: string;
-  dedupe_key: string;
+/** Market-wide AI picks for the Discover tab (written nightly by the worker). */
+export interface AiPicks {
+  kind: 'undervalued' | 'dividend';
+  created_at: string;
+  model: string | null;
+  items: { symbol: string; why: string; frequency?: string | null }[];
 }
 
 export type PriceMap = Record<string, Price>;

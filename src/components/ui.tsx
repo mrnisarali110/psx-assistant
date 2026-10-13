@@ -1,14 +1,18 @@
 import type { ReactNode } from 'react';
+import { haptic } from '../lib/gestures.ts';
 
-export function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
-  return <div className={`rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-800 ${className}`}>{children}</div>;
+export function Card({ children, className = '', onClick }: { children: ReactNode; className?: string; onClick?: () => void }) {
+  const base = `rounded-3xl bg-white p-4 ring-1 ring-slate-200/80 dark:bg-slate-900 dark:ring-slate-800 ${className}`;
+  return onClick
+    ? <button type="button" onClick={() => { haptic(); onClick(); }} className={`block w-full text-left transition-transform active:scale-[0.98] ${base}`}>{children}</button>
+    : <div className={base}>{children}</div>;
 }
 
 export function Section({ title, right, children }: { title: string; right?: ReactNode; children: ReactNode }) {
   return (
     <section className="space-y-2">
-      <div className="flex items-baseline justify-between px-1">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">{title}</h2>
+      <div className="flex items-center justify-between px-1">
+        <h2 className="text-[13px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">{title}</h2>
         {right}
       </div>
       {children}
@@ -16,84 +20,123 @@ export function Section({ title, right, children }: { title: string; right?: Rea
   );
 }
 
-const TONES = {
+export const TONES = {
   green: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300',
   red: 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300',
   amber: 'bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-300',
   slate: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300',
   teal: 'bg-teal-100 text-teal-800 dark:bg-teal-950 dark:text-teal-300',
+  violet: 'bg-violet-100 text-violet-800 dark:bg-violet-950 dark:text-violet-300',
 };
+export type Tone = keyof typeof TONES;
 
-export function Tag({ tone = 'slate', children }: { tone?: keyof typeof TONES; children: ReactNode }) {
-  return <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${TONES[tone]}`}>{children}</span>;
+export function Tag({ tone = 'slate', children }: { tone?: Tone; children: ReactNode }) {
+  return <span className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium ${TONES[tone]}`}>{children}</span>;
 }
 
 export const changeTone = (v: number | null | undefined) =>
   v == null || v === 0 ? 'text-slate-500 dark:text-slate-400' : v > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400';
 
-export function AsOf({ label, stale }: { label: string; stale?: boolean }) {
-  return (
-    <p className={`text-xs ${stale ? 'font-medium text-amber-600 dark:text-amber-400' : 'text-slate-500 dark:text-slate-400'}`}>
-      {stale ? 'Stale: ' : ''}as of {label}
-    </p>
-  );
-}
-
-export function Disclaimer() {
-  return (
-    <p className="px-1 text-xs text-slate-500 dark:text-slate-400">
-      Not licensed financial advice. Check live prices in your broker app before you place an order.
-    </p>
-  );
-}
-
-export function Button({ children, onClick, kind = 'primary', disabled, type = 'button', className = '' }: {
+export function Button({ children, onClick, kind = 'primary', disabled, type = 'button', className = '', label }: {
   children: ReactNode; onClick?: () => void; kind?: 'primary' | 'secondary' | 'danger' | 'ghost';
-  disabled?: boolean; type?: 'button' | 'submit'; className?: string;
+  disabled?: boolean; type?: 'button' | 'submit'; className?: string; label?: string;
 }) {
   const styles = {
-    primary: 'bg-teal-700 text-white hover:bg-teal-800 disabled:bg-slate-400',
+    primary: 'bg-teal-700 text-white hover:bg-teal-800 disabled:bg-slate-400 dark:disabled:bg-slate-700',
     secondary: 'bg-slate-100 text-slate-900 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700',
     danger: 'bg-rose-600 text-white hover:bg-rose-700',
     ghost: 'text-teal-700 hover:bg-teal-50 dark:text-teal-400 dark:hover:bg-slate-800',
   }[kind];
   return (
-    <button type={type} onClick={onClick} disabled={disabled}
-      className={`min-h-11 rounded-xl px-4 py-2 text-sm font-semibold transition-colors disabled:cursor-not-allowed ${styles} ${className}`}>
+    <button type={type} disabled={disabled} aria-label={label} onClick={() => { haptic(); onClick?.(); }}
+      className={`inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-2xl px-4 py-2 text-sm font-semibold transition active:scale-[0.97] disabled:cursor-not-allowed ${styles} ${className}`}>
       {children}
     </button>
   );
 }
 
-export function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+export function Field({ label, hint, error, children }: { label: string; hint?: string; error?: string | null; children: ReactNode }) {
   return (
     <label className="block space-y-1">
       <span className="text-sm font-medium">{label}</span>
       {children}
-      {hint && <span className="block text-xs text-slate-500 dark:text-slate-400">{hint}</span>}
+      {error ? <span role="alert" className="block text-xs text-rose-600 dark:text-rose-400">{error}</span>
+        : hint && <span className="block text-xs text-slate-500 dark:text-slate-400">{hint}</span>}
     </label>
   );
 }
 
 export const inputCls =
-  'w-full min-h-11 rounded-xl border border-slate-300 bg-white px-3 py-2 text-base outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-600/20 dark:border-slate-700 dark:bg-slate-950';
+  'w-full min-h-11 rounded-2xl border border-slate-300 bg-white px-3 py-2 text-base outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-600/20 dark:border-slate-700 dark:bg-slate-950';
 
-/** The one allowed chart: a tiny trend line. Needs at least two real points. */
+/** iOS-style segmented control. */
+export function Segmented<T extends string>({ options, value, onChange, label }: {
+  options: { value: T; label: string }[]; value: T; onChange: (v: T) => void; label: string;
+}) {
+  return (
+    <div role="tablist" aria-label={label} className="flex rounded-2xl bg-slate-200/70 p-1 dark:bg-slate-800">
+      {options.map((o) => (
+        <button key={o.value} type="button" role="tab" aria-selected={value === o.value} onClick={() => { haptic(); onChange(o.value); }}
+          className={`min-h-9 flex-1 rounded-xl px-2 text-sm font-semibold transition ${value === o.value ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-950 dark:text-white' : 'text-slate-500 dark:text-slate-400'}`}>
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
+  return (
+    <button type="button" role="switch" aria-checked={checked} aria-label={label} onClick={() => { haptic(); onChange(!checked); }}
+      className={`relative h-8 w-13 shrink-0 cursor-pointer rounded-full transition-colors ${checked ? 'bg-teal-600' : 'bg-slate-300 dark:bg-slate-700'}`}>
+      <span className={`absolute top-1 left-1 h-6 w-6 rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-5' : ''}`} />
+    </button>
+  );
+}
+
+export function Skeleton({ className = '' }: { className?: string }) {
+  return <div className={`skeleton ${className}`} aria-hidden="true" />;
+}
+
+export function Empty({ title, children }: { title: string; children?: ReactNode }) {
+  return (
+    <div className="rounded-3xl border border-dashed border-slate-300 p-6 text-center dark:border-slate-700">
+      <p className="font-semibold">{title}</p>
+      {children && <div className="mt-1 text-sm text-slate-500 dark:text-slate-400">{children}</div>}
+    </div>
+  );
+}
+
+export function Disclaimer() {
+  return <p className="px-1 text-xs text-slate-500 dark:text-slate-400">Suggestions only, not licensed financial advice. Check live prices in your broker app.</p>;
+}
+
+export function ErrorNote({ error }: { error: string | null }) {
+  if (!error) return null;
+  return <p role="alert" className="rounded-2xl bg-rose-50 p-3 text-sm text-rose-800 dark:bg-rose-950 dark:text-rose-300">{error}</p>;
+}
+
+/** The KSE-100 trend line. Needs at least two real points. */
 export function Sparkline({ values, className = '' }: { values: number[]; className?: string }) {
   if (values.length < 2) return null;
-  const w = 120, h = 32;
+  const w = 120, h = 36;
   const min = Math.min(...values), max = Math.max(...values);
   const span = max - min || 1;
   const pts = values.map((v, i) => `${(i / (values.length - 1)) * w},${h - 2 - ((v - min) / span) * (h - 4)}`).join(' ');
   const up = values[values.length - 1] >= values[0];
   return (
-    <svg viewBox={`0 0 ${w} ${h}`} className={`h-8 w-28 ${up ? 'text-emerald-500' : 'text-rose-500'} ${className}`} aria-hidden="true">
+    <svg viewBox={`0 0 ${w} ${h}`} className={`h-9 w-28 ${up ? 'text-emerald-500' : 'text-rose-500'} ${className}`} aria-hidden="true">
       <polyline points={pts} fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
     </svg>
   );
 }
 
-export function ErrorNote({ error }: { error: string | null }) {
-  if (!error) return null;
-  return <p role="alert" className="rounded-xl bg-rose-50 p-3 text-sm text-rose-800 dark:bg-rose-950 dark:text-rose-300">{error}</p>;
+/** Round letter avatar for a symbol, ring coloured by today's move (Instagram-story style). */
+export function SymbolAvatar({ symbol, change, size = 'h-11 w-11' }: { symbol: string; change?: number | null; size?: string }) {
+  const ring = change == null || change === 0 ? 'ring-slate-300 dark:ring-slate-700' : change > 0 ? 'ring-emerald-500' : 'ring-rose-500';
+  return (
+    <span className={`${size} inline-flex shrink-0 items-center justify-center rounded-full bg-slate-100 text-[11px] font-bold tracking-tight text-slate-700 ring-2 ring-offset-2 ring-offset-white dark:bg-slate-800 dark:text-slate-200 dark:ring-offset-slate-900 ${ring}`}>
+      {symbol.slice(0, 4)}
+    </span>
+  );
 }

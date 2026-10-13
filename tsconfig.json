@@ -17,5 +17,5 @@
     "skipLibCheck": true,
     "types": ["node", "vite/client"]
   },
-  "include": ["src", "shared", "worker", "scripts", "vite.config.ts"]
+  "include": ["src", "shared", "worker", "edge", "scripts", "vite.config.ts"]
 }

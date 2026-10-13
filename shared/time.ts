@@ -58,3 +58,12 @@ export function isStale(asOf: string | null | undefined, now: Date, staleMinutes
   if (!isMarketOpen(now, hours)) return false;
   return now.getTime() - Date.parse(asOf) > staleMinutes * 60000;
 }
+
+/** Minutes until today's regular close (PKT), or null on weekends/after close. */
+export function minutesToClose(now: Date, hours: { close_mon_thu: string; close_fri: string }): number | null {
+  const { weekday, minutes } = pktParts(now);
+  const close = weekday >= 1 && weekday <= 4 ? hours.close_mon_thu : weekday === 5 ? hours.close_fri : null;
+  if (!close) return null;
+  const left = hhmmToMinutes(close) - minutes;
+  return left >= 0 ? left : null;
+}

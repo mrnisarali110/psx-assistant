@@ -1,22 +1,22 @@
 name: PSX worker
 
-# Weekday market checks + Sunday plan. GitHub cron is UTC; Pakistan (PKT) is UTC+5.
-# GitHub may start scheduled runs a few minutes late, and pauses schedules in repos
-# with no activity for 60 days. The weekly run makes a keep-alive commit when needed.
+# Market checks every 30 minutes while PSX trades (actionable alerts only), plus a 21:00 night digest.
+# GitHub cron is UTC; Pakistan (PKT) is UTC+5. Keep in sync with CRON_TO_JOB in worker/run.ts.
+# GitHub may start scheduled runs a few minutes late, and pauses schedules in repos with no activity
+# for 60 days; the night run makes a keep-alive commit when needed.
 on:
   schedule:
-    - cron: '0 4 * * 1-5'    # 09:00 PKT morning brief
-    - cron: '30 7 * * 1-5'   # 12:30 PKT midday check
-    - cron: '0 10 * * 1-5'   # 15:00 PKT pre-close check
-    - cron: '0 12 * * 1-5'   # 17:00 PKT end of day (after Friday's 16:50 post-close)
-    - cron: '0 13 * * 0'     # Sunday 18:00 PKT weekly plan
+    - cron: '45 4-10 * * 1-5'   # 09:45 ... 15:45 PKT
+    - cron: '15 5-10 * * 1-5'   # 10:15 ... 15:15 PKT (before close Mon-Thu)
+    - cron: '15,45 11 * * 5'    # Friday 16:15 (before close) and 16:45 PKT
+    - cron: '0 16 * * 1-5'      # 21:00 PKT night digest
   workflow_dispatch:
     inputs:
       job:
         description: Job to run now
         type: choice
-        options: [midday, morning, preclose, eod, weekly, test, telegram, aicheck]
-        default: midday
+        options: [market, night, test, telegram, aicheck]
+        default: market
       email:
         description: 'job=test only: account email to send a test crash alert to'
         required: false
@@ -51,10 +51,11 @@ jobs:
           VAPID_SUBJECT: ${{ vars.APP_URL }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           APP_URL: ${{ vars.APP_URL }}
         run: npm run worker -- "$JOB"
       - name: Keep scheduled workflows alive
-        if: github.event.schedule == '0 13 * * 0'
+        if: github.event.schedule == '0 16 * * 1-5'
         run: |
           days=$(( ( $(date +%s) - $(git log -1 --format=%ct) ) / 86400 ))
           echo "last commit $days days ago"

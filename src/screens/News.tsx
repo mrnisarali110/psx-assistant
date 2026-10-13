@@ -1,85 +1,110 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { ScreenProps } from '../App.tsx';
-import { asOfLabel, dateLabel } from '../../shared/format.ts';
-import { Card, Tag } from '../components/ui.tsx';
+import { dedupeFilings, groupByDay, tidyTitle } from '../../shared/news.ts';
+import { pktDate } from '../../shared/time.ts';
+import { asOfLabel } from '../../shared/format.ts';
+import type { AlertLogRow, Announcement } from '../../shared/types.ts';
+import { AiBadge } from '../components/AiCard.tsx';
+import { Icon, type IconName } from '../components/Icon.tsx';
+import { Card, Empty, Segmented, SymbolAvatar, Tag, type Tone } from '../components/ui.tsx';
+import { useSwipeTabs } from '../lib/gestures.ts';
 
-const KIND_TONE = { dividend: 'green', results: 'teal', board_meeting: 'amber', other: 'slate' } as const;
-const KIND_LABEL = { dividend: 'Dividend', results: 'Results', board_meeting: 'Board meeting', other: 'Notice' };
+const KIND: Record<Announcement['kind'], { label: string; tone: Tone }> = {
+  dividend: { label: 'Dividend', tone: 'green' }, results: { label: 'Results', tone: 'teal' },
+  board_meeting: { label: 'Board meeting', tone: 'amber' }, other: { label: 'Notice', tone: 'slate' },
+};
+
+const ALERT_ICON = (kind: string): IconName =>
+  kind.startsWith('crash') ? 'alert' : kind === 'buy_chance' || kind === 'dip' ? 'down' : kind.startsWith('ai') ? 'sparkles'
+    : kind.startsWith('announcement') ? 'news' : kind.startsWith('dividend') ? 'coins' : kind === 'rebalance' || kind === 'over_cap' ? 'scale' : 'bell';
 
 export function News({ data }: ScreenProps) {
   const [tab, setTab] = useState<'news' | 'alerts'>('news');
-  const [onlyKey, setOnlyKey] = useState(true);
-  const mine = new Set([...data.holdings.map((h) => h.symbol), ...data.watchlist.map((w) => w.symbol)]);
-  const anns = data.announcements
-    .filter((a) => mine.has(a.symbol) && (!onlyKey || a.kind !== 'other'))
-    .sort((a, b) => b.published_at.localeCompare(a.published_at));
+  const [all, setAll] = useState(false);
+  const today = pktDate(new Date());
+  const swipe = useSwipeTabs(2, tab === 'news' ? 0 : 1, (i) => setTab(i === 0 ? 'news' : 'alerts'));
+  const news = useMemo(() => groupByDay(
+    dedupeFilings(data.announcements.filter((a) => all || a.kind !== 'other')).sort((a, b) => b.published_at.localeCompare(a.published_at)),
+    (a) => a.published_at, today), [data.announcements, all, today]);
+  const alerts = useMemo(() => groupByDay(data.alerts, (a) => pktDate(new Date(a.sent_at)), today), [data.alerts, today]);
 
   return (
     <>
-      <header className="flex items-center justify-between">
-        <h1 className="text-xl font-bold">News</h1>
-        <div className="flex rounded-xl bg-slate-100 p-1 text-sm dark:bg-slate-800" role="tablist">
-          {(['news', 'alerts'] as const).map((t) => (
-            <button key={t} role="tab" aria-selected={tab === t} onClick={() => setTab(t)}
-              className={`rounded-lg px-3 py-1.5 font-medium ${tab === t ? 'bg-white shadow-sm dark:bg-slate-950' : 'text-slate-500'}`}>
-              {t === 'news' ? 'Announcements' : 'Alert history'}
-            </button>
-          ))}
-        </div>
+      <header className="space-y-3 pt-1">
+        <h1 className="text-2xl font-bold tracking-tight">News</h1>
+        <Segmented label="News" value={tab} onChange={setTab} options={[{ value: 'news', label: 'Company news' }, { value: 'alerts', label: 'Your alerts' }]} />
       </header>
-
-      {tab === 'news' ? (
-        <>
-          <label className="flex items-center gap-2 px-1 text-sm">
-            <input type="checkbox" className="h-4 w-4 accent-teal-700" checked={onlyKey} onChange={(e) => setOnlyKey(e.target.checked)} />
-            Only dividends, results and board meetings
-          </label>
-          <div className="space-y-2">
-            {anns.map((a) => (
-              <Card key={a.id}>
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-bold">{a.symbol}</span>
-                  <span className="text-xs text-slate-500 dark:text-slate-400">{dateLabel(a.published_at)}</span>
-                </div>
-                <p className="mt-1 text-sm">{a.title}</p>
-                {a.ai_summary && (
-                  <div className="mt-2 space-y-1 rounded-xl bg-violet-50 p-3 text-sm dark:bg-violet-950/40">
-                    <p><span className="font-semibold">AI summary: </span>{a.ai_summary}</p>
-                    {!!a.ai_figures?.length && (
-                      <ul className="num text-xs">
-                        {a.ai_figures.map((f) => (
-                          <li key={f.label}>{f.verified ? '✓' : '?'} {f.label}: <span className="font-semibold">{f.value}</span></li>
-                        ))}
-                      </ul>
-                    )}
-                    <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                      {a.ai_verified ? 'Every number was found in the PDF text.' : 'Some figures could not be checked against the PDF text (e.g. a scanned document). Open the PDF to confirm.'}
-                    </p>
-                  </div>
-                )}
-                <div className="mt-2 flex items-center justify-between">
-                  <Tag tone={KIND_TONE[a.kind]}>{KIND_LABEL[a.kind]}</Tag>
-                  {a.pdf_url && <a href={a.pdf_url} target="_blank" rel="noopener noreferrer" className="text-sm font-semibold text-teal-700 dark:text-teal-400">PSX PDF ↗</a>}
-                </div>
-              </Card>
-            ))}
-            {!anns.length && <Card><p className="text-sm text-slate-500">No announcements yet for your stocks. They’re refreshed every weekday morning.</p></Card>}
-          </div>
-        </>
-      ) : (
-        <div className="space-y-2">
-          {data.alerts.map((a) => (
-            <Card key={a.dedupe_key}>
-              <p className="text-sm">{a.message}</p>
-              <div className="mt-1 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
-                <span>{asOfLabel(a.sent_at)}</span>
-                <span>{a.channel === 'none' ? 'Shown here only (daily limit or quiet hours)' : a.channel === 'both' ? 'Push + Telegram' : a.channel === 'telegram' ? 'Telegram' : 'Push'}</span>
-              </div>
+      <div {...swipe} className="touch-pan-y space-y-5">
+        {tab === 'news' ? (
+          <>
+            <div className="flex flex-wrap gap-2">
+              {[{ v: false, l: 'Dividends, results, meetings' }, { v: true, l: 'Everything' }].map((o) => (
+                <button key={o.l} type="button" onClick={() => setAll(o.v)} aria-pressed={all === o.v}
+                  className={`min-h-9 cursor-pointer rounded-full px-3 text-sm font-medium ${all === o.v ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900' : 'bg-slate-200/70 dark:bg-slate-800'}`}>{o.l}</button>
+              ))}
+            </div>
+            {news.length ? news.map((g) => (
+              <section key={g.label} className="space-y-2">
+                <h2 className="px-1 text-[13px] font-semibold text-slate-500 dark:text-slate-400">{g.label}</h2>
+                {g.items.map((a) => <NewsCard key={a.id} a={a} />)}
+              </section>
+            )) : <Empty title="No news for your stocks yet">Filings are checked every 30 minutes in market hours; the AI reads the important ones.</Empty>}
+          </>
+        ) : alerts.length ? alerts.map((g) => (
+          <section key={g.label} className="space-y-2">
+            <h2 className="px-1 text-[13px] font-semibold text-slate-500 dark:text-slate-400">{g.label}</h2>
+            <Card className="divide-y divide-slate-100 py-1 dark:divide-slate-800">
+              {g.items.map((a) => <AlertItem key={a.dedupe_key} a={a} />)}
             </Card>
-          ))}
-          {!data.alerts.length && <Card><p className="text-sm text-slate-500">No alerts yet.</p></Card>}
-        </div>
-      )}
+          </section>
+        )) : <Empty title="No alerts yet">Market alerts arrive during trading hours; the digest at 9 PM.</Empty>}
+      </div>
     </>
+  );
+}
+
+function NewsCard({ a }: { a: Announcement }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Card>
+      <div className="flex gap-3">
+        <SymbolAvatar symbol={a.symbol} size="h-10 w-10" />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="font-semibold">{a.symbol}</span>
+            <Tag tone={KIND[a.kind].tone}>{KIND[a.kind].label}</Tag>
+            {a.ai_summary && <AiBadge />}
+          </div>
+          <p className="mt-1 text-[15px] leading-snug">{a.ai_summary ?? tidyTitle(a.title, a.symbol)}</p>
+          {a.ai_summary && <p className="mt-1 line-clamp-1 text-xs text-slate-500 dark:text-slate-400">{tidyTitle(a.title, a.symbol)}</p>}
+          {!!a.ai_figures?.length && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {(open ? a.ai_figures : a.ai_figures.slice(0, 3)).map((f) => (
+                <Tag key={f.label} tone={f.verified ? 'teal' : 'slate'}>{f.verified && <Icon name="check" className="h-3 w-3" label="checked against the PDF" />}{f.label}: {f.value}</Tag>
+              ))}
+              {a.ai_figures.length > 3 && !open && <button type="button" className="cursor-pointer text-xs font-semibold text-teal-700 dark:text-teal-400" onClick={() => setOpen(true)}>+{a.ai_figures.length - 3}</button>}
+            </div>
+          )}
+          <div className="mt-2 flex items-center justify-between">
+            {a.ai_summary && a.ai_verified === false ? <span className="text-[11px] text-amber-700 dark:text-amber-400">Some figures not checked (scanned PDF)</span> : <span />}
+            {a.pdf_url && <a href={a.pdf_url} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-9 items-center gap-1 text-sm font-semibold text-teal-700 dark:text-teal-400">PDF <Icon name="external" className="h-4 w-4" /></a>}
+          </div>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function AlertItem({ a }: { a: AlertLogRow }) {
+  return (
+    <div className="flex gap-3 py-3">
+      <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300"><Icon name={ALERT_ICON(a.kind)} className="h-4 w-4" /></span>
+      <div className="min-w-0">
+        <p className="text-sm">{a.message}</p>
+        <p className="text-xs text-slate-500 dark:text-slate-400">
+          {asOfLabel(a.sent_at)} · {a.channel === 'none' ? 'in the app only (daily limit)' : a.channel === 'both' ? 'push + Telegram' : a.channel === 'telegram' ? 'Telegram' : 'push'}
+        </p>
+      </div>
+    </div>
   );
 }

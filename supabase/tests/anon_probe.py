@@ -9,9 +9,10 @@ import requests
 
 env = dict(line.split("=", 1) for line in (Path(__file__).parents[2] / ".env").read_text().splitlines()
            if "=" in line and not line.startswith("#"))
-URL, KEY = env["SUPABASE_URL"].strip(), env["SUPABASE_PUBLISHABLE_KEY"].strip()
+URL, KEY = env["VITE_SUPABASE_URL"].strip(), env["VITE_SUPABASE_KEY"].strip()
 TABLES = ["profiles", "settings", "holdings", "watchlist", "push_subscriptions", "telegram_link_codes",
-          "alerts_log", "recommendations", "prices", "index_snapshots", "announcements", "worker_runs"]
+          "alerts_log", "recommendations", "prices", "index_snapshots", "announcements", "worker_runs",
+          "ai_insights", "market_screen", "transactions", "dividends", "ai_picks"]
 
 leaks = 0
 for t in TABLES:

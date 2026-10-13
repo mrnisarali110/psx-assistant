@@ -1,34 +1,35 @@
 /**
- * Scheduled jobs. Each run: heartbeat row, refresh PSX data once, let the AI read new announcements,
- * evaluate rules (and the AI second opinion) for every user, deliver within limits, log every alert.
- * Every AI step is optional and isolated: if Gemini fails, prices, rules and alerts still run.
+ * Scheduled jobs.
+ *   market: every 30 minutes while PSX trades. Refresh prices; send actionable alerts only (crash, dip,
+ *           buy chances below your last buy, AI buy/trim calls, big moves). The last run before the
+ *           close is labelled "Before close". AI suggestions refresh every few hours.
+ *   night:  21:00 PKT. AI reads new filings (summaries + dividends), refreshes Discover picks, and sends
+ *           one night digest: close, your portfolio, news, upcoming dividends, rebalance notes.
+ *   test:   send a test crash alert to one account.
+ * Every AI step is optional and isolated: if both AI providers fail, prices, rules and alerts still run.
  */
 import { randomUUID } from 'node:crypto';
-import { allocate, planToText } from '../shared/allocate.ts';
-import { findOpportunities, type ScreenRow } from '../shared/opportunities.ts';
+import { dividendLeaders, undervalued, upcomingDividends, type ScreenRow } from '../shared/discover.ts';
+import { investedThisMonth } from '../shared/changes.ts';
+import { dedupeFilings, tidyTitle } from '../shared/news.ts';
+import type { LlmRouter } from '../shared/llm.ts';
 import { buildPortfolio, type PortfolioView } from '../shared/portfolio.ts';
-import { holdingAlerts, marketAlerts, planDelivery, todayBanner, type AlertCandidate } from '../shared/signals.ts';
-import { addDays, daysBetween, isoWeek, pktDate } from '../shared/time.ts';
-import { DEFAULT_RULES, type Announcement, type IndexSnapshot, type PriceMap } from '../shared/types.ts';
-import type { AnnouncementDigest, GuardContext, Insight, InsightFacts } from './ai.ts';
-import { FetchError, isUsable, toPrice, type Snapshot } from './feed.ts';
+import { holdingAlerts, marketAlerts, planDelivery, todayBanner, type AlertCandidate, type AlertLevel } from '../shared/signals.ts';
+import { addDays, daysBetween, isMarketOpen, isoWeek, minutesToClose, pktDate } from '../shared/time.ts';
+import { DEFAULT_RULES, type Announcement, type DividendEvent, type IndexSnapshot, type PriceMap } from '../shared/types.ts';
+import { discoverPicks, portfolioInsight, readAnnouncement, type GuardContext, type Insight, type InsightFacts } from './ai.ts';
+import { FetchError, isUsable, toPrice, toScreenRows, type Snapshot } from './feed.ts';
 import type { Notifier } from './notify.ts';
 import type { Store, UserCtx } from './store.ts';
 
-export type JobName = 'morning' | 'midday' | 'preclose' | 'eod' | 'weekly' | 'test';
-
-/** The AI as the jobs see it (real: Gemini via ./ai.ts; tests: a fake). */
-export interface AiService {
-  readAnnouncement(pdf: Uint8Array, meta: { symbol: string; title: string }): Promise<AnnouncementDigest & { model: string }>;
-  portfolioInsight(facts: InsightFacts, guard: GuardContext): Promise<{ insight: Insight; dropped: number; reasons: string[]; model: string }>;
-}
+export type JobName = 'market' | 'night' | 'test';
 
 export interface JobDeps {
   store: Store;
   notifier: Notifier;
-  fetchSnapshot: (symbols: string[]) => Promise<Snapshot>;
+  fetchSnapshot: (symbols: string[], opts?: { screener?: boolean }) => Promise<Snapshot>;
   fetchPdf?: (url: string) => Promise<Uint8Array>;
-  ai?: AiService;
+  ai?: LlmRouter;
   now?: () => Date;
   log?: (m: string) => void;
   testEmail?: string;
@@ -36,7 +37,7 @@ export interface JobDeps {
 
 export interface RunReport {
   ok: boolean; errors: string[]; notified: number; suppressed: number; users: number;
-  ai: { announcements_read: number; insights: number; suggestions_dropped: number };
+  ai: { announcements_read: number; dividends: number; insights: number; picks: number; suggestions_dropped: number };
 }
 
 const rules = DEFAULT_RULES;
@@ -46,33 +47,45 @@ const r1 = (v: number | null | undefined) => (v == null ? null : Math.round(v * 
 const r2 = (v: number | null | undefined) => (v == null ? null : Math.round(v * 100) / 100);
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+interface RunCtx {
+  job: JobName; deps: JobDeps; now: Date; today: string; prices: PriceMap; idx: IndexSnapshot | null;
+  usable: boolean; tradedToday: boolean; preclose: boolean; news: Announcement[]; dividends: DividendEvent[];
+  screen: ScreenRow[]; report: RunReport; aiBudget: { left: number };
+}
+
 export async function runJob(job: JobName, deps: JobDeps): Promise<RunReport> {
   const now = deps.now?.() ?? new Date();
   const log = deps.log ?? console.log;
   const { store } = deps;
-  const report: RunReport = { ok: true, errors: [], notified: 0, suppressed: 0, users: 0, ai: { announcements_read: 0, insights: 0, suggestions_dropped: 0 } };
+  const report: RunReport = { ok: true, errors: [], notified: 0, suppressed: 0, users: 0, ai: { announcements_read: 0, dividends: 0, insights: 0, picks: 0, suggestions_dropped: 0 } };
   const runId = await store.startRun(job);
   try {
     const users = await store.loadUsers();
     report.users = users.length;
-
     if (job === 'test') {
       await sendTest(users, deps, now, report);
       return report;
     }
+    const today = pktDate(now);
+    const userSymbols = [...new Set(users.flatMap((u) => [...u.holdings.map((h) => h.symbol), ...u.watchlist.map((w) => w.symbol)]))];
 
     // ---- refresh market data once for everyone ----------------------
-    const symbols = [...new Set(users.flatMap((u) => [...u.holdings.map((h) => h.symbol), ...u.watchlist.map((w) => w.symbol)]))];
-    const snap = await deps.fetchSnapshot(symbols);
+    let snap = await deps.fetchSnapshot(userSymbols);
+    let screen = toScreenRows(snap.screener);
+    let readSymbols = userSymbols;
+    if (job === 'night' && screen.length) {
+      // Also follow the top dividend payers, so Discover's dividend data fills up over time.
+      const extra = dividendLeaders(screen, [], today).map((d) => d.symbol).filter((s) => !userSymbols.includes(s));
+      if (extra.length) {
+        const more = await deps.fetchSnapshot(extra, { screener: false });
+        snap = { ...snap, quotes: { ...snap.quotes, ...more.quotes }, errors: [...snap.errors, ...more.errors] };
+        readSymbols = [...userSymbols, ...extra];
+      }
+    }
     report.errors.push(...snap.errors);
     const usable = isUsable(snap);
-    let prices: PriceMap = {};
-    let idx: IndexSnapshot | null = null;
-    let newAnns: Announcement[] = [];
-    const screen: ScreenRow[] = Object.values(snap.screener).filter((s) => s.listed_in.includes('KSE100')).map((s) => ({
-      symbol: s.symbol, sector: s.sector, price: s.price, change_pct: s.change_pct, pe: s.pe,
-      dividend_yield_pct: s.dividend_yield_pct, market_cap: s.market_cap, is_shariah: s.listed_in.includes('KMIALLSHR'),
-    }));
+    let prices: PriceMap;
+    let idx: IndexSnapshot | null;
     if (usable) {
       const fresh = Object.values(snap.quotes).filter((q) => q.price != null).map((q) => toPrice(q, snap.screener[q.symbol]));
       await store.savePrices(fresh);
@@ -80,34 +93,36 @@ export async function runJob(job: JobName, deps: JobDeps): Promise<RunReport> {
       const k = snap.indices.KSE100!;
       idx = { ts: asOf as string, kse100: k.value as number, change: k.change, change_pct: k.change_pct };
       await store.saveIndex(idx);
-      newAnns = await store.saveNewAnnouncements(Object.values(snap.quotes).flatMap((q) => q.announcements));
+      await store.saveNewAnnouncements(Object.values(snap.quotes).flatMap((q) => q.announcements));
       // Symbols that failed this run keep their last good price, never a made-up one.
-      prices = { ...(await store.latestPrices(symbols)), ...Object.fromEntries(fresh.map((p) => [p.symbol, p])) };
+      prices = { ...(await store.latestPrices(userSymbols)), ...Object.fromEntries(fresh.map((p) => [p.symbol, p])) };
       if (screen.length) await store.saveScreen(screen).catch((e) => report.errors.push(`screen: ${errMsg(e)}`));
     } else {
       report.ok = false;
-      prices = await store.latestPrices(symbols);
+      prices = await store.latestPrices(userSymbols);
       idx = await store.latestIndex();
+      screen = [];
       log(`PSX data unavailable this run: ${snap.errors.slice(0, 3).join(' | ')}`);
     }
-    const today = pktDate(now);
-    // Only raise market/holding alerts if PSX actually traded today (skips weekends and holidays).
     const tradedToday = usable && !!idx && pktDate(new Date(idx.ts)) === today;
+    const toClose = minutesToClose(now, rules.market_hours_pkt);
+    const preclose = job === 'market' && tradedToday && toClose != null && toClose <= 40;
 
-    // ---- AI reads new dividend / results / board-meeting PDFs ---------
-    const digests = new Map<string, Announcement>();
-    if (deps.ai && deps.fetchPdf) await readAnnouncements(symbols, today, deps, digests, report, log);
-    let news: Announcement[] = [];
-    if (deps.ai) news = await store.recentDigests(symbols, addDays(today, -14)).catch(() => []);
+    // ---- AI reads filings (summaries + dividends) ---------------------
+    if (deps.ai?.available && deps.fetchPdf) {
+      await readFilings(readSymbols, today, job === 'night' ? rules.ai.announcements_per_night_run : rules.ai.announcements_per_market_run, deps, report, log);
+    }
+    const news = await store.recentAnnouncements(userSymbols, addDays(today, -14)).catch(() => [] as Announcement[]);
+    const dividends = await store.dividends(null, addDays(today, -400)).catch(() => [] as DividendEvent[]);
 
-    log(`job=${job} users=${users.length} symbols=${symbols.length} usable=${usable} tradedToday=${tradedToday} newAnnouncements=${newAnns.length} aiRead=${digests.size}`);
+    // ---- Discover picks (nightly, market-wide) ------------------------
+    if (job === 'night' && deps.ai?.available && screen.length) await refreshPicks(screen, dividends, today, deps, report);
 
-    let aiBudget = rules.ai.max_users_per_run;
+    log(`job=${job} users=${users.length} symbols=${userSymbols.length}+${readSymbols.length - userSymbols.length} usable=${usable} tradedToday=${tradedToday} preclose=${preclose} aiRead=${report.ai.announcements_read}`);
+    const ctx: RunCtx = { job, deps, now, today, prices, idx, usable, tradedToday, preclose, news, dividends, screen, report, aiBudget: { left: rules.ai.max_users_per_run } };
     for (const u of users) {
       try {
-        const wantAi = !!deps.ai && !!u.settings.ai_enabled && !!idx && aiBudget > 0;
-        if (wantAi) aiBudget--;
-        await processUser(u, { job, deps, now, today, prices, idx, usable, tradedToday, newAnns, digests, news, screen, wantAi, report });
+        await processUser(u, ctx);
       } catch (e) {
         report.errors.push(`user ${u.id.slice(0, 8)}: ${errMsg(e)}`);
       }
@@ -122,11 +137,10 @@ export async function runJob(job: JobName, deps: JobDeps): Promise<RunReport> {
   }
 }
 
-async function readAnnouncements(symbols: string[], today: string, deps: JobDeps, digests: Map<string, Announcement>,
-  report: RunReport, log: (m: string) => void) {
+async function readFilings(symbols: string[], today: string, limit: number, deps: JobDeps, report: RunReport, log: (m: string) => void) {
   let toRead: Announcement[] = [];
   try {
-    toRead = await deps.store.announcementsToRead(symbols, addDays(today, -rules.ai.announcement_max_age_days), rules.ai.announcements_per_run);
+    toRead = await deps.store.announcementsToRead(symbols, addDays(today, -rules.ai.announcement_max_age_days), limit);
   } catch (e) {
     report.errors.push(`ai: cannot list announcements (${errMsg(e)})`);
     return;
@@ -142,25 +156,42 @@ async function readAnnouncements(symbols: string[], today: string, deps: JobDeps
       continue;
     }
     try {
-      const d = await deps.ai!.readAnnouncement(pdf, { symbol: a.symbol, title: a.title });
+      const d = await readAnnouncement(deps.ai!, pdf, { symbol: a.symbol, title: a.title });
       await deps.store.saveAnnouncementDigest(a.id, { summary: d.summary, figures: d.figures, verified: d.verified });
-      digests.set(a.id, { ...a, ai_summary: d.summary, ai_figures: d.figures, ai_verified: d.verified });
       report.ai.announcements_read++;
-      log(`ai read ${a.symbol} "${a.title.slice(0, 50)}" (${d.model}, verified=${d.verified})`);
+      if (d.dividend) {
+        await deps.store.saveDividend({
+          id: a.id, symbol: a.symbol, announced_on: a.published_at, dps: d.dividend.dps, dividend_type: d.dividend.type,
+          book_closure_from: d.dividend.book_closure_from, book_closure_to: d.dividend.book_closure_to, verified: d.dividend.verified, pdf_url: a.pdf_url,
+        });
+        report.ai.dividends++;
+      }
+      log(`ai read ${a.symbol} "${a.title.slice(0, 50)}" (${d.model}, verified=${d.verified}${d.dividend ? `, dividend Rs ${d.dividend.dps}` : ''})`);
     } catch (e) {
       report.errors.push(`ai: ${a.symbol}: ${errMsg(e)}`);
-      if (/Gemini unavailable/.test(errMsg(e))) break; // rate limited or down: try again next run
+      if (/AI unavailable/.test(errMsg(e))) break; // both providers down or rate limited: try next run
     }
   }
 }
 
-interface Ctx {
-  job: JobName; deps: JobDeps; now: Date; today: string; prices: PriceMap; idx: IndexSnapshot | null;
-  usable: boolean; tradedToday: boolean; newAnns: Announcement[]; digests: Map<string, Announcement>;
-  news: Announcement[]; screen: ScreenRow[]; wantAi: boolean; report: RunReport;
+async function refreshPicks(screen: ScreenRow[], dividends: DividendEvent[], today: string, deps: JobDeps, report: RunReport) {
+  const uv = undervalued(screen).map((r) => ({ symbol: r.symbol, sector: r.sector, price: r.price, pe: r.pe, sector_pe: r.sector_pe, pe_discount_pct: r.discount_pct, dividend_yield_pct: r.dividend_yield_pct, change_1y_pct: r.change_1y_pct, shariah: r.is_shariah }));
+  const dv = dividendLeaders(screen, dividends, today).map((d) => ({
+    symbol: d.symbol, sector: d.sector, price: d.price, dividend_yield_pct: d.dividend_yield_pct, annual_dividend_per_share: d.annual_dps,
+    last_declared_dps: d.last?.dps ?? null, last_declared_on: d.last?.announced_on ?? null, frequency_from_filings: d.frequency, shariah: d.is_shariah,
+  }));
+  for (const [kind, facts] of [['undervalued', uv], ['dividend', dv]] as const) {
+    if (!facts.length) continue;
+    try {
+      const r = await discoverPicks(deps.ai!, kind, facts);
+      if (r.items.length) { await deps.store.savePicks(kind, r.items, r.model); report.ai.picks++; }
+    } catch (e) {
+      report.errors.push(`ai: picks ${kind}: ${errMsg(e)}`);
+    }
+  }
 }
 
-async function processUser(u: UserCtx, c: Ctx) {
+async function processUser(u: UserCtx, c: RunCtx) {
   const { store, notifier } = c.deps;
   const recent = await store.recentAlerts(u.id, new Date(c.now.getTime() - 10 * 86400000).toISOString());
   const sentKeys = new Set(recent.map((r) => r.dedupe_key));
@@ -169,56 +200,53 @@ async function processUser(u: UserCtx, c: Ctx) {
       .map((r) => pktDate(new Date(r.sent_at))).sort().at(-1) ?? null;
   const view = buildPortfolio(u.holdings, c.prices, u.settings);
   const mine = new Set([...u.holdings.map((h) => h.symbol), ...u.watchlist.map((w) => w.symbol)]);
+  const night = c.job === 'night';
   const cands: AlertCandidate[] = [];
 
-  // ---- AI second opinion (stored for the app; strong calls also notify) ----
+  // ---- AI second opinion: every few hours in market, always before close and at night ----
   let insight: Insight | null = null;
-  if (c.wantAi) {
-    try {
-      insight = await makeInsight(u, view, mine, c);
-      for (const s of insight.suggestions) {
-        if (s.confidence !== 'high' || !['buy', 'add', 'trim', 'sell'].includes(s.action)) continue;
-        cands.push({
-          kind: 'ai_suggestion', symbol: s.symbol, urgent: false, url: '/#/today',
-          dedupe_key: `ai:${s.action}:${s.symbol ?? '-'}:${isoWeek(c.today)}`,
-          title: `AI Assistant suggests: ${s.action}${s.symbol ? ` ${s.symbol}` : ''}`,
-          message: `AI Assistant suggests: ${s.text} (${s.why})`,
-        });
+  if (c.deps.ai?.available && u.settings.ai_enabled && c.idx && c.aiBudget.left > 0 && (night || c.tradedToday)) {
+    const last = await store.latestInsightAt(u.id).catch(() => null);
+    const due = night || c.preclose || !last || c.now.getTime() - Date.parse(last) >= rules.ai.insight_every_minutes * 60000;
+    if (due) {
+      c.aiBudget.left--;
+      try {
+        insight = await makeInsight(u, view, mine, c);
+        for (const s of insight.suggestions) {
+          if (s.confidence !== 'high' || !['buy', 'add', 'trim', 'sell'].includes(s.action)) continue;
+          cands.push({
+            kind: 'ai_suggestion', symbol: s.symbol, level: night ? 'digest' : 'market', url: '/#/home',
+            dedupe_key: `ai:${s.action}:${s.symbol ?? '-'}:${isoWeek(c.today)}`,
+            title: `AI Assistant: ${s.action} ${s.symbol ?? ''}`.trim(), message: `AI Assistant suggests: ${s.text} (${s.why})`,
+          });
+        }
+      } catch (e) {
+        c.report.errors.push(`ai insight ${u.id.slice(0, 8)}: ${errMsg(e)}`);
       }
-    } catch (e) {
-      c.report.errors.push(`ai insight ${u.id.slice(0, 8)}: ${errMsg(e)}`);
     }
   }
 
   if (!c.usable) {
     cands.push({
-      kind: 'data_unavailable', symbol: null, urgent: false, url: '/#/today', dedupe_key: `nodata:${c.today}`,
-      title: 'PSX data unavailable', message: "Couldn't read PSX prices this run. Check live prices in your broker app; the app shows the last good data.",
+      kind: 'data_unavailable', symbol: null, level: 'market', url: '/#/home', dedupe_key: `nodata:${c.today}`,
+      title: 'PSX data unavailable', message: "Couldn't read PSX prices. Check live prices in your broker app; the app shows the last good data.",
     });
   }
-  if (c.tradedToday && c.job !== 'weekly') {
-    cands.push(...marketAlerts(c.idx, u.settings, c.today), ...holdingAlerts(view, u.settings, c.today, lastSent));
+  if (c.tradedToday && !night) {
+    cands.push(...marketAlerts(c.idx, u.settings, c.today), ...holdingAlerts(view, u.settings, c.today, insight, lastSent));
   }
-  for (const a of c.newAnns) {
-    // Alert only on dividends, results and board meetings; routine filings stay on the News screen.
-    if (!mine.has(a.symbol) || a.kind === 'other' || daysBetween(a.published_at, c.today) > 5) continue;
-    const ai = c.digests.get(a.id)?.ai_summary;
-    cands.push({
-      kind: `announcement_${a.kind}`, symbol: a.symbol, urgent: false, url: '/#/news', dedupe_key: `ann:${a.id}`,
-      title: `${a.symbol}: ${a.kind.replace('_', ' ')}`, message: `${a.symbol}: ${ai ?? a.title}`,
-    });
-  }
-  const aiLine = insight ? ` AI Assistant: ${insight.headline}` : '';
-  if (c.job === 'morning' && c.idx) cands.unshift(morningBrief(u, view, c, aiLine));
-  if (c.job === 'eod' && c.tradedToday && c.idx) cands.unshift(dailySummary(view, c, aiLine));
-  if (c.job === 'weekly') {
-    const w = await weeklyPlan(u, c, insight);
-    if (w) cands.unshift(w);
-  }
+  // At night only the digest goes out; buying chances wait for the next market check.
+  if (night) cands.push(...holdingAlerts(view, u.settings, c.today, insight, lastSent).filter((a) => a.level === 'digest'));
+  if (night) cands.push(...nightItems(view, mine, c, insight));
 
   const fresh = cands.filter((x, i) => !sentKeys.has(x.dedupe_key) && cands.findIndex((y) => y.dedupe_key === x.dedupe_key) === i);
-  const sentToday = new Set(recent.filter((r) => pktDate(new Date(r.sent_at)) === c.today && r.batch_id && r.channel !== 'none').map((r) => r.batch_id)).size;
-  const plan = planDelivery(fresh, { now: c.now, sentToday, quiet: u.settings.quiet_hours, enabled: u.settings.notifications_enabled });
+  const todays = recent.filter((r) => pktDate(new Date(r.sent_at)) === c.today && r.batch_id && r.channel !== 'none');
+  const digestBatches = new Set(todays.filter((r) => r.kind === 'night_digest').map((r) => r.batch_id));
+  const sentToday = new Set(todays.filter((r) => !digestBatches.has(r.batch_id)).map((r) => r.batch_id)).size;
+  const plan = planDelivery(fresh, {
+    now: c.now, sentToday, quiet: u.settings.quiet_hours, enabled: u.settings.notifications_enabled,
+    digestRun: night, titlePrefix: c.preclose ? 'Before close: ' : '',
+  });
 
   for (const n of plan.send) {
     const channel = await notifier.send(u, n);
@@ -238,13 +266,41 @@ async function processUser(u: UserCtx, c: Ctx) {
   }
 }
 
+/** The night digest and what goes with it: news, upcoming dividends, rebalance (via holdingAlerts). */
+function nightItems(view: PortfolioView, mine: Set<string>, c: RunCtx, insight: Insight | null): AlertCandidate[] {
+  const out: AlertCandidate[] = [];
+  const digest = (kind: string, symbol: string | null, key: string, title: string, message: string, url = '/#/news'): AlertCandidate =>
+    ({ kind, symbol, level: 'digest' as AlertLevel, url, dedupe_key: key, title, message });
+
+  const filings = c.news.filter((a) => mine.has(a.symbol) && a.kind !== 'other' && daysBetween(a.published_at, c.today) <= 3);
+  for (const a of dedupeFilings(filings)) {
+    out.push(digest(`announcement_${a.kind}`, a.symbol, `ann:${a.id}`, `${a.symbol}: ${a.kind.replace('_', ' ')}`, `${a.symbol}: ${a.ai_summary ?? tidyTitle(a.title, a.symbol)}`));
+  }
+  for (const d of upcomingDividends(c.dividends.filter((x) => mine.has(x.symbol)), c.today).filter((d) => d.days_left <= 10)) {
+    out.push(digest('dividend_upcoming', d.symbol, `div:${d.id}`, `${d.symbol} dividend`,
+      `${d.symbol}${d.dps != null ? ` Rs ${d.dps}/share` : ''} dividend: buy by ${d.buy_by} (book closure ${d.book_closure_from}).`, '/#/discover'));
+  }
+  if (c.idx && c.tradedToday) {
+    const i = c.idx;
+    const day = view.day_change;
+    out.unshift(digest('night_digest', null, `night:${c.today}`, `Tonight: KSE-100 ${sign(i.change_pct ?? 0)}${Math.abs(i.change_pct ?? 0).toFixed(1)}%`,
+      `KSE-100 closed at ${fmt0(i.kse100)}. Your portfolio Rs ${fmt0(view.total_value)}` +
+      (day != null ? `, today ${sign(day)}Rs ${fmt0(Math.abs(day))}` : '') +
+      `, total ${sign(view.total_pnl)}Rs ${fmt0(Math.abs(view.total_pnl))}.` + (insight ? ` AI: ${insight.headline}` : ''), '/#/home'));
+  } else if (out.length) {
+    out.unshift(digest('night_digest', null, `night:${c.today}`, 'Tonight', `${out.length} update${out.length > 1 ? 's' : ''} on your stocks.`, '/#/news'));
+  }
+  return out;
+}
+
+
 // ---------------------------------------------------------------------------
 // AI facts: everything the model may use, rounded the way it will be quoted
 // ---------------------------------------------------------------------------
-export function buildFacts(u: UserCtx, view: PortfolioView, mine: Set<string>, c: Pick<Ctx, 'today' | 'idx' | 'prices' | 'screen' | 'news'>) {
+export function buildFacts(u: UserCtx, view: PortfolioView, mine: Set<string>,
+  c: Pick<RunCtx, 'today' | 'idx' | 'prices' | 'screen' | 'news' | 'dividends' | 'now'>, investedPkr: number) {
   const s = u.settings;
   const banner = todayBanner(c.idx, s);
-  const plan = allocate({ amount: s.monthly_budget_pkr, holdings: u.holdings, watchlist: u.watchlist, prices: c.prices, settings: s, today: c.today });
   const metrics = (sym: string) => {
     const p = c.prices[sym];
     return {
@@ -253,21 +309,25 @@ export function buildFacts(u: UserCtx, view: PortfolioView, mine: Set<string>, c
       dividend_yield_pct: r2(p?.dividend_yield_pct), pe: r2(p?.pe), sector: p?.sector ?? null, is_shariah: p?.is_shariah ?? null,
     };
   };
-  const candidates = findOpportunities(c.screen, mine, s.shariah_only);
+  const candidates = undervalued(c.screen, { shariahOnly: s.shariah_only, exclude: mine }).slice(0, 5);
   const facts: InsightFacts = {
     date: c.today,
-    market: { kse100: r2(c.idx?.kse100), change_pct: r2(c.idx?.change_pct), rules_say: banner.action, rules_reason: banner.reason, crash_level: s.crash_trigger_kse },
-    rules: { max_position_pct: s.max_position_pct, below_cost_alert_pct: s.drop_alert_pct, shariah_only: s.shariah_only, monthly_budget_pkr: s.monthly_budget_pkr, crash_fund_pkr: s.crash_fund_pkr },
-    portfolio: { total_value_pkr: Math.round(view.total_value), total_pnl_pct: r1(view.total_pnl_pct), sectors: view.sector_weights.map((w) => ({ sector: w.sector, pct: r1(w.pct)! })) },
+    market: { kse100: r2(c.idx?.kse100), change_pct: r2(c.idx?.change_pct), rules_say: banner.action, rules_reason: banner.reason, crash_level: s.crash_trigger_kse, market_open: isMarketOpen(c.now, rules.market_hours_pkt) },
+    rules: { max_position_pct: s.max_position_pct, opportunity_below_last_buy_pct: s.drop_alert_pct, shariah_only: s.shariah_only, crash_fund_pkr: s.crash_fund_pkr },
+    money: { monthly_budget_pkr: s.monthly_budget_pkr, invested_this_month_pkr: Math.round(investedPkr), cash_left_this_month_pkr: Math.max(0, Math.round(s.monthly_budget_pkr - investedPkr)) },
+    portfolio: {
+      total_value_pkr: Math.round(view.total_value), total_pnl_pct: r1(view.total_pnl_pct),
+      sectors: view.sector_weights.map((w) => ({ sector: w.sector, pct: r1(w.pct)! })), rebalance_flags: view.rebalance.map((t) => t.text),
+    },
     holdings: view.rows.map((r) => ({
       symbol: r.holding.symbol, status: r.holding.status, shares: r.holding.shares, avg_cost: r.holding.avg_cost,
-      value_pkr: r.value == null ? null : Math.round(r.value), pnl_pct: r1(r.pnl_pct), weight_pct: r1(r.weight_pct),
-      ...metrics(r.holding.symbol), is_shariah: r.holding.is_shariah, note: r.holding.note ?? null,
+      last_buy_price: r2(r.ref_price), vs_last_buy_pct: r1(r.vs_ref_pct), value_pkr: r.value == null ? null : Math.round(r.value),
+      pnl_pct: r1(r.pnl_pct), weight_pct: r1(r.weight_pct), rules_call: r.call.call, ...metrics(r.holding.symbol), is_shariah: r.holding.is_shariah, note: r.holding.note ?? null,
     })),
     watchlist: u.watchlist.map((w) => ({ symbol: w.symbol, ...metrics(w.symbol) })),
-    screen_candidates: candidates.map((o) => ({ symbol: o.symbol, sector: o.sector, price: o.price, dividend_yield_pct: o.dividend_yield_pct, pe: o.pe, is_shariah: o.is_shariah })),
-    plan_tranche_1: (plan.tranches[0]?.items ?? []).map((i) => ({ symbol: i.symbol, shares: i.shares, rupees: Math.round(i.rupees), kind: i.kind })),
-    recent_news: c.news.filter((a) => mine.has(a.symbol) && a.ai_summary).slice(0, 8).map((a) => ({ symbol: a.symbol, date: a.published_at, summary: a.ai_summary as string })),
+    screen_candidates: candidates.map((o) => ({ symbol: o.symbol, sector: o.sector, price: o.price, pe: o.pe, sector_pe: o.sector_pe, dividend_yield_pct: o.dividend_yield_pct, is_shariah: o.is_shariah })),
+    upcoming_dividends: upcomingDividends(c.dividends.filter((d) => mine.has(d.symbol)), c.today).slice(0, 5).map((d) => ({ symbol: d.symbol, dps: d.dps, buy_by: d.buy_by, book_closure_from: d.book_closure_from })),
+    recent_news: dedupeFilings(c.news.filter((a) => mine.has(a.symbol) && a.ai_summary)).slice(0, 8).map((a) => ({ symbol: a.symbol, date: a.published_at, summary: a.ai_summary as string })),
   };
   const guard: GuardContext = {
     holdings: view.rows.map((r) => ({ symbol: r.holding.symbol, status: r.holding.status, weight_pct: r.weight_pct, is_shariah: r.holding.is_shariah })),
@@ -280,96 +340,19 @@ export function buildFacts(u: UserCtx, view: PortfolioView, mine: Set<string>, c
   return { facts, guard };
 }
 
-async function makeInsight(u: UserCtx, view: PortfolioView, mine: Set<string>, c: Ctx): Promise<Insight> {
-  const { facts, guard } = buildFacts(u, view, mine, c);
-  const res = await c.deps.ai!.portfolioInsight(facts, guard);
+async function makeInsight(u: UserCtx, view: PortfolioView, mine: Set<string>, c: RunCtx): Promise<Insight> {
+  const txns = await c.deps.store.transactionsSince(u.id, `${c.today.slice(0, 7)}-01`).catch(() => []);
+  const { facts, guard } = buildFacts(u, view, mine, c, investedThisMonth(txns, c.today));
+  const res = await portfolioInsight(c.deps.ai!, facts, guard);
   await c.deps.store.saveInsight(u.id, {
-    job: c.job, headline: res.insight.headline, suggestions: res.insight.suggestions, plan_note: res.insight.plan_note,
+    job: c.job, headline: res.insight.headline, stance: res.insight.stance, suggestions: res.insight.suggestions,
+    holding_calls: res.insight.holding_calls, rebalance: res.insight.rebalance, cash_note: res.insight.cash_note,
     risks: res.insight.risks, model: res.model, dropped: res.dropped,
   }).catch((e) => c.report.errors.push(`ai: save insight: ${errMsg(e)}`));
   c.report.ai.insights++;
   c.report.ai.suggestions_dropped += res.dropped;
   if (res.reasons.length) c.deps.log?.(`ai guardrails dropped for ${u.id.slice(0, 8)}: ${res.reasons.join(' | ')}`);
   return res.insight;
-}
-
-// ---------------------------------------------------------------------------
-// Summaries (template wording; the AI headline is appended when there is one)
-// ---------------------------------------------------------------------------
-function morningBrief(u: UserCtx, view: PortfolioView, c: Ctx, aiLine: string): AlertCandidate {
-  const i = c.idx!;
-  const watch: string[] = [];
-  const below = view.rows.filter((r) => r.flags.below_cost).map((r) => r.holding.symbol);
-  if (below.length) watch.push(`${below.join(', ')} below cost`);
-  const over = view.rows.filter((r) => r.flags.over_cap).map((r) => r.holding.symbol);
-  if (over.length) watch.push(`${over.join(', ')} over cap`);
-  if (!u.holdings.length) watch.push('add your holdings in the app');
-  return {
-    kind: 'morning_brief', symbol: null, urgent: false, url: '/#/today', dedupe_key: `morning:${c.today}`,
-    title: 'Morning brief',
-    message: `Last close: KSE-100 ${fmt0(i.kse100)} (${sign(i.change_pct ?? 0)}${Math.abs(i.change_pct ?? 0).toFixed(1)}%). ` +
-      `Portfolio Rs ${fmt0(view.total_value)}, P/L ${sign(view.total_pnl)}Rs ${fmt0(Math.abs(view.total_pnl))}. ` +
-      (watch.length ? `Watch today: ${watch.join('; ')}.` : 'Nothing needs attention today.') + aiLine,
-  };
-}
-
-function dailySummary(view: PortfolioView, c: Ctx, aiLine: string): AlertCandidate {
-  const i = c.idx!;
-  const movers = view.rows.filter((r) => r.price?.change_pct != null)
-    .sort((a, b) => Math.abs(b.price!.change_pct!) - Math.abs(a.price!.change_pct!)).slice(0, 2)
-    .map((r) => `${r.holding.symbol} ${sign(r.price!.change_pct!)}${Math.abs(r.price!.change_pct!).toFixed(1)}%`);
-  const day = view.day_change;
-  return {
-    kind: 'daily_summary', symbol: null, urgent: false, url: '/#/portfolio', dedupe_key: `daily:${c.today}`,
-    title: `Close: KSE-100 ${sign(i.change_pct ?? 0)}${Math.abs(i.change_pct ?? 0).toFixed(1)}%`,
-    message: `KSE-100 closed at ${fmt0(i.kse100)}. Your portfolio Rs ${fmt0(view.total_value)}` +
-      (day != null ? `, today ${sign(day)}Rs ${fmt0(Math.abs(day))}` : '') +
-      `, total P/L ${sign(view.total_pnl)}Rs ${fmt0(Math.abs(view.total_pnl))}` +
-      (view.total_pnl_pct != null ? ` (${sign(view.total_pnl_pct)}${Math.abs(view.total_pnl_pct).toFixed(1)}%)` : '') +
-      (movers.length ? `. Biggest moves: ${movers.join(', ')}.` : '.') + aiLine,
-  };
-}
-
-/**
- * Weekly plan (Sunday): reviews how past suggestions did, then reminds what is due this week.
- * A new monthly plan is saved only when there is none from the last 25 days, so tranche dates hold.
- */
-async function weeklyPlan(u: UserCtx, c: Ctx, insight: Insight | null): Promise<AlertCandidate | null> {
-  const { store } = c.deps;
-  const recs = await store.recommendations(u.id, new Date(c.now.getTime() - 60 * 86400000).toISOString());
-  const lines: string[] = [];
-
-  // Review: suggestions at least 7 days old that have not been checked yet.
-  for (const r of recs.filter((x) => !x.outcome_checked_at && daysBetween(pktDate(new Date(x.created_at)), c.today) >= 7)) {
-    const first = r.payload?.plan?.tranches?.[0]?.items ?? [];
-    const cost = first.reduce((a: number, i: any) => a + i.rupees, 0);
-    const nowValue = first.reduce((a: number, i: any) => a + i.shares * (c.prices[i.symbol]?.price ?? i.price), 0);
-    if (cost > 0) {
-      const ret = ((nowValue - cost) / cost) * 100;
-      lines.push(`Plan from ${pktDate(new Date(r.created_at))}: first-tranche picks ${sign(ret)}${Math.abs(ret).toFixed(1)}% since.`);
-      await store.markRecommendationChecked(r.id, { ...r.payload, outcome: { checked_on: c.today, return_pct: Math.round(ret * 100) / 100 } });
-    }
-  }
-
-  let active = recs.find((r) => daysBetween(pktDate(new Date(r.created_at)), c.today) <= 25 && r.payload?.plan);
-  if (!active && u.settings.monthly_budget_pkr > 0) {
-    const plan = allocate({ amount: u.settings.monthly_budget_pkr, holdings: u.holdings, watchlist: u.watchlist, prices: c.prices, settings: u.settings, today: c.today });
-    const payload = { source: 'weekly_job', plan, text: planToText(plan), ai_note: insight?.plan_note ?? null };
-    await store.saveRecommendation(u.id, plan.amount, payload);
-    active = { id: 'new', created_at: c.now.toISOString(), amount_pkr: plan.amount, payload, outcome_checked_at: null };
-    lines.unshift(`New plan for this month's Rs ${fmt0(plan.amount)} is ready on the Plan screen.`);
-  }
-  const weekEnd = addDays(c.today, 7);
-  const due = (active?.payload?.plan?.tranches ?? []).filter((t: any) => t.date >= c.today && t.date <= weekEnd && t.items.length);
-  for (const t of due) {
-    lines.push(`Tranche ${t.index} on ${t.date}: ${t.items.map((i: any) => `${i.symbol} ${i.shares}`).join(', ')} (Rs ${fmt0(t.spent)}).`);
-  }
-  if (!lines.length) lines.push('No tranche due this week. Your plan is on track.');
-  if (insight?.plan_note) lines.push(`AI Assistant: ${insight.plan_note}`);
-  return {
-    kind: 'weekly_plan', symbol: null, urgent: false, url: '/#/plan', dedupe_key: `weekly:${isoWeek(c.today)}`,
-    title: 'Weekly plan', message: lines.join(' '),
-  };
 }
 
 async function sendTest(users: UserCtx[], deps: JobDeps, now: Date, report: RunReport) {
@@ -380,13 +363,13 @@ async function sendTest(users: UserCtx[], deps: JobDeps, now: Date, report: RunR
   if (!u.subs.length && !u.telegram_chat_id) {
     report.errors.push('that account has no push subscription and no Telegram link yet: enable notifications in Settings first');
   }
+  const alert: AlertCandidate = { kind: 'test', symbol: null, title: 'Test', message: 'Test alert', dedupe_key: `test:${now.toISOString()}`, level: 'urgent', url: '/#/home' };
   const n = {
-    title: 'Test: crash alert', urgent: true, url: '/#/today',
+    title: 'Test: crash alert', urgent: true, url: '/#/home', alerts: [alert],
     body: 'This is a test. A real crash alert looks like this: KSE-100 down 4%+, consider using part of your crash fund.',
-    alerts: [{ kind: 'test', symbol: null, title: 'Test', message: 'Test alert', dedupe_key: `test:${now.toISOString()}`, urgent: true, url: '/#/today' }],
   };
   const channel = await deps.notifier.send(u, n);
-  await deps.store.logAlerts(u.id, [{ kind: 'test', symbol: null, message: n.body, dedupe_key: n.alerts[0].dedupe_key, channel, sent_at: now.toISOString(), batch_id: null }]);
+  await deps.store.logAlerts(u.id, [{ kind: 'test', symbol: null, message: n.body, dedupe_key: alert.dedupe_key, channel, sent_at: now.toISOString(), batch_id: null }]);
   if (channel === 'none') report.errors.push('test alert reached no channel');
   else report.notified++;
   report.ok = channel !== 'none';

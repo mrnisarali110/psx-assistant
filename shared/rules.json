@@ -8,30 +8,29 @@
   "holding": {
     "sector_limit_pct": 35,
     "big_move_pct": 5,
-    "below_cost_repeat_days": 7
-  },
-  "allocation": {
-    "avg_down_share": 0.5,
-    "watchlist_picks": 2,
-    "underweight_sector_pct": 15,
-    "min_order_pkr": 500,
-    "score": {
-      "dividend_yield": 1.0,
-      "below_52w_high": 0.25,
-      "underweight_sector_bonus": 3
-    }
+    "average_down_pct": 5,
+    "repeat_days": 7
   },
   "notifications": {
     "max_per_day": 3
   },
-  "opportunities": {
-    "min_dividend_yield_pct": 5,
-    "max_pe": 15,
-    "picks": 5
+  "undervalued": {
+    "max_pe": 10,
+    "sector_discount": 0.8,
+    "min_dividend_yield_pct": 2,
+    "candidates": 10
+  },
+  "dividends": {
+    "min_yield_pct": 6,
+    "candidates": 12,
+    "buy_by_working_days": 3
   },
   "ai": {
-    "announcements_per_run": 6,
-    "announcement_max_age_days": 10,
+    "announcements_per_market_run": 3,
+    "announcements_per_night_run": 12,
+    "announcement_max_age_days": 400,
+    "insight_every_minutes": 150,
+    "fresh_hours": 20,
     "max_users_per_run": 25
   },
   "data": {
@@ -40,6 +39,8 @@
   "market_hours_pkt": {
     "source": "https://www.psx.com.pk/psx/exchange/general/trading-hours (checked 2026-10-06; Ramadan hours differ)",
     "mon_thu": [["09:15", "15:50"]],
-    "fri": [["09:00", "12:00"], ["14:15", "16:50"]]
+    "fri": [["09:00", "12:00"], ["14:15", "16:50"]],
+    "close_mon_thu": "15:30",
+    "close_fri": "16:30"
   }
 }

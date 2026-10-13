@@ -2,7 +2,7 @@
 import captured from './seed-prices.json' with { type: 'json' };
 import type { Announcement, Holding, IndexSnapshot, PriceMap, WatchItem } from '../types.ts';
 import { DEFAULT_SETTINGS } from '../types.ts';
-import type { ScreenRow } from '../opportunities.ts';
+import type { ScreenRow } from '../discover.ts';
 
 export const SEED_HOLDINGS: Holding[] = [
   { symbol: 'SYS', shares: 118, avg_cost: 130.45, sector: 'Technology', is_shariah: true, status: 'core', note: 'Earnings growing, near the cap, so add small' },
@@ -18,6 +18,12 @@ export const SEED_HOLDINGS: Holding[] = [
 export const SEED_WATCHLIST: WatchItem[] = ['MARI', 'HUBC', 'FFC', 'OGDC', 'PPL'].map((symbol) => ({ symbol, note: 'Suggested candidate' }));
 
 export const SEED_SETTINGS = { ...DEFAULT_SETTINGS };
+
+/** A few recorded buys this month, for demo mode and tests. */
+export const SEED_TXNS = [
+  { symbol: 'MEBL', side: 'buy' as const, shares: 8, price: 548.11, amount: 4384.88, executed_on: '2026-10-06', source: 'manual' as const },
+  { symbol: 'HUBC', side: 'buy' as const, shares: 26, price: 195.57, amount: 5084.82, executed_on: '2026-10-06', source: 'manual' as const },
+];
 
 export const SEED_PRICES = captured.prices as unknown as PriceMap;
 export const SEED_INDEX = captured.index as IndexSnapshot;

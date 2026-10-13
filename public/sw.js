@@ -1,5 +1,5 @@
 /* PSX Assistant service worker: offline shell + web push. Bump CACHE to force an update. */
-const CACHE = 'psx-v1';
+const CACHE = 'psx-v2';
 const SHELL = ['/', '/index.html', '/manifest.webmanifest', '/icons/icon-192.png', '/favicon.svg'];
 
 self.addEventListener('install', (e) => {
@@ -60,14 +60,14 @@ self.addEventListener('push', (e) => {
       tag: d.tag || 'update',
       renotify: true,
       requireInteraction: d.tag === 'crash',
-      data: { url: d.url || '/#/today' },
+      data: { url: d.url || '/#/home' },
     }),
   );
 });
 
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();
-  const url = (e.notification.data && e.notification.data.url) || '/#/today';
+  const url = (e.notification.data && e.notification.data.url) || '/#/home';
   e.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
       for (const c of list) {

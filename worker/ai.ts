@@ -1,85 +1,17 @@
 /**
- * AI layer (Google Gemini, free tier). Two jobs:
- *   1. Read PSX announcement PDFs: plain summary + key figures, each figure checked against the PDF text.
- *   2. "AI Assistant suggests": a second opinion on the portfolio, built only from facts we pass in.
- * Guardrails: the rules engine stays in charge. Suggestions that cite numbers not in the facts, name a
- * stock outside the user's universe, or break the user's own rules are dropped. The AI never changes
- * plan amounts, and every failure falls back to "no AI" without affecting alerts.
+ * AI tasks for the scheduled worker, on top of the shared Groq/Gemini router (shared/llm.ts):
+ *   1. Read PSX announcement PDFs: summary, key figures, and any cash dividend with its book closure.
+ *   2. "AI Assistant suggests": stance for the day, a call per holding, suggestions, rebalance, cash note.
+ *   3. Discover picks: rank and explain undervalued and dividend candidates the rules found.
+ * Guardrails: the AI only sees facts we compute. Anything citing a number not in those facts, naming a stock
+ * outside the allowed set, or breaking the user's own rules is dropped. Failures never stop the worker.
  */
 import { extractText, getDocumentProxy } from 'unpdf';
-
-export const DEFAULT_MODELS = ['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-2.5-flash'];
-
-export interface GeminiOptions { apiKey: string; models?: string[]; fetchImpl?: typeof fetch; log?: (m: string) => void }
-
-type Part = { text: string } | { inline_data: { mime_type: string; data: string } };
-
-export class GeminiClient {
-  private models: string[];
-  private fetchImpl: typeof fetch;
-  private log: (m: string) => void;
-  private skip = new Set<string>(); // models that were overloaded or rate limited earlier in this run
-  calls = 0;
-
-  constructor(private opts: GeminiOptions) {
-    this.models = opts.models?.length ? opts.models : DEFAULT_MODELS;
-    this.fetchImpl = opts.fetchImpl ?? fetch;
-    this.log = opts.log ?? console.log;
-  }
-
-  /** Ask for JSON matching `schema`. Tries each model in turn on rate limits, missing models or server errors. */
-  async json<T>(parts: Part[], schema: object, system: string): Promise<{ data: T; model: string }> {
-    let last = 'no model tried';
-    const order = [...this.models.filter((m) => !this.skip.has(m)), ...this.models.filter((m) => this.skip.has(m))];
-    for (const model of order) {
-      this.calls++;
-      let r: Response;
-      try {
-        r = await this.fetchImpl(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-goog-api-key': this.opts.apiKey },
-          body: JSON.stringify({
-            systemInstruction: { parts: [{ text: system }] },
-            contents: [{ role: 'user', parts }],
-            generationConfig: { temperature: 0.2, responseMimeType: 'application/json', responseSchema: schema },
-          }),
-          signal: AbortSignal.timeout(90_000),
-        });
-      } catch (e) {
-        last = `${model}: ${(e as Error).message}`;
-        continue;
-      }
-      if (!r.ok) {
-        const body = (await r.text().catch(() => '')).slice(0, 200).replace(/\s+/g, ' ');
-        last = `${model}: HTTP ${r.status} ${body}`;
-        if ([400, 401, 403].includes(r.status) && !/model|not found|not supported/i.test(body)) break; // bad key/request: other models won't help
-        if (!this.skip.has(model)) this.log(`gemini ${last}; trying next model (skipping ${model} for the rest of this run)`);
-        this.skip.add(model);
-        continue;
-      }
-      const j = (await r.json()) as any;
-      const text: string | undefined = j?.candidates?.[0]?.content?.parts?.map((p: any) => p.text ?? '').join('');
-      const data = parseJsonLoose(text);
-      if (data != null) return { data: data as T, model };
-      last = `${model}: unparseable response (${j?.candidates?.[0]?.finishReason ?? 'no candidates'})`;
-    }
-    throw new Error(`Gemini unavailable: ${last}`);
-  }
-}
-
-export function parseJsonLoose(text: string | undefined | null): unknown {
-  if (!text) return null;
-  const t = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/```$/, '').trim();
-  try {
-    return JSON.parse(t);
-  } catch {
-    const m = /\{[\s\S]*\}/.exec(t);
-    try { return m ? JSON.parse(m[0]) : null; } catch { return null; }
-  }
-}
+import type { LlmRouter } from '../shared/llm.ts';
+import type { AiSuggestion, HoldingCallKind } from '../shared/types.ts';
 
 // ---------------------------------------------------------------------------
-// Number checking (shared by both guardrails)
+// Number grounding
 // ---------------------------------------------------------------------------
 const NUM_RE = /\d[\d,]*(?:\.\d+)?/g;
 
@@ -91,12 +23,8 @@ export function numbersIn(text: string): number[] {
 export function numberSet(facts: unknown): number[] {
   const out = new Set<number>();
   const add = (n: number) => {
-    for (const v of [n, Math.abs(n)]) {
-      out.add(v);
-      out.add(Math.round(v));
-      out.add(Math.round(v * 10) / 10);
-      out.add(Math.round(v * 100) / 100);
-    }
+    for (const v of [n, Math.abs(n)]) for (const k of [1, 10, 100]) out.add(Math.round(v * k) / k);
+    out.add(n);
   };
   const walk = (x: unknown) => {
     if (typeof x === 'number') add(x);
@@ -111,12 +39,15 @@ export function numberSet(facts: unknown): number[] {
 /** True if every number in `text` matches a known number (small integers like dates and counts are allowed). */
 export function numbersGrounded(text: string, known: number[]): { ok: boolean; unknown: number[] } {
   const unknown = numbersIn(text).filter((n) => {
-    if (Number.isInteger(n) && n <= 31) return false; // dates, counts, tranche numbers
-    if (n >= 2020 && n <= 2035 && Number.isInteger(n)) return false; // years
+    if (Number.isInteger(n) && n <= 31) return false; // dates, counts
+    if (Number.isInteger(n) && n >= 2020 && n <= 2035) return false; // years
     return !known.some((k) => Math.abs(k - n) <= Math.max(0.05, Math.abs(k) * 0.005));
   });
   return { ok: unknown.length === 0, unknown };
 }
+
+const clamp = (s: unknown, n: number) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, n);
+const isoDate = (s: unknown) => (typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s)) ? s : null);
 
 // ---------------------------------------------------------------------------
 // 1. Announcement reader
@@ -124,7 +55,9 @@ export function numbersGrounded(text: string, known: number[]): { ok: boolean; u
 export interface AnnouncementDigest {
   summary: string;
   figures: { label: string; value: string; verified: boolean }[];
-  verified: boolean; // all numbers in the summary and figures were found in the PDF text
+  verified: boolean; // every number in the summary and figures was found in the PDF text
+  dividend: { dps: number; type: 'interim' | 'final' | 'special' | null; book_closure_from: string | null; book_closure_to: string | null; verified: boolean } | null;
+  model: string;
 }
 
 const ANN_SCHEMA = {
@@ -136,6 +69,10 @@ const ANN_SCHEMA = {
       items: { type: 'OBJECT', properties: { label: { type: 'STRING' }, value: { type: 'STRING' } }, required: ['label', 'value'] },
       description: 'Up to 5 key figures exactly as printed: EPS, profit after tax, dividend per share, bonus %, book closure dates, meeting date.',
     },
+    cash_dividend_per_share: { type: 'NUMBER', nullable: true, description: 'Rupees per share of any CASH dividend declared in this document (convert "70%" on Rs 10 face value to 7). null if none.' },
+    dividend_type: { type: 'STRING', enum: ['interim', 'final', 'special'], nullable: true },
+    book_closure_from: { type: 'STRING', nullable: true, description: 'YYYY-MM-DD start of share transfer book closure for that dividend, or null.' },
+    book_closure_to: { type: 'STRING', nullable: true, description: 'YYYY-MM-DD end of book closure, or null.' },
   },
   required: ['summary', 'figures'],
 };
@@ -150,82 +87,114 @@ export async function pdfText(bytes: Uint8Array): Promise<string> {
   }
 }
 
-export async function readAnnouncement(ai: GeminiClient, pdf: Uint8Array, meta: { symbol: string; title: string }): Promise<AnnouncementDigest & { model: string }> {
+export async function readAnnouncement(ai: LlmRouter, pdf: Uint8Array, meta: { symbol: string; title: string }): Promise<AnnouncementDigest> {
   const text = await pdfText(pdf);
-  const { data, model } = await ai.json<{ summary: string; figures: { label: string; value: string }[] }>(
-    [
-      { inline_data: { mime_type: 'application/pdf', data: Buffer.from(pdf).toString('base64') } },
-      { text: `PSX announcement for ${meta.symbol}: "${meta.title}". Summarize what it means for a shareholder and list the key figures exactly as printed. If it is only a notice of a future meeting, say so and give the date.` },
-    ],
-    ANN_SCHEMA,
+  const { data, model } = await ai.json<any>('pdf',
     'You read Pakistan Stock Exchange company announcements. Report only what the document says. Never guess, never give investment advice, never invent numbers.',
-  );
+    [
+      { pdf: { base64: Buffer.from(pdf).toString('base64'), text } },
+      { text: `PSX announcement for ${meta.symbol}: "${meta.title}". Summarize what it means for a shareholder, list key figures exactly as printed, and fill the dividend fields only if a cash dividend is declared in it.` },
+    ], ANN_SCHEMA);
   const known = text ? numberSet(text) : [];
-  const figures = (data.figures ?? []).slice(0, 5).map((f) => ({
-    label: String(f.label).slice(0, 60),
-    value: String(f.value).slice(0, 60),
-    verified: !!text && numbersIn(String(f.value)).length > 0 && numbersGrounded(String(f.value), known).ok,
+  const checks = (s: string) => !!text && numbersGrounded(s, known).ok;
+  const figures = (Array.isArray(data.figures) ? data.figures : []).slice(0, 5).map((f: any) => ({
+    label: clamp(f.label, 60), value: clamp(f.value, 60),
+    verified: numbersIn(String(f.value)).length > 0 && checks(String(f.value)),
   }));
-  const summary = String(data.summary ?? '').slice(0, 400);
-  const verified = !!text && numbersGrounded(summary, known).ok && figures.every((f) => f.verified || numbersIn(f.value).length === 0);
-  return { summary, figures, verified, model };
+  const summary = clamp(data.summary, 400);
+  const dps = Number(data.cash_dividend_per_share);
+  const dividend = Number.isFinite(dps) && dps > 0 && dps < 10_000 ? {
+    dps: Math.round(dps * 100) / 100,
+    type: ['interim', 'final', 'special'].includes(data.dividend_type) ? data.dividend_type : null,
+    book_closure_from: isoDate(data.book_closure_from),
+    book_closure_to: isoDate(data.book_closure_to),
+    // "70%" on Rs 10 face value is printed as 70, so accept either the DPS or the percentage form.
+    verified: !!text && (numbersGrounded(String(dps), known).ok || numbersGrounded(String(dps * 10), known).ok),
+  } : null;
+  return {
+    summary, figures, dividend, model,
+    verified: checks(summary || '0') && figures.every((f: { value: string; verified: boolean }) => f.verified || numbersIn(f.value).length === 0),
+  };
 }
 
 // ---------------------------------------------------------------------------
 // 2. Portfolio assistant
 // ---------------------------------------------------------------------------
-export type SuggestionAction = 'buy' | 'add' | 'hold' | 'trim' | 'sell' | 'watch' | 'review';
-export interface Suggestion { action: SuggestionAction; symbol: string | null; text: string; why: string; confidence: 'low' | 'medium' | 'high' }
-export interface Insight { headline: string; suggestions: Suggestion[]; plan_note: string | null; risks: string | null }
+export interface Insight {
+  headline: string;
+  stance: 'buy' | 'hold' | 'wait' | null;
+  suggestions: AiSuggestion[];
+  holding_calls: { symbol: string; call: HoldingCallKind; text: string }[];
+  rebalance: string | null;
+  cash_note: string | null;
+  risks: string | null;
+}
 
 export interface InsightFacts {
   date: string;
-  market: { kse100: number | null; change_pct: number | null; rules_say: string; rules_reason: string; crash_level: number };
-  rules: { max_position_pct: number; below_cost_alert_pct: number; shariah_only: boolean; monthly_budget_pkr: number; crash_fund_pkr: number };
-  portfolio: { total_value_pkr: number; total_pnl_pct: number | null; sectors: { sector: string; pct: number }[] };
+  market: { kse100: number | null; change_pct: number | null; rules_say: string; rules_reason: string; crash_level: number; market_open: boolean };
+  rules: { max_position_pct: number; opportunity_below_last_buy_pct: number; shariah_only: boolean; crash_fund_pkr: number };
+  money: { monthly_budget_pkr: number; invested_this_month_pkr: number; cash_left_this_month_pkr: number };
+  portfolio: { total_value_pkr: number; total_pnl_pct: number | null; sectors: { sector: string; pct: number }[]; rebalance_flags: string[] };
   holdings: Record<string, unknown>[];
   watchlist: Record<string, unknown>[];
   screen_candidates: Record<string, unknown>[];
-  plan_tranche_1: { symbol: string; shares: number; rupees: number; kind: string }[];
+  upcoming_dividends: Record<string, unknown>[];
   recent_news: { symbol: string; date: string; summary: string }[];
 }
+
+const CALLS: HoldingCallKind[] = ['hold', 'average_down', 'opportunity', 'trim', 'review'];
+const ACTIONS: AiSuggestion['action'][] = ['buy', 'add', 'hold', 'trim', 'sell', 'watch', 'review'];
 
 const INSIGHT_SCHEMA = {
   type: 'OBJECT',
   properties: {
-    headline: { type: 'STRING', description: 'One sentence, at most 120 characters.' },
+    headline: { type: 'STRING', description: 'One sentence, at most 110 characters, what matters most today.' },
+    stance: { type: 'STRING', enum: ['buy', 'hold', 'wait'], description: 'Overall: put cash to work today, hold, or wait.' },
+    holding_calls: {
+      type: 'ARRAY',
+      description: 'One entry for EVERY holding.',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          symbol: { type: 'STRING' },
+          call: { type: 'STRING', enum: CALLS },
+          text: { type: 'STRING', description: 'At most 80 characters, e.g. "12.3% below your last buy of Rs 130.45".' },
+        },
+        required: ['symbol', 'call', 'text'],
+      },
+    },
     suggestions: {
       type: 'ARRAY',
       items: {
         type: 'OBJECT',
         properties: {
-          action: { type: 'STRING', enum: ['buy', 'add', 'hold', 'trim', 'sell', 'watch', 'review'] },
+          action: { type: 'STRING', enum: ACTIONS },
           symbol: { type: 'STRING', nullable: true },
-          text: { type: 'STRING', description: 'The suggestion, at most 160 characters.' },
-          why: { type: 'STRING', description: 'Reason citing only numbers from the facts, at most 200 characters.' },
+          text: { type: 'STRING', description: 'At most 140 characters.' },
+          why: { type: 'STRING', description: 'Reason citing only numbers from the facts, at most 180 characters.' },
           confidence: { type: 'STRING', enum: ['low', 'medium', 'high'] },
         },
         required: ['action', 'text', 'why', 'confidence'],
       },
     },
-    plan_note: { type: 'STRING', description: "Comment on this month's rule-based plan, at most 250 characters.", nullable: true },
-    risks: { type: 'STRING', description: 'Main risk to watch, at most 160 characters.', nullable: true },
+    rebalance: { type: 'STRING', nullable: true, description: 'One sentence on balance across sectors/stocks, or null if fine.' },
+    cash_note: { type: 'STRING', nullable: true, description: 'Where this month\'s remaining cash could go, at most 160 characters.' },
+    risks: { type: 'STRING', nullable: true, description: 'Main risk, at most 140 characters.' },
   },
-  required: ['headline', 'suggestions'],
+  required: ['headline', 'stance', 'holding_calls', 'suggestions'],
 };
 
 const INSIGHT_SYSTEM = `You are a cautious assistant for a retail investor on the Pakistan Stock Exchange.
-You give a second opinion on their portfolio using ONLY the JSON facts provided.
-Rules you must follow:
-- Use only numbers that appear in the facts. Do not estimate targets, forecasts or prices.
-- Only mention symbols that appear in the facts.
-- Respect the investor's own rules: never suggest adding to a holding whose status is hold_no_add or review, never suggest buying a stock already at or above max_position_pct, and when rules_say is "Wait" do not suggest buying.
-- "trim" or "sell" only with a concrete reason from the facts (e.g. over the position cap, sector over limit, weak results in recent_news, status review).
-- At most 4 suggestions, most important first. Skip plain "hold" lines unless holding is itself the point; say what to DO or WATCH.
-- recent_news contains AI summaries of company announcements: use them when relevant (results, dividends).
-- screen_candidates are high-yield, low-P/E KSE-100 stocks the investor does not own; you may suggest "watch" for one if it fits a sector they lack.
-- plan_note: comment on plan_tranche_1 itself (which stocks get the money and whether that mix looks sensible), not on the market.
-- Plain, short English for a non-expert. Say "profit/loss" not "PnL". No guarantees, no hype.`;
+Use ONLY the JSON facts. Never estimate targets, forecasts or prices; only quote numbers present in the facts.
+For each holding pick a call:
+- "average_down": price is meaningfully below the investor's last buy (vs_last_buy_pct) and buying more is sensible.
+- "opportunity": a strong chance, roughly opportunity_below_last_buy_pct or more below the last buy, fundamentals not broken.
+- "hold": nothing to do. "trim": over max_position_pct or sector over its limit. "review": status review or weak recent results.
+Never "average_down"/"opportunity"/"buy"/"add" for status hold_no_add or review, at or over max_position_pct, or non-Shariah when shariah_only.
+When rules_say is "Wait" the stance must not be "buy". Use recent_news (AI summaries of company filings) when relevant.
+Suggestions: at most 4, actions to DO or WATCH (skip plain holds). Mention screen_candidates only as "watch".
+Plain short English for a non-expert ("profit/loss", not "PnL"). No guarantees, no hype.`;
 
 export interface GuardContext {
   holdings: { symbol: string; status: string; weight_pct: number | null; is_shariah: boolean | null }[];
@@ -236,53 +205,113 @@ export interface GuardContext {
   rulesSay: 'Buy' | 'Hold' | 'Wait';
 }
 
-/** Drop anything the rules forbid or the facts don't support. Returns the kept suggestions and how many were dropped. */
-export function guardInsight(raw: Partial<Insight>, facts: unknown, g: GuardContext): { insight: Insight; dropped: number; reasons: string[] } {
+function buyBlocked(sym: string | null, g: GuardContext): string | null {
+  if (g.rulesSay === 'Wait') return 'rules say Wait (do not chase a rally)';
+  if (!sym) return null;
+  const h = g.holdings.find((x) => x.symbol === sym);
+  if (h && (h.status === 'hold_no_add' || h.status === 'review')) return `${sym} is ${h.status}`;
+  if (h?.weight_pct != null && h.weight_pct >= g.maxPositionPct) return `${sym} is at the position cap`;
+  if (g.shariahOnly && g.shariahOf(sym) !== true) return `${sym} not confirmed Shariah`;
+  return null;
+}
+
+/** Drop anything the rules forbid or the facts don't support. */
+export function guardInsight(raw: any, facts: unknown, g: GuardContext): { insight: Insight; dropped: number; reasons: string[] } {
   const known = numberSet(facts);
   const reasons: string[] = [];
-  const clamp = (s: unknown, n: number) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, n);
-  const kept: Suggestion[] = [];
-  for (const s of (raw.suggestions ?? []).slice(0, 6)) {
+  const grounded = (s: string) => {
+    const chk = numbersGrounded(s, known);
+    return chk.ok ? null : `numbers not in the data: ${chk.unknown.join(', ')}`;
+  };
+
+  const suggestions: AiSuggestion[] = [];
+  const rawS: any[] = Array.isArray(raw?.suggestions) ? raw.suggestions.slice(0, 6) : [];
+  for (const s of rawS) {
     const sym = s.symbol ? String(s.symbol).toUpperCase().trim() : null;
-    const action = s.action as SuggestionAction;
-    const text = clamp(s.text, 200);
-    const why = clamp(s.why, 240);
-    const h = sym ? g.holdings.find((x) => x.symbol === sym) : undefined;
+    const action = s.action as AiSuggestion['action'];
+    const text = clamp(s.text, 180);
+    const why = clamp(s.why, 220);
     const buying = action === 'buy' || action === 'add';
-    let reject: string | null = null;
-    if (!['buy', 'add', 'hold', 'trim', 'sell', 'watch', 'review'].includes(action)) reject = `unknown action ${action}`;
-    else if (sym && !g.universe.has(sym)) reject = `${sym} is not in your portfolio, watchlist or screen`;
-    else if (!text) reject = 'empty';
-    else if (buying && h && (h.status === 'hold_no_add' || h.status === 'review')) reject = `${sym} is ${h.status}`;
-    else if (buying && h?.weight_pct != null && h.weight_pct >= g.maxPositionPct) reject = `${sym} is at the position cap`;
-    else if (buying && g.shariahOnly && sym && g.shariahOf(sym) !== true) reject = `${sym} not confirmed Shariah`;
-    else if (buying && g.rulesSay === 'Wait') reject = 'rules say Wait (do not chase a rally)';
-    else {
-      const chk = numbersGrounded(`${text} ${why}`, known);
-      if (!chk.ok) reject = `numbers not in the data: ${chk.unknown.join(', ')}`;
-    }
+    const reject = !ACTIONS.includes(action) ? `unknown action ${action}`
+      : sym && !g.universe.has(sym) ? `${sym} is not in your portfolio, watchlist or screen`
+      : !text ? 'empty'
+      : buying ? buyBlocked(sym, g) ?? grounded(`${text} ${why}`)
+      : grounded(`${text} ${why}`);
     if (reject) { reasons.push(`${action} ${sym ?? ''}: ${reject}`.trim()); continue; }
-    kept.push({ action, symbol: sym, text, why, confidence: (['low', 'medium', 'high'].includes(s.confidence as string) ? s.confidence : 'low') as Suggestion['confidence'] });
-    if (kept.length === 4) break;
+    if (suggestions.length < 4) suggestions.push({ action, symbol: sym, text, why, confidence: ['low', 'medium', 'high'].includes(s.confidence) ? s.confidence : 'low' });
   }
-  const headline = clamp(raw.headline, 140);
-  const planNote = raw.plan_note ? clamp(raw.plan_note, 300) : null;
-  const risks = raw.risks ? clamp(raw.risks, 200) : null;
-  // Free-text fields must also stay grounded; drop them rather than show an invented number.
-  const safe = (s: string | null) => (s && numbersGrounded(s, known).ok ? s : null);
+
+  const holdingCalls: Insight['holding_calls'] = [];
+  for (const c of Array.isArray(raw?.holding_calls) ? raw.holding_calls : []) {
+    const sym = String(c?.symbol ?? '').toUpperCase().trim();
+    const call = c?.call as HoldingCallKind;
+    const text = clamp(c?.text, 100);
+    if (!g.holdings.some((h) => h.symbol === sym) || !CALLS.includes(call) || !text || holdingCalls.some((x) => x.symbol === sym)) continue;
+    const adding = call === 'average_down' || call === 'opportunity';
+    const reject = (adding ? buyBlocked(sym, { ...g, rulesSay: 'Hold' }) : null) ?? grounded(text);
+    if (reject) { reasons.push(`call ${call} ${sym}: ${reject}`); continue; }
+    holdingCalls.push({ symbol: sym, call, text });
+  }
+
+  const safe = (s: unknown, n: number) => { const t = clamp(s, n); return t && !grounded(t) ? t : null; };
+  let stance: Insight['stance'] = ['buy', 'hold', 'wait'].includes(raw?.stance) ? raw.stance : null;
+  if (stance === 'buy' && g.rulesSay === 'Wait') { reasons.push('stance buy on a Wait day'); stance = 'wait'; }
   return {
     insight: {
-      headline: safe(headline) ?? (kept[0]?.text ?? 'Nothing stands out today. Stick to your plan.'),
-      suggestions: kept,
-      plan_note: safe(planNote),
-      risks: safe(risks),
+      headline: safe(raw?.headline, 130) ?? suggestions[0]?.text ?? 'Nothing stands out today. Stick to your plan.',
+      stance, suggestions, holding_calls: holdingCalls,
+      rebalance: safe(raw?.rebalance, 220), cash_note: safe(raw?.cash_note, 200), risks: safe(raw?.risks, 180),
     },
-    dropped: (raw.suggestions?.length ?? 0) - kept.length,
+    dropped: rawS.length - suggestions.length,
     reasons,
   };
 }
 
-export async function portfolioInsight(ai: GeminiClient, facts: InsightFacts, g: GuardContext) {
-  const { data, model } = await ai.json<Partial<Insight>>([{ text: `Facts (JSON):\n${JSON.stringify(facts)}` }], INSIGHT_SCHEMA, INSIGHT_SYSTEM);
+export async function portfolioInsight(ai: LlmRouter, facts: InsightFacts, g: GuardContext) {
+  const { data, model } = await ai.json<any>('text', INSIGHT_SYSTEM, [{ text: `Facts (JSON):\n${JSON.stringify(facts)}` }], INSIGHT_SCHEMA);
   return { ...guardInsight(data, facts, g), model };
+}
+
+// ---------------------------------------------------------------------------
+// 3. Discover picks (market-wide, nightly)
+// ---------------------------------------------------------------------------
+const PICKS_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    items: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          symbol: { type: 'STRING' },
+          why: { type: 'STRING', description: 'At most 120 characters, citing only numbers from the facts.' },
+          frequency: { type: 'STRING', enum: ['Quarterly', 'Half-yearly', 'Yearly', 'Irregular'], nullable: true, description: 'Dividend kind only: usual payout frequency if known.' },
+        },
+        required: ['symbol', 'why'],
+      },
+    },
+  },
+  required: ['items'],
+};
+
+/** Rank and explain candidates the rules found. Only those symbols, only their numbers. */
+export async function discoverPicks(ai: LlmRouter, kind: 'undervalued' | 'dividend', candidates: Record<string, unknown>[]) {
+  const ask = kind === 'undervalued'
+    ? 'Pick up to 6 of these KSE-100 stocks that look most undervalued (low P/E against their sector, still profitable and paying dividends). Best first.'
+    : 'Pick up to 8 of these KSE-100 dividend payers that look most attractive for steady income. Best first. Give the usual payout frequency only if you are confident; otherwise null.';
+  const { data, model } = await ai.json<any>('text',
+    'You help a retail investor on the Pakistan Stock Exchange. Use only the JSON facts. Never invent numbers, targets or forecasts. Plain short English.',
+    [{ text: `${ask}\nFacts (JSON):\n${JSON.stringify(candidates)}` }], PICKS_SCHEMA);
+  const known = numberSet(candidates);
+  const allowed = new Set(candidates.map((c) => String(c.symbol)));
+  const items: { symbol: string; why: string; frequency?: string | null }[] = [];
+  for (const it of Array.isArray(data?.items) ? data.items : []) {
+    const symbol = String(it?.symbol ?? '').toUpperCase().trim();
+    const why = clamp(it?.why, 140);
+    if (!allowed.has(symbol) || !why || !numbersGrounded(why, known).ok || items.some((x) => x.symbol === symbol)) continue;
+    const frequency = kind === 'dividend' && ['Quarterly', 'Half-yearly', 'Yearly', 'Irregular'].includes(it?.frequency) ? it.frequency : null;
+    items.push(kind === 'dividend' ? { symbol, why, frequency } : { symbol, why });
+    if (items.length === (kind === 'undervalued' ? 6 : 8)) break;
+  }
+  return { items, model };
 }

@@ -1,14 +1,21 @@
-// Cloudflare Workers static assets (the successor to Pages). No server code: the built app only.
-// Static asset requests are free and unlimited on the Workers Free plan (checked 2026-10-06).
-// Deploy: npm run deploy
+// Cloudflare Workers: the built app (static assets, free and unlimited) plus a tiny API for
+// screenshot import (edge/index.ts). Deploy: npm run deploy
+// Secrets (set once, never in the repo): npx wrangler secret put GEMINI_API_KEY / GROQ_API_KEY
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "psx-assistant",
+  "main": "edge/index.ts",
   "compatibility_date": "2026-10-01",
   "assets": {
     "directory": "./dist",
-    // Routes are hash-based (/#/plan), so no SPA fallback: a missing file must be a real 404,
-    // never index.html served under an immutable /assets/ URL.
+    "binding": "ASSETS",
+    // Only /api/* runs the Worker; every other request is a plain static file.
+    "run_worker_first": ["/api/*"],
+    // Routes are hash-based (/#/home), so no SPA fallback: a missing file must be a real 404.
     "not_found_handling": "none"
+  },
+  "vars": {
+    "SUPABASE_URL": "https://tqggelxnrymytxmxftqn.supabase.co",
+    "SUPABASE_KEY": "sb_publishable_EZv38dgY1VfUVKEi16Ybag_Khi-6OMV"
   }
 }

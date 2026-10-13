@@ -3,16 +3,22 @@ import type { Session } from '@supabase/supabase-js';
 import { DemoSource, LiveSource, supabase, type AppData, type DataSource } from './lib/data.ts';
 import { config, isIOS, isStandalone } from './lib/config.ts';
 import { resyncPush } from './lib/push.ts';
+import { applyTheme, watchSystemTheme } from './lib/theme.ts';
+import { haptic, usePullToRefresh } from './lib/gestures.ts';
+import { ToastProvider } from './components/Toast.tsx';
+import { Icon, type IconName } from './components/Icon.tsx';
+import { Skeleton } from './components/ui.tsx';
 import { Login, NewPassword } from './screens/Login.tsx';
 import { Onboarding } from './screens/Onboarding.tsx';
-import { Today } from './screens/Today.tsx';
+import { Home } from './screens/Home.tsx';
 import { Portfolio } from './screens/Portfolio.tsx';
-import { PlanScreen } from './screens/Plan.tsx';
+import { Discover } from './screens/Discover.tsx';
 import { News } from './screens/News.tsx';
-import { SettingsScreen } from './screens/Settings.tsx';
+import { Profile } from './screens/Profile.tsx';
 
-export type Route = 'today' | 'portfolio' | 'plan' | 'news' | 'settings';
-const ROUTES: Route[] = ['today', 'portfolio', 'plan', 'news', 'settings'];
+export type Route = 'home' | 'portfolio' | 'discover' | 'news' | 'profile';
+const ROUTES: Route[] = ['home', 'portfolio', 'discover', 'news', 'profile'];
+const LEGACY: Record<string, Route> = { today: 'home', plan: 'home', settings: 'profile' };
 
 export interface ScreenProps {
   data: AppData;
@@ -22,8 +28,8 @@ export interface ScreenProps {
 }
 
 const readRoute = (): Route => {
-  const r = location.hash.replace(/^#\/?/, '').split(/[/?]/)[0] as Route;
-  return ROUTES.includes(r) ? r : 'today';
+  const r = location.hash.replace(/^#\/?/, '').split(/[/?]/)[0];
+  return ROUTES.includes(r as Route) ? (r as Route) : LEGACY[r] ?? 'home';
 };
 
 const store = {
@@ -40,14 +46,17 @@ export default function App() {
   const [onboarded, setOnboarded] = useState(() => store.get('psx-ios-onboarded') === '1');
 
   useEffect(() => {
-    const onHash = () => setRoute(readRoute());
+    applyTheme();
+    const unwatch = watchSystemTheme();
+    const onHash = () => { setRoute(readRoute()); window.scrollTo({ top: 0 }); };
     window.addEventListener('hashchange', onHash);
     // A tapped notification asks an already-open app to show its screen.
     const onMsg = (e: MessageEvent) => {
-      if (e.data?.type === 'open' && typeof e.data.url === 'string') location.hash = e.data.url.split('#')[1] ?? '/today';
+      if (e.data?.type === 'open' && typeof e.data.url === 'string') location.hash = e.data.url.split('#')[1] ?? '/home';
     };
     navigator.serviceWorker?.addEventListener('message', onMsg);
     return () => {
+      unwatch();
       window.removeEventListener('hashchange', onHash);
       navigator.serviceWorker?.removeEventListener('message', onMsg);
     };
@@ -91,6 +100,7 @@ export default function App() {
     return () => document.removeEventListener('visibilitychange', onVisible);
   }, [source, reload]);
 
+  const { pull, busy } = usePullToRefresh(reload);
   const go = (r: Route) => { location.hash = `/${r}`; };
   const startDemo = () => { store.set('psx-demo', '1'); setDemo(true); };
   const exitDemo = () => {
@@ -103,65 +113,89 @@ export default function App() {
     return <Onboarding onSkip={() => { store.set('psx-ios-onboarded', '1'); setOnboarded(true); }} />;
   }
   if (recovering) return <NewPassword onDone={() => setRecovering(false)} />;
-  if (!authReady) return <Splash />;
+  if (!authReady) return <Loading />;
   if (!source) return <Login onDemo={startDemo} />;
 
   const props = data ? { data, source, reload, go } : null;
   return (
-    <div className="mx-auto flex min-h-dvh max-w-md flex-col">
-      {demo && (
-        <div className="safe-top bg-amber-100 px-4 py-2 text-center text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200">
-          Demo: your seed portfolio with PSX prices from the Oct 5, 2026 close. <button className="font-semibold underline" onClick={exitDemo}>Sign in</button>
-        </div>
-      )}
-      <main className={`flex-1 space-y-5 px-4 pb-28 ${demo ? 'pt-4' : 'safe-top pt-4'}`}>
-        {error && !data && (
-          <div className="space-y-3 pt-10 text-center">
-            <p className="text-sm text-rose-700 dark:text-rose-400">Couldn't load your data: {error}</p>
-            <button className="text-sm font-semibold text-teal-700 underline" onClick={reload}>Try again</button>
+    <ToastProvider>
+      <div className="mx-auto flex min-h-dvh max-w-md flex-col">
+        {demo && (
+          <div className="safe-top bg-amber-100 px-4 py-2 text-center text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200">
+            Demo with your seed portfolio and PSX prices from Oct 5. <button className="cursor-pointer font-semibold underline" onClick={exitDemo}>Sign in</button>
           </div>
         )}
-        {!props && !error && <Splash inline />}
-        {props && route === 'today' && <Today {...props} />}
-        {props && route === 'portfolio' && <Portfolio {...props} />}
-        {props && route === 'plan' && <PlanScreen {...props} />}
-        {props && route === 'news' && <News {...props} />}
-        {props && route === 'settings' && <SettingsScreen {...props} onExitDemo={exitDemo} />}
-      </main>
-      <Nav route={route} go={go} />
-    </div>
+        <div aria-hidden={!pull} className="flex justify-center overflow-hidden transition-[height]" style={{ height: pull }}>
+          <span className={`mt-3 flex h-8 w-8 items-center justify-center rounded-full bg-white shadow dark:bg-slate-800 ${busy ? 'animate-spin' : ''}`} style={{ transform: busy ? undefined : `rotate(${pull * 4}deg)` }}>
+            <Icon name="refresh" className="h-4 w-4 text-teal-600" />
+          </span>
+        </div>
+        <main key={route} className={`flex-1 animate-rise space-y-5 px-4 pb-28 ${demo ? 'pt-3' : 'safe-top pt-3'}`}>
+          {error && !data && (
+            <div className="space-y-3 pt-10 text-center">
+              <p className="text-sm text-rose-700 dark:text-rose-400">Couldn't load your data: {error}</p>
+              <button className="cursor-pointer text-sm font-semibold text-teal-700 underline" onClick={reload}>Try again</button>
+            </div>
+          )}
+          {!props && !error && <ScreenSkeleton />}
+          {props && route === 'home' && <Home {...props} />}
+          {props && route === 'portfolio' && <Portfolio {...props} />}
+          {props && route === 'discover' && <Discover {...props} />}
+          {props && route === 'news' && <News {...props} />}
+          {props && route === 'profile' && <Profile {...props} onExitDemo={exitDemo} />}
+        </main>
+        <TabBar route={route} go={go} unread={data ? countNew(data) : 0} />
+      </div>
+    </ToastProvider>
   );
 }
 
-function Splash({ inline }: { inline?: boolean }) {
+/** Alerts and filings from the last 24 hours, shown as a dot on the News tab. */
+function countNew(d: AppData) {
+  const since = Date.now() - 24 * 3600_000;
+  return d.alerts.filter((a) => Date.parse(a.sent_at) > since && a.channel !== 'none').length;
+}
+
+function Loading() {
+  return <div className="flex min-h-dvh items-center justify-center"><div className="h-8 w-8 animate-spin rounded-full border-2 border-teal-700 border-t-transparent" aria-label="Loading" /></div>;
+}
+
+function ScreenSkeleton() {
   return (
-    <div className={`flex items-center justify-center ${inline ? 'pt-24' : 'min-h-dvh'}`}>
-      <div className="h-8 w-8 animate-spin rounded-full border-2 border-teal-700 border-t-transparent" aria-label="Loading" />
+    <div className="space-y-4 pt-2" aria-label="Loading">
+      <Skeleton className="h-8 w-40" />
+      <Skeleton className="h-32 w-full rounded-3xl" />
+      <div className="flex gap-3">{[0, 1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-14 w-14 rounded-full" />)}</div>
+      <Skeleton className="h-48 w-full rounded-3xl" />
     </div>
   );
 }
 
-const NAV: { route: Route; label: string; icon: string }[] = [
-  { route: 'today', label: 'Today', icon: 'M3 12l9-9 9 9M5 10v10h14V10' },
-  { route: 'portfolio', label: 'Portfolio', icon: 'M4 7h16v13H4zM9 7V4h6v3' },
-  { route: 'plan', label: 'Plan', icon: 'M9 5h11M9 12h11M9 19h11M4 5h.01M4 12h.01M4 19h.01' },
-  { route: 'news', label: 'News', icon: 'M5 4h14v16H5zM8 8h8M8 12h8M8 16h5' },
-  { route: 'settings', label: 'Settings', icon: 'M12 15a3 3 0 100-6 3 3 0 000 6zM19 12a7 7 0 00-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 00-2-1.2L14 3h-4l-.5 2.6a7 7 0 00-2 1.2l-2.4-1-2 3.4 2 1.6a7 7 0 000 2.4l-2 1.6 2 3.4 2.4-1a7 7 0 002 1.2L10 21h4l.5-2.6a7 7 0 002-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2z' },
+const TABS: { route: Route; label: string; icon: IconName }[] = [
+  { route: 'home', label: 'Home', icon: 'home' },
+  { route: 'portfolio', label: 'Portfolio', icon: 'briefcase' },
+  { route: 'discover', label: 'Discover', icon: 'compass' },
+  { route: 'news', label: 'News', icon: 'news' },
+  { route: 'profile', label: 'Profile', icon: 'user' },
 ];
 
-function Nav({ route, go }: { route: Route; go: (r: Route) => void }) {
+function TabBar({ route, go, unread }: { route: Route; go: (r: Route) => void; unread: number }) {
   return (
-    <nav className="safe-bottom fixed inset-x-0 bottom-0 z-10 border-t border-slate-200 bg-white/95 backdrop-blur dark:border-slate-800 dark:bg-slate-950/95">
+    <nav className="safe-bottom fixed inset-x-0 bottom-0 z-30 border-t border-slate-200/80 bg-white/90 backdrop-blur-xl dark:border-slate-800 dark:bg-black/85">
       <ul className="mx-auto flex max-w-md">
-        {NAV.map((n) => (
-          <li key={n.route} className="flex-1">
-            <button onClick={() => go(n.route)} aria-current={route === n.route ? 'page' : undefined}
-              className={`flex w-full flex-col items-center gap-0.5 py-2 text-[11px] font-medium ${route === n.route ? 'text-teal-700 dark:text-teal-400' : 'text-slate-500 dark:text-slate-400'}`}>
-              <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={n.icon} /></svg>
-              {n.label}
-            </button>
-          </li>
-        ))}
+        {TABS.map((t) => {
+          const active = route === t.route;
+          return (
+            <li key={t.route} className="flex-1">
+              <button type="button" onClick={() => { haptic(); go(t.route); }} aria-current={active ? 'page' : undefined}
+                className={`relative flex min-h-14 w-full cursor-pointer flex-col items-center justify-center gap-0.5 text-[11px] font-medium transition active:scale-90 ${active ? 'text-slate-900 dark:text-white' : 'text-slate-400 dark:text-slate-500'}`}>
+                <Icon name={t.icon} className={`h-6 w-6 ${active ? 'stroke-[2.4]' : ''}`} />
+                {t.label}
+                {t.route === 'news' && unread > 0 && !active && <span className="absolute top-2 left-1/2 ml-2 h-2 w-2 rounded-full bg-rose-500" aria-label={`${unread} new`} />}
+              </button>
+            </li>
+          );
+        })}
       </ul>
     </nav>
   );
