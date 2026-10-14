@@ -64,9 +64,17 @@ Gestures always have a button alternative (detail sheet buttons, `…` menu). Re
 | night | 21:00 Mon–Fri | One digest: close, your portfolio, company news, upcoming dividends, rebalance notes. Outside the 3-a-day limit. |
 | telegram | every 20 min | Links Telegram chats. |
 
-Crons and the job map live in `.github/workflows/worker.yml` and `worker/run.ts` (`CRON_TO_JOB`). PSX hours are
+**Who rings the bell:** GitHub's own cron is unreliable for this cadence (runs hours late or not at all), so the
+Cloudflare Worker carries the schedule (`triggers.crons` in `wrangler.jsonc`, UTC) and each tick starts the GitHub job
+through the API (`workflow_dispatch`). That needs one secret on the Worker: a fine-grained GitHub token for this repo
+with **Actions: Read and write** (github.com → Settings → Developer settings → Fine-grained tokens), stored with
+`npx wrangler secret put GITHUB_DISPATCH_TOKEN`. Tokens expire (a year at most): make a new one before then. GitHub's
+cron stays in `worker.yml` as a fallback; a job that finished fine within the last 20 minutes (night: 6 hours) skips
+a duplicate tick, so the two never double up. Market ticks start the job only while PSX trades, plus 20 minutes
+after the close for closing prices. The job map lives in `worker/run.ts` (`CRON_TO_JOB`). PSX hours are
 in `shared/rules.json` ([source](https://www.psx.com.pk/psx/exchange/general/trading-hours); Ramadan hours differ).
 Nothing repeats: every alert has a dedupe key; buying chances repeat at most weekly per stock; quiet-hours alerts wait.
+The app itself reloads every 5 minutes while it is open during trading hours, and on every reopen or pull-down.
 
 ## AI (Groq + Gemini + OpenRouter, free tiers)
 
@@ -112,7 +120,8 @@ GitHub → Settings → Secrets and variables → Actions:
 
 Variables: `APP_URL`, `TELEGRAM_BOT` (bot username; turns on the Telegram workflow).
 
-Cloudflare Worker secrets (screenshot import), set once: `npx wrangler secret put OPENROUTER_API_KEY` and `GEMINI_API_KEY`.
+Cloudflare Worker secrets, set once: `npx wrangler secret put OPENROUTER_API_KEY` and `GEMINI_API_KEY` (screenshot
+import), `GITHUB_DISPATCH_TOKEN` (the schedule, see above).
 Public app config lives in `.env` (not committed): `VITE_SUPABASE_URL`, `VITE_SUPABASE_KEY`, `VITE_VAPID_PUBLIC_KEY`, `VITE_TELEGRAM_BOT`.
 
 Supabase → Authentication → URL Configuration → Site URL = the app URL (for sign-up and reset emails).
