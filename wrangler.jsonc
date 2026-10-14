@@ -9,6 +9,9 @@
   "compatibility_date": "2026-10-01",
   // Workers Logs (free): import errors are logged here, never the screenshots.
   "observability": { "enabled": true },
+  // On-time schedule (UTC; PKT = +5): market ticks every 30 min while PSX trades, and the 21:00 PKT night digest.
+  // Each tick starts the GitHub worker job through the API (secret GITHUB_DISPATCH_TOKEN); see edge/index.ts.
+  "triggers": { "crons": ["15,45 4-11 * * 1-5", "0 16 * * 1-5"] },
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",

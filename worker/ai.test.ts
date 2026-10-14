@@ -6,7 +6,7 @@ import { GeminiProvider, GroqProvider, LlmHealth, LlmRouter, makeRouter, parseJs
 import { buildPortfolio } from '../shared/portfolio.ts';
 import { DEFAULT_SETTINGS } from '../shared/types.ts';
 import { SEED_HOLDINGS, SEED_INDEX, SEED_PRICES, SEED_WATCHLIST } from '../shared/fixtures/seed.ts';
-import { handleImport, handleStatus, importError, keyShape, whenPkt, type Env } from '../edge/index.ts';
+import { dispatchJob, handleImport, handleStatus, handleTick, importError, jobForTick, keyShape, whenPkt, type Env } from '../edge/index.ts';
 
 const owner = (): UserCtx => ({ id: 'owner-1', settings: { ...DEFAULT_SETTINGS, ai_enabled: true }, holdings: SEED_HOLDINGS, watchlist: SEED_WATCHLIST, telegram_chat_id: null, subs: [] });
 const seedFacts = () => {
@@ -193,6 +193,31 @@ describe('screenshot import endpoint', () => {
     expect(keyShape('OPENROUTER_API_KEY=sk-or-v1-abc', /^sk-or-/)).toEqual({ length: 31, expected_prefix: false, clean: false });
     expect(keyShape(undefined, /^x/)).toBeNull();
     expect((await handleStatus(get('Bearer bad.token'), env, spy)).status).toBe(401);
+  });
+  it('cron ticks start the market job only while PSX trades (plus 20 min after the close), and the night job at 21:00 PKT', () => {
+    const tick = '15,45 4-11 * * 1-5';
+    const at = (iso: string) => jobForTick(new Date(iso), tick);
+    expect(at('2026-10-13T04:45:00Z')).toBe('market'); // Tue 09:45 PKT
+    expect(at('2026-10-13T04:15:00Z')).toBeNull(); // Tue 09:15: too early
+    expect(at('2026-10-13T10:45:00Z')).toBe('market'); // Tue 15:45: closing prices
+    expect(at('2026-10-13T11:15:00Z')).toBeNull(); // Tue 16:15: closed
+    expect(at('2026-10-16T08:15:00Z')).toBeNull(); // Fri 13:15: prayer break
+    expect(at('2026-10-16T11:45:00Z')).toBe('market'); // Fri 16:45
+    expect(at('2026-10-17T05:00:00Z')).toBeNull(); // Saturday
+    expect(jobForTick(new Date('2026-10-13T16:00:00Z'), '0 16 * * 1-5')).toBe('night');
+  });
+  it('a tick starts the GitHub job through the API with the token; without a token it does nothing', async () => {
+    const calls: { url: string; init: RequestInit }[] = [];
+    const spy = (async (url: string, init?: RequestInit) => { calls.push({ url: String(url), init: init! }); return new Response(null, { status: 204 }); }) as unknown as typeof fetch;
+    expect(await dispatchJob(env, 'market', spy)).toEqual({ ok: false, status: 0 });
+    expect(calls).toHaveLength(0);
+    const withToken = { ...env, GITHUB_DISPATCH_TOKEN: 'ghp_x' };
+    expect(await handleTick(withToken, Date.parse('2026-10-13T04:45:00Z'), '15,45 4-11 * * 1-5', spy)).toEqual({ ok: true, status: 204 });
+    expect(calls[0].url).toBe('https://api.github.com/repos/mrnisarali110/psx-assistant/actions/workflows/worker.yml/dispatches');
+    expect(JSON.parse(String(calls[0].init.body))).toEqual({ ref: 'main', inputs: { job: 'market' } });
+    expect(new Headers(calls[0].init.headers).get('Authorization')).toBe('Bearer ghp_x');
+    expect(await handleTick(withToken, Date.parse('2026-10-17T05:00:00Z'), '15,45 4-11 * * 1-5', spy)).toBeNull(); // Saturday: no call
+    expect(calls).toHaveLength(1);
   });
   it('turns provider errors into advice with a time to come back', () => {
     expect(importError('AI unavailable: openrouter cooling down until 2026-10-15T00:01:00.000Z: HTTP 429 free-models-per-day', '2026-10-15T00:01:00.000Z'))

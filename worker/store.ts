@@ -40,6 +40,8 @@ export interface Store {
   deleteSubscription(id: string): Promise<void>;
   startRun(job: string): Promise<number | null>;
   finishRun(id: number | null, ok: boolean, errors: string[]): Promise<void>;
+  /** The most recent run of this job (to skip a duplicate tick). */
+  lastRun(job: string): Promise<{ started_at: string; ok: boolean | null } | null>;
   findUserByEmail(email: string): Promise<string | null>;
   consumeLinkCode(code: string): Promise<string | null>;
   setTelegramChat(userId: string, chatId: number): Promise<void>;
@@ -162,6 +164,11 @@ export class SupabaseStore implements Store {
     check(await this.sb.from('worker_runs').update({ finished_at: new Date().toISOString(), ok, errors }).eq('id', id), 'finish run');
   }
 
+  async lastRun(job: string) {
+    const rows = check(await this.sb.from('worker_runs').select('started_at, ok').eq('job', job).order('started_at', { ascending: false }).limit(1), 'last run') as { started_at: string; ok: boolean | null }[];
+    return rows[0] ?? null;
+  }
+
   async findUserByEmail(email: string) {
     for (let page = 1; page <= 20; page++) {
       const { data, error } = await this.sb.auth.admin.listUsers({ page, perPage: 200 });
@@ -249,7 +256,7 @@ export class MemoryStore implements Store {
   index: IndexSnapshot[] = [];
   announcements: (Announcement & { ai_checked_at?: string })[] = [];
   alerts: (LoggedAlert & { user_id: string })[] = [];
-  runs: { id: number; job: string; ok?: boolean; errors?: string[] }[] = [];
+  runs: { id: number; job: string; started_at: string; ok?: boolean; errors?: string[] }[] = [];
   deletedSubs: string[] = [];
   linkCodes: Record<string, { user_id: string; expires_at: string }> = {};
   telegram: Record<string, number> = {};
@@ -277,8 +284,9 @@ export class MemoryStore implements Store {
     for (const r of rows) if (!this.alerts.some((a) => a.user_id === userId && a.dedupe_key === r.dedupe_key)) this.alerts.push({ ...r, user_id: userId });
   }
   async deleteSubscription(id: string) { this.deletedSubs.push(id); }
-  async startRun(job: string) { this.runs.push({ id: this.runs.length + 1, job }); return this.runs.length; }
+  async startRun(job: string) { this.runs.push({ id: this.runs.length + 1, job, started_at: this.clock().toISOString() }); return this.runs.length; }
   async finishRun(id: number | null, ok: boolean, errors: string[]) { const r = this.runs.find((x) => x.id === id); if (r) Object.assign(r, { ok, errors }); }
+  async lastRun(job: string) { const r = [...this.runs].reverse().find((x) => x.job === job); return r ? { started_at: r.started_at, ok: r.ok ?? null } : null; }
   async findUserByEmail(email: string) { return this.emails[email.toLowerCase()] ?? null; }
   async consumeLinkCode(code: string) {
     const row = this.linkCodes[code.toUpperCase()];

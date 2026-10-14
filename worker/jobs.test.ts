@@ -79,6 +79,18 @@ describe('market job', () => {
     expect(store.users[0].holdings.find((h) => h.symbol === 'SYS')!.sector).toBe('Technology'); // an existing value is left alone
   });
 
+  it('a duplicate tick minutes after a good run does nothing; a failed run or a later tick runs again', async () => {
+    const store = new MemoryStore([owner(false)], () => MON_1230);
+    const n = new ConsoleNotifier(quiet);
+    expect((await runJob('market', deps(store, n, MON_1230))).skipped).toBeUndefined();
+    expect((await runJob('market', deps(store, n, new Date(MON_1230.getTime() + 5 * 60_000)))).skipped).toBe(true);
+    expect(store.runs).toHaveLength(1); // the duplicate left no heartbeat row
+    expect((await runJob('market', deps(store, n, new Date(MON_1230.getTime() + 25 * 60_000)))).skipped).toBeUndefined();
+    const down = new MemoryStore([owner(false)], () => MON_1230);
+    await runJob('market', deps(down, n, MON_1230, { fetchSnapshot: broken }));
+    expect((await runJob('market', deps(down, n, new Date(MON_1230.getTime() + 5 * 60_000)))).skipped).toBeUndefined(); // last run failed: try again
+  });
+
   it('sends one bundled notification of buy chances and does not repeat it in the next run', async () => {
     const store = new MemoryStore([owner(false)]);
     const n = new ConsoleNotifier(quiet);

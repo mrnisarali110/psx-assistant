@@ -7,6 +7,8 @@
  */
 import { PREFERENCE, makeRouter, type LlmRouter } from '../shared/llm.ts';
 import { cleanKnownSymbols, importParts, readPortfolioScreenshots } from '../shared/screenshots.ts';
+import { hhmmToMinutes, pktParts } from '../shared/time.ts';
+import { DEFAULT_RULES } from '../shared/types.ts';
 
 export interface Env {
   ASSETS: { fetch(req: Request): Promise<Response> };
@@ -16,7 +18,12 @@ export interface Env {
   GROQ_API_KEY?: string;
   OPENROUTER_API_KEY?: string;
   OPENROUTER_MODELS?: string; // optional comma list to pin models instead of discovering free ones
+  /** Fine-grained GitHub token (Actions: read and write on the repo): lets the cron below start the worker on time. */
+  GITHUB_DISPATCH_TOKEN?: string;
+  GITHUB_REPO?: string; // owner/name, default below
 }
+
+const DEFAULT_REPO = 'mrnisarali110/psx-assistant';
 
 const MAX_IMAGES = 4;
 const MAX_IMAGE_BYTES = 4_000_000; // base64 length, ~3 MB image; the app downsizes before upload
@@ -137,6 +144,50 @@ export async function handleStatus(req: Request, env: Env, fetchImpl: typeof fet
   });
 }
 
+// ---------------------------------------------------------------------------
+// Schedule: Cloudflare's cron fires on time; GitHub's own cron can run hours late or not at all.
+// Each tick starts the GitHub worker job (workflow_dispatch). The job skips itself if the same job already
+// ran minutes ago, so GitHub's delayed cron, kept as a fallback, never doubles the work.
+// Crons (UTC) are in wrangler.jsonc: "15,45 4-11 * * 1-5" (market ticks) and "0 16 * * 1-5" (21:00 PKT night).
+// ---------------------------------------------------------------------------
+export type CronJob = 'market' | 'night';
+
+/** Which worker job a tick should start: market only while PSX trades (plus 20 min after the close for closing prices). */
+export function jobForTick(now: Date, cron: string): CronJob | null {
+  if (/^0 16\b/.test(cron)) return 'night';
+  const h = DEFAULT_RULES.market_hours_pkt;
+  const { weekday, minutes } = pktParts(now);
+  if (weekday < 1 || weekday > 5) return null;
+  const sessions = weekday === 5 ? h.fri : h.mon_thu;
+  const close = hhmmToMinutes(weekday === 5 ? h.close_fri : h.close_mon_thu);
+  const trading = sessions.some(([s, e]) => minutes >= hhmmToMinutes(s) + 15 && minutes <= hhmmToMinutes(e));
+  const afterClose = minutes > close && minutes <= close + 20;
+  return trading || afterClose ? 'market' : null;
+}
+
+export async function dispatchJob(env: Env, job: CronJob, fetchImpl: typeof fetch = fetch): Promise<{ ok: boolean; status: number }> {
+  if (!env.GITHUB_DISPATCH_TOKEN) {
+    console.log('cron: GITHUB_DISPATCH_TOKEN not set, so GitHub\'s own cron is the only schedule');
+    return { ok: false, status: 0 };
+  }
+  const r = await fetchImpl(`https://api.github.com/repos/${env.GITHUB_REPO ?? DEFAULT_REPO}/actions/workflows/worker.yml/dispatches`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${env.GITHUB_DISPATCH_TOKEN}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28',
+      'User-Agent': 'psx-assistant-cron', 'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ ref: 'main', inputs: { job } }),
+  });
+  console.log(`cron: ${job} → GitHub HTTP ${r.status}${r.status === 204 ? '' : ` ${(await r.text().catch(() => '')).slice(0, 120)}`}`);
+  return { ok: r.status === 204, status: r.status };
+}
+
+export async function handleTick(env: Env, scheduledTime: number, cron: string, fetchImpl: typeof fetch = fetch) {
+  const job = jobForTick(new Date(scheduledTime), cron);
+  if (!job) return null;
+  return dispatchJob(env, job, fetchImpl);
+}
+
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
@@ -144,5 +195,8 @@ export default {
     if (url.pathname === '/api/ai-status') return handleStatus(req, env);
     if (url.pathname.startsWith('/api/')) return json({ error: 'Not found' }, 404);
     return env.ASSETS.fetch(req);
+  },
+  async scheduled(event: { scheduledTime: number; cron: string }, env: Env, ctx: { waitUntil(p: Promise<unknown>): void }) {
+    ctx.waitUntil(handleTick(env, event.scheduledTime, event.cron));
   },
 };

@@ -38,7 +38,11 @@ export interface JobDeps {
 export interface RunReport {
   ok: boolean; errors: string[]; notified: number; suppressed: number; users: number;
   ai: { announcements_read: number; dividends: number; insights: number; picks: number; suggestions_dropped: number };
+  skipped?: true; // the same job finished fine minutes ago (a duplicate tick), so nothing was done
 }
+
+/** A second start within this many minutes of a successful run is a duplicate tick (Cloudflare's cron and GitHub's late cron). */
+export const REPEAT_GUARD_MIN: Partial<Record<JobName, number>> = { market: 20, night: 360 };
 
 const rules = DEFAULT_RULES;
 const fmt0 = (v: number) => Math.round(v).toLocaleString('en-PK');
@@ -58,6 +62,15 @@ export async function runJob(job: JobName, deps: JobDeps): Promise<RunReport> {
   const log = deps.log ?? console.log;
   const { store } = deps;
   const report: RunReport = { ok: true, errors: [], notified: 0, suppressed: 0, users: 0, ai: { announcements_read: 0, dividends: 0, insights: 0, picks: 0, suggestions_dropped: 0 } };
+  const guard = REPEAT_GUARD_MIN[job];
+  if (guard) {
+    const last = await store.lastRun(job).catch(() => null);
+    const age = last ? now.getTime() - Date.parse(last.started_at) : NaN;
+    if (last?.ok && age >= 0 && age < guard * 60_000) {
+      log(`job=${job} already ran at ${last.started_at}: duplicate tick, nothing to do`);
+      return { ...report, skipped: true };
+    }
+  }
   const runId = await store.startRun(job);
   try {
     const users = await store.loadUsers();

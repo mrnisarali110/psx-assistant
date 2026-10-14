@@ -5,6 +5,8 @@ import { config, isIOS, isStandalone } from './lib/config.ts';
 import { resyncPush } from './lib/push.ts';
 import { applyTheme, watchSystemTheme } from './lib/theme.ts';
 import { haptic, usePullToRefresh } from './lib/gestures.ts';
+import { isMarketOpen } from '../shared/time.ts';
+import { DEFAULT_RULES } from '../shared/types.ts';
 import { ToastProvider } from './components/Toast.tsx';
 import { Icon, type IconName } from './components/Icon.tsx';
 import { Skeleton } from './components/ui.tsx';
@@ -97,7 +99,9 @@ export default function App() {
     if (source) resyncPush(source);
     const onVisible = () => document.visibilityState === 'visible' && reload();
     document.addEventListener('visibilitychange', onVisible);
-    return () => document.removeEventListener('visibilitychange', onVisible);
+    // While the app stays open during trading hours, pick up the worker's 30-minute price updates on its own.
+    const tick = setInterval(() => { if (document.visibilityState === 'visible' && isMarketOpen(new Date(), DEFAULT_RULES.market_hours_pkt)) reload(); }, 5 * 60_000);
+    return () => { document.removeEventListener('visibilitychange', onVisible); clearInterval(tick); };
   }, [source, reload]);
 
   const { pull, busy } = usePullToRefresh(reload);
