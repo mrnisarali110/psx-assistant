@@ -85,6 +85,22 @@ export function Segmented<T extends string>({ options, value, onChange, label }:
   );
 }
 
+/** One-of-many pills in a scrolling row (sort orders, filters). */
+export function Chips<T extends string>({ options, value, onChange, label }: {
+  options: { value: T; label: string }[]; value: T; onChange: (v: T) => void; label: string;
+}) {
+  return (
+    <div role="radiogroup" aria-label={label} className="-mx-4 flex gap-1.5 overflow-x-auto px-4 py-0.5 scrollbar-none">
+      {options.map((o) => (
+        <button key={o.value} type="button" role="radio" aria-checked={value === o.value} onClick={() => { haptic(); onChange(o.value); }}
+          className={`min-h-9 shrink-0 cursor-pointer rounded-full px-3 text-xs font-semibold whitespace-nowrap transition ${value === o.value ? 'bg-teal-700 text-white' : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'}`}>
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
   return (
     <button type="button" role="switch" aria-checked={checked} aria-label={label} onClick={() => { haptic(); onChange(!checked); }}

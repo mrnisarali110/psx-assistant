@@ -47,7 +47,10 @@ Running cost: Rs 0 (free tiers of Supabase, GitHub Actions, Cloudflare Workers, 
   applied; a stock that was just off-screen stays unticked and untouched. Screenshots are never stored.
 - **Discover:** *Undervalued* (P/E well below sector, still paying dividends), *Dividends* (yield, yearly
   dividend per share, last declared amount, how often they pay), *Upcoming* (declared dividends with the last
-  day to buy = book closure minus 3 working days, an estimate; confirm with your broker).
+  day to buy = book closure minus 3 working days, an estimate; confirm with your broker). Every list is ranked
+  strongest first and has sort chips (most undervalued / cheapest vs sector / lowest P/E / highest yield;
+  highest yield / most per share / pays most often / cheapest share; soonest / biggest dividend). "AI picks first"
+  is one option, not the default; the choice is remembered on the phone.
 - **News:** company filings grouped by day, AI summaries with figures checked against the PDF, and your alert history.
 - **Profile:** System / Light / Dark, monthly investment and its yearly increase, crash fund, your rules, notifications, Telegram, AI on/off.
 

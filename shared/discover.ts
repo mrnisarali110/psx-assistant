@@ -54,6 +54,55 @@ export function undervalued(screen: ScreenRow[], opts: { shariahOnly?: boolean; 
 }
 
 // ---------------------------------------------------------------------------
+// Sorting (the lists always show the strongest value first; the AI's order is one option, not the default)
+// ---------------------------------------------------------------------------
+type AiMark = { ai?: { n: number; frequency?: string | null } | null };
+const aiRank = (r: AiMark) => (r.ai ? r.ai.n : 99);
+const bySymbol = (a: { symbol: string }, b: { symbol: string }) => a.symbol.localeCompare(b.symbol);
+
+export type UvSort = 'score' | 'discount' | 'pe' | 'yield' | 'ai';
+export const UV_SORTS: { value: UvSort; label: string }[] = [
+  { value: 'score', label: 'Most undervalued' }, { value: 'discount', label: 'Cheapest vs sector' }, { value: 'pe', label: 'Lowest P/E' },
+  { value: 'yield', label: 'Highest yield' }, { value: 'ai', label: 'AI picks first' },
+];
+export function sortUndervalued<T extends Undervalued & AiMark>(rows: T[], by: UvSort): T[] {
+  const cmp: Record<UvSort, (a: T, b: T) => number> = {
+    score: (a, b) => b.score - a.score,
+    discount: (a, b) => (b.discount_pct ?? -1e9) - (a.discount_pct ?? -1e9),
+    pe: (a, b) => (a.pe ?? 1e9) - (b.pe ?? 1e9),
+    yield: (a, b) => (b.dividend_yield_pct ?? 0) - (a.dividend_yield_pct ?? 0),
+    ai: (a, b) => aiRank(a) - aiRank(b),
+  };
+  return [...rows].sort((a, b) => cmp[by](a, b) || b.score - a.score || bySymbol(a, b));
+}
+
+export type DvSort = 'yield' | 'dps' | 'frequency' | 'price' | 'ai';
+export const DV_SORTS: { value: DvSort; label: string }[] = [
+  { value: 'yield', label: 'Highest yield' }, { value: 'dps', label: 'Most per share' }, { value: 'frequency', label: 'Pays most often' },
+  { value: 'price', label: 'Cheapest share' }, { value: 'ai', label: 'AI picks first' },
+];
+const FREQ_RANK: Record<string, number> = { Quarterly: 3, 'Half-yearly': 2, Yearly: 1 };
+/** Payout frequency from filings, else the AI's estimate (never "Irregular"). */
+export const effectiveFrequency = (d: { frequency: Frequency | null } & AiMark) =>
+  d.frequency ?? (d.ai?.frequency && d.ai.frequency !== 'Irregular' ? (d.ai.frequency as Frequency) : null);
+export function sortDividends<T extends DividendLeader & AiMark>(rows: T[], by: DvSort): T[] {
+  const cmp: Record<DvSort, (a: T, b: T) => number> = {
+    yield: (a, b) => b.dividend_yield_pct - a.dividend_yield_pct,
+    dps: (a, b) => b.annual_dps - a.annual_dps,
+    frequency: (a, b) => (FREQ_RANK[effectiveFrequency(b) ?? ''] ?? 0) - (FREQ_RANK[effectiveFrequency(a) ?? ''] ?? 0),
+    price: (a, b) => a.price - b.price,
+    ai: (a, b) => aiRank(a) - aiRank(b),
+  };
+  return [...rows].sort((a, b) => cmp[by](a, b) || b.dividend_yield_pct - a.dividend_yield_pct || bySymbol(a, b));
+}
+
+export type UpSort = 'soonest' | 'dps';
+export const UP_SORTS: { value: UpSort; label: string }[] = [{ value: 'soonest', label: 'Soonest to buy' }, { value: 'dps', label: 'Biggest dividend' }];
+export function sortUpcoming(rows: UpcomingDividend[], by: UpSort): UpcomingDividend[] {
+  return [...rows].sort((a, b) => (by === 'dps' ? (b.dps ?? 0) - (a.dps ?? 0) : 0) || a.buy_by.localeCompare(b.buy_by) || bySymbol(a, b));
+}
+
+// ---------------------------------------------------------------------------
 // Dividends
 // ---------------------------------------------------------------------------
 export type Frequency = 'Quarterly' | 'Half-yearly' | 'Yearly';

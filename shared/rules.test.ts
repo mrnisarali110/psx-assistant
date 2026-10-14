@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { allocationSlices, buildPortfolio, mergeCall, sectorBreakdown, sectorSlices } from './portfolio.ts';
 import { sectorLabel } from './format.ts';
 import { applyBuy, cleanImported, describeChange, diffImport, investedThisMonth, txnFromChange, withLastBuy } from './changes.ts';
-import { dividendLeaders, frequencyOf, undervalued, upcomingDividends, workingDaysBefore, type ScreenRow } from './discover.ts';
+import { dividendLeaders, frequencyOf, sortDividends, sortUndervalued, sortUpcoming, undervalued, upcomingDividends, workingDaysBefore, type ScreenRow } from './discover.ts';
 import { projectWealth, realValue } from './growth.ts';
 import { dayStance, holdingAlerts, marketAlerts, marketState, planDelivery, todayBanner, type AlertCandidate } from './signals.ts';
 import { isMarketOpen, isStale, isoWeek, minutesToClose } from './time.ts';
@@ -164,6 +164,24 @@ describe('discover', () => {
     row('BANKA', 'BANKS', 3.5, 12), row('BANKB', 'BANKS', 6, 9), row('BANKC', 'BANKS', 7, 8), row('BANKD', 'BANKS', 8, 7, { is_shariah: false }),
     row('TECHA', 'TECH', 20, 1), row('TECHB', 'TECH', 25, 2), row('TECHC', 'TECH', 14, 3), row('LOSS', 'TECH', -4, 0),
   ];
+
+  it('sorts every Discover list strongest first, with the AI order as just one option', () => {
+    const u = undervalued(screen).map((r, n) => ({ ...r, ai: n === 2 ? { n: 0 } : null })); // AI liked the weakest one
+    expect(sortUndervalued(u, 'score').map((x) => x.symbol)).toEqual(['BANKA', 'BANKB', 'TECHC']);
+    expect(sortUndervalued(u, 'yield').map((x) => x.symbol)).toEqual(['BANKA', 'BANKB', 'TECHC']);
+    expect(sortUndervalued(u, 'pe').map((x) => x.symbol)).toEqual(['BANKA', 'BANKB', 'TECHC']);
+    expect(sortUndervalued(u, 'discount')[0].discount_pct).toBe(Math.max(...u.map((x) => x.discount_pct ?? -1)));
+    expect(sortUndervalued(u, 'ai')[0].symbol).toBe('TECHC');
+    const d = dividendLeaders(screen, [], '2026-10-06').map((r) => ({ ...r, ai: r.symbol === 'BANKC' ? { n: 0, frequency: 'Quarterly' } : null }));
+    expect(sortDividends(d, 'yield').map((x) => x.dividend_yield_pct)).toEqual([...d.map((x) => x.dividend_yield_pct)].sort((a, b) => b - a));
+    expect(sortDividends(d, 'frequency')[0].symbol).toBe('BANKC'); // AI estimate counts when filings say nothing
+    expect(sortDividends(d, 'price')[0].price).toBe(Math.min(...d.map((x) => x.price)));
+    expect(sortDividends(d, 'dps')[0].annual_dps).toBe(Math.max(...d.map((x) => x.annual_dps)));
+    const ev = (id: string, symbol: string, dps: number, from: string): DividendEvent => ({ id, symbol, announced_on: '2026-10-01', dps, dividend_type: 'interim', book_closure_from: from, book_closure_to: from, verified: true, pdf_url: null });
+    const up = upcomingDividends([ev('a', 'AAA', 2, '2026-10-20'), ev('b', 'BBB', 9, '2026-10-28')], '2026-10-06');
+    expect(sortUpcoming(up, 'soonest').map((x) => x.symbol)).toEqual(['AAA', 'BBB']);
+    expect(sortUpcoming(up, 'dps').map((x) => x.symbol)).toEqual(['BBB', 'AAA']);
+  });
 
   it('finds profitable stocks well below their sector P/E that still pay dividends', () => {
     const u = undervalued(screen);
