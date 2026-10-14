@@ -6,7 +6,9 @@ import { useState } from 'react';
 import { rs, rsShort } from '../../shared/format.ts';
 import { haptic } from '../lib/gestures.ts';
 
-const COLORS = ['#e11d48', '#f97316', '#f59e0b', '#14b8a6', '#0ea5e9', '#94a3b8'];
+/** Biggest slice first: red for the most concentrated, shading to calm colours; the 6th is for "Other". */
+export const SLICE_COLORS = ['#e11d48', '#f97316', '#f59e0b', '#14b8a6', '#0ea5e9', '#94a3b8'];
+const COLORS = SLICE_COLORS;
 
 export function Donut({ slices, total, caption }: { slices: { label: string; value: number; pct: number }[]; total: number; caption: string }) {
   const [sel, setSel] = useState<number | null>(null);
@@ -43,7 +45,7 @@ export function Donut({ slices, total, caption }: { slices: { label: string; val
             <button type="button" onClick={() => pick(i)} aria-pressed={sel === i}
               className={`flex min-h-7 w-full cursor-pointer items-center gap-2 rounded-lg px-1.5 text-[13px] transition ${sel === i ? 'bg-slate-100 dark:bg-slate-800' : ''}`}>
               <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: COLORS[Math.min(i, COLORS.length - 1)] }} aria-hidden="true" />
-              <span className="font-medium whitespace-nowrap">{s.label}</span>
+              <span className="min-w-0 truncate font-medium">{s.label}</span>
               <span className={`num ml-auto font-semibold ${i === 0 ? 'text-rose-600 dark:text-rose-400' : ''}`}>{s.pct.toFixed(0)}%</span>
               <span className="num hidden w-14 text-right text-[11px] text-slate-500 min-[420px]:inline dark:text-slate-400">{rs(s.value).replace('Rs ', '')}</span>
             </button>

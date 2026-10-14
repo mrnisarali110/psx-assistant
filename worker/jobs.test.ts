@@ -68,6 +68,17 @@ describe('market job', () => {
     expect(store.runs[0]).toMatchObject({ job: 'market', ok: true });
   });
 
+  it('files a holding that has no sector under PSX\'s own sector, without asking anyone', async () => {
+    const u = owner(false);
+    u.holdings = [...SEED_HOLDINGS, { id: 'h-new', symbol: 'HUBC', shares: 10, avg_cost: 100, sector: null, is_shariah: false, status: 'core', note: null }];
+    const store = new MemoryStore([u]);
+    await runJob('market', deps(store, new ConsoleNotifier(quiet), MON_1230));
+    const want = SEED_PRICES.HUBC?.sector ?? SEED_SCREEN.find((r) => r.symbol === 'HUBC')?.sector;
+    expect(want).toBeTruthy();
+    expect(store.users[0].holdings.find((h) => h.symbol === 'HUBC')!.sector).toBe(want);
+    expect(store.users[0].holdings.find((h) => h.symbol === 'SYS')!.sector).toBe('Technology'); // an existing value is left alone
+  });
+
   it('sends one bundled notification of buy chances and does not repeat it in the next run', async () => {
     const store = new MemoryStore([owner(false)]);
     const n = new ConsoleNotifier(quiet);

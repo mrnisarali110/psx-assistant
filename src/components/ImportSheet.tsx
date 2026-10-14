@@ -6,6 +6,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { describeChange, diffImport, type ImportChange, type ImportedRow } from '../../shared/changes.ts';
 import type { Holding, PriceMap } from '../../shared/types.ts';
+import type { SectorMap } from '../../shared/portfolio.ts';
 import { asOfLabel, rs } from '../../shared/format.ts';
 import { pktDate } from '../../shared/time.ts';
 import type { DataSource } from '../lib/data.ts';
@@ -45,8 +46,8 @@ export function aiStatusLine(st: AiStatus): { tone: 'ok' | 'warn'; text: string 
   return null;
 }
 
-export function ImportSheet({ open, onClose, source, holdings, prices, onApplied }: {
-  open: boolean; onClose: () => void; source: DataSource; holdings: Holding[]; prices: PriceMap; onApplied: (summary: string) => void;
+export function ImportSheet({ open, onClose, source, holdings, prices, sectors = {}, onApplied }: {
+  open: boolean; onClose: () => void; source: DataSource; holdings: Holding[]; prices: PriceMap; sectors?: SectorMap; onApplied: (summary: string) => void;
 }) {
   const [step, setStep] = useState<'pick' | 'reading' | 'review' | 'saving'>('pick');
   const [rows, setRows] = useState<ImportedRow[]>([]);
@@ -66,7 +67,7 @@ export function ImportSheet({ open, onClose, source, holdings, prices, onApplied
     return () => { on = false; };
   }, [open, source]);
 
-  const changes = useMemo(() => diffImport(holdings, rows, pktDate(new Date()), prices, { removeMissing: true, recordTxns }), [holdings, rows, prices, recordTxns]);
+  const changes = useMemo(() => diffImport(holdings, rows, pktDate(new Date()), prices, { removeMissing: true, recordTxns, sectors }), [holdings, rows, prices, recordTxns, sectors]);
   const shown = changes.filter((c) => c.kind !== 'same');
   const actionable = shown.filter((c) => ticked.has(c.symbol));
   const unchanged = changes.length - shown.length;
@@ -85,7 +86,7 @@ export function ImportSheet({ open, onClose, source, holdings, prices, onApplied
       setRows(r.holdings);
       setDropped(r.dropped);
       // New and changed rows start ticked; a holding missing from the pictures is kept unless you say it was sold.
-      const first = diffImport(holdings, r.holdings, pktDate(new Date()), prices, { removeMissing: true, recordTxns });
+      const first = diffImport(holdings, r.holdings, pktDate(new Date()), prices, { removeMissing: true, recordTxns, sectors });
       setTicked(new Set(first.filter((c) => c.kind === 'new' || c.kind === 'changed').map((c) => c.symbol)));
       setStep('review');
     } catch (e) {

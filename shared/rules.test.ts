@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { allocationSlices, buildPortfolio, mergeCall } from './portfolio.ts';
+import { allocationSlices, buildPortfolio, mergeCall, sectorBreakdown, sectorSlices } from './portfolio.ts';
+import { sectorLabel } from './format.ts';
 import { applyBuy, cleanImported, describeChange, diffImport, investedThisMonth, txnFromChange, withLastBuy } from './changes.ts';
 import { dividendLeaders, frequencyOf, undervalued, upcomingDividends, workingDaysBefore, type ScreenRow } from './discover.ts';
 import { projectWealth, realValue } from './growth.ts';
@@ -19,6 +20,27 @@ describe('portfolio', () => {
     expect(v.total_value).toBeLessThan(59000);
     expect(row('SYS', v).weight_pct!).toBeGreaterThan(22);
     expect(v.total_pnl).toBeCloseTo(v.total_value - v.total_cost, 6);
+  });
+
+  it('groups money by PSX sector for the Home donut and the full breakdown; unknown symbols take the screen\'s sector', () => {
+    const v = view();
+    const slices = sectorSlices(v);
+    expect(slices.length).toBeGreaterThan(1);
+    expect(slices.reduce((a, s) => a + s.pct, 0)).toBeCloseTo(100, 0);
+    expect(slices[0].pct).toBeGreaterThanOrEqual(slices[1].pct);
+    const groups = sectorBreakdown(v);
+    expect(groups.reduce((a, g) => a + g.count, 0)).toBe(SEED_HOLDINGS.length);
+    expect(groups.reduce((a, g) => a + g.value, 0)).toBeCloseTo(v.total_value, 2);
+    const banks = groups.find((g) => g.rows.some((r) => r.holding.symbol === 'MEBL'))!;
+    expect(banks.rows.map((r) => r.holding.symbol)).toContain('UBL');
+    expect(banks.rows.reduce((a, r) => a + (r.sector_pct ?? 0), 0)).toBeCloseTo(100, 6);
+    expect(v.sector_weights.find((w) => w.sector === banks.sector)).toMatchObject({ value: banks.value, count: banks.count });
+
+    const noPrice: Holding = { symbol: 'HUBC', shares: 10, avg_cost: 100, sector: null, status: 'core', is_shariah: false, note: null };
+    expect(buildPortfolio([noPrice], {}, SEED_SETTINGS, DEFAULT_RULES, { HUBC: 'POWER GENERATION & DISTRIBUTION' }).rows[0].sector).toBe('POWER GENERATION & DISTRIBUTION');
+    expect(buildPortfolio([noPrice], {}, SEED_SETTINGS).rows[0].sector).toBe('Unknown');
+    expect(sectorLabel('REAL ESTATE INVESTMENT TRUST')).toBe('Real Estate Investment Trust');
+    expect(sectorLabel('REIT')).toBe('REIT');
   });
 
   it('shows "no data" (null), never a made-up value, when a price is missing', () => {

@@ -3,7 +3,7 @@
  * detail sheet, and the add / edit / record-buy form as a bottom sheet.
  */
 import { useState } from 'react';
-import type { HoldingCall, HoldingView } from '../../shared/portfolio.ts';
+import type { HoldingCall, HoldingView, SectorMap } from '../../shared/portfolio.ts';
 import { applyBuy, txnFromChange, withLastBuy } from '../../shared/changes.ts';
 import type { DividendEvent, Holding, HoldingCallKind, HoldingStatus, Price, Txn } from '../../shared/types.ts';
 import { pct, rs, rs2, signedRs, titleCase, dateLabel } from '../../shared/format.ts';
@@ -156,18 +156,18 @@ export function StockSheet({ open, onClose, symbol, price, row, call, dividend, 
 export type FormMode = { mode: 'add' } | { mode: 'edit'; holding: Holding } | { mode: 'buy'; holding?: Holding; symbol: string; price?: number | null };
 
 /** Add, edit or record a buy. Every save goes through one change → transaction path. */
-export function HoldingForm({ open, onClose, form, prices, onSave }: {
-  open: boolean; onClose: () => void; form: FormMode | null; prices: Record<string, Price>;
+export function HoldingForm({ open, onClose, form, prices, sectors = {}, onSave }: {
+  open: boolean; onClose: () => void; form: FormMode | null; prices: Record<string, Price>; sectors?: SectorMap;
   onSave: (before: Holding | undefined, after: Holding, txn: Txn | null) => Promise<void>;
 }) {
   return (
     <Sheet open={open && !!form} onClose={onClose} title={!form ? '' : form.mode === 'add' ? 'Add a holding' : form.mode === 'edit' ? `Edit ${form.holding.symbol}` : `Record a buy`}>
-      {form && <FormBody key={JSON.stringify(form)} form={form} prices={prices} onSave={onSave} onClose={onClose} />}
+      {form && <FormBody key={JSON.stringify(form)} form={form} prices={prices} sectors={sectors} onSave={onSave} onClose={onClose} />}
     </Sheet>
   );
 }
 
-function FormBody({ form, prices, onSave, onClose }: { form: FormMode; prices: Record<string, Price>; onClose: () => void; onSave: (b: Holding | undefined, a: Holding, t: Txn | null) => Promise<void> }) {
+function FormBody({ form, prices, sectors, onSave, onClose }: { form: FormMode; prices: Record<string, Price>; sectors: SectorMap; onClose: () => void; onSave: (b: Holding | undefined, a: Holding, t: Txn | null) => Promise<void> }) {
   const before = form.mode === 'edit' ? form.holding : form.mode === 'buy' ? form.holding : undefined;
   const [symbol, setSymbol] = useState(form.mode === 'buy' ? form.symbol : before?.symbol ?? '');
   const [shares, setShares] = useState(form.mode === 'buy' ? '' : before ? String(before.shares) : '');
@@ -197,7 +197,8 @@ function FormBody({ form, prices, onSave, onClose }: { form: FormMode; prices: R
         after = applyBuy(before, sym, qty, px, prices[sym]);
         txn = { symbol: sym, side: 'buy', shares: qty, price: px, amount: Math.round(qty * px * 100) / 100, executed_on: today, source: 'manual' };
       } else {
-        after = { ...(before ?? { sector: prices[sym]?.sector ?? null }), symbol: sym, shares: qty, avg_cost: px, status, is_shariah: shariah, note: note.trim() || null } as Holding;
+        // The sector is PSX's, never asked: price row first, else the market screen.
+        after = { ...(before ?? { sector: prices[sym]?.sector ?? sectors[sym] ?? null }), symbol: sym, shares: qty, avg_cost: px, status, is_shariah: shariah, note: note.trim() || null } as Holding;
         txn = countIt ? txnFromChange(before, after, today, prices[sym]?.price, 'manual') : null;
       }
       await onSave(before, withLastBuy(after, txn), txn);

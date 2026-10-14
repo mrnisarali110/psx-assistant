@@ -23,6 +23,11 @@ export function titleCase(s: string): string {
   return s.toLowerCase().replace(/\b([a-z])/g, (m) => m.toUpperCase());
 }
 
+/** PSX sector names read nicely: "COMMERCIAL BANKS" → "Commercial Banks", acronyms kept. */
+export function sectorLabel(s: string): string {
+  return titleCase(s).replace(/\b(Reit|Etf|Nbfc|Ppl|Psx)\b/g, (m) => m.toUpperCase());
+}
+
 /** "Oct 5, 3:49 PM" in PKT. */
 export function asOfLabel(iso: string | null | undefined): string {
   if (!iso) return 'no data';

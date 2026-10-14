@@ -13,7 +13,7 @@ import { dividendLeaders, undervalued, upcomingDividends, type ScreenRow } from 
 import { investedThisMonth } from '../shared/changes.ts';
 import { dedupeFilings, tidyTitle } from '../shared/news.ts';
 import type { LlmRouter } from '../shared/llm.ts';
-import { buildPortfolio, type PortfolioView } from '../shared/portfolio.ts';
+import { buildPortfolio, screenSectors, type PortfolioView } from '../shared/portfolio.ts';
 import { holdingAlerts, marketAlerts, planDelivery, todayBanner, type AlertCandidate, type AlertLevel } from '../shared/signals.ts';
 import { addDays, daysBetween, isMarketOpen, isoWeek, minutesToClose, pktDate } from '../shared/time.ts';
 import { DEFAULT_RULES, type Announcement, type DividendEvent, type IndexSnapshot, type PriceMap } from '../shared/types.ts';
@@ -103,6 +103,15 @@ export async function runJob(job: JobName, deps: JobDeps): Promise<RunReport> {
       idx = await store.latestIndex();
       screen = [];
       log(`PSX data unavailable this run: ${snap.errors.slice(0, 3).join(' | ')}`);
+    }
+    // File holdings that still have no sector under PSX's own (price row, else the market screen): nobody is asked.
+    const sectorMap = screenSectors(screen);
+    const fills = users.flatMap((u) => u.holdings.filter((h) => !h.sector && h.id)
+      .map((h) => ({ id: h.id as string, sector: prices[h.symbol]?.sector ?? sectorMap[h.symbol] ?? null }))
+      .filter((f): f is { id: string; sector: string } => !!f.sector));
+    if (fills.length) {
+      await store.saveHoldingSectors(fills).catch((e) => report.errors.push(`sectors: ${errMsg(e)}`));
+      for (const u of users) for (const h of u.holdings) { const f = fills.find((x) => x.id === h.id); if (f) h.sector = f.sector; }
     }
     const tradedToday = usable && !!idx && pktDate(new Date(idx.ts)) === today;
     const toClose = minutesToClose(now, rules.market_hours_pkt);
@@ -206,7 +215,7 @@ async function processUser(u: UserCtx, c: RunCtx) {
   const lastSent = (kind: string, symbol: string) =>
     recent.filter((r) => r.kind === kind && r.symbol === symbol && r.channel && r.channel !== 'none')
       .map((r) => pktDate(new Date(r.sent_at))).sort().at(-1) ?? null;
-  const view = buildPortfolio(u.holdings, c.prices, u.settings);
+  const view = buildPortfolio(u.holdings, c.prices, u.settings, rules, screenSectors(c.screen));
   const mine = new Set([...u.holdings.map((h) => h.symbol), ...u.watchlist.map((w) => w.symbol)]);
   const night = c.job === 'night';
   const cands: AlertCandidate[] = [];

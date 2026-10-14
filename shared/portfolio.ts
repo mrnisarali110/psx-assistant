@@ -1,6 +1,6 @@
 import type { AiInsight, Holding, HoldingCallKind, Price, PriceMap, Rules, Settings } from './types.ts';
 import { DEFAULT_RULES } from './types.ts';
-import { titleCase } from './format.ts';
+import { sectorLabel, titleCase } from './format.ts';
 
 export interface HoldingCall {
   call: HoldingCallKind;
@@ -33,15 +33,21 @@ export interface PortfolioView {
   total_pnl: number;
   total_pnl_pct: number | null;
   day_change: number | null;
-  sector_weights: { sector: string; pct: number }[];
+  sector_weights: { sector: string; pct: number; value: number; count: number }[];
   sectors_over_limit: string[];
   missing_prices: string[];
   rebalance: RebalanceTip[];
 }
 
-/** PSX's own sector name when we have it (one taxonomy for everything), else what the user typed. */
-export function sectorOf(symbol: string, prices: PriceMap, fallback?: string | null): string {
-  return prices[symbol]?.sector ?? fallback ?? 'Unknown';
+/** symbol → PSX sector, from the market screen: covers listed stocks the worker has not priced for you yet. */
+export type SectorMap = Record<string, string | null | undefined>;
+export function screenSectors(screen: { symbol: string; sector: string | null }[]): SectorMap {
+  return Object.fromEntries(screen.filter((r) => r.sector).map((r) => [r.symbol, r.sector]));
+}
+
+/** PSX's own sector name (one taxonomy for everything): from the price row, else the screen, else what is stored. */
+export function sectorOf(symbol: string, prices: PriceMap, fallback?: string | null, extra: SectorMap = {}): string {
+  return prices[symbol]?.sector ?? extra[symbol] ?? fallback ?? 'Unknown';
 }
 
 export const refPrice = (h: Holding) => (h.last_buy_price && h.last_buy_price > 0 ? h.last_buy_price : h.avg_cost);
@@ -87,19 +93,20 @@ export function mergeCall(row: HoldingView, ai: Pick<AiInsight, 'holding_calls'>
 }
 
 export function buildPortfolio(holdings: Holding[], prices: PriceMap, settings: Settings,
-  rules: Rules = DEFAULT_RULES): PortfolioView {
+  rules: Rules = DEFAULT_RULES, sectors: SectorMap = {}): PortfolioView {
   const priced = holdings.filter((h) => prices[h.symbol]?.price != null);
   const total = priced.reduce((s, h) => s + h.shares * (prices[h.symbol].price as number), 0);
-  const bySector = new Map<string, number>();
+  const bySector = new Map<string, { value: number; count: number }>();
   let dayChange: number | null = null;
 
   const rows: HoldingView[] = holdings.map((h) => {
     const p = prices[h.symbol] ?? null;
     const px = p?.price ?? null;
-    const sector = sectorOf(h.symbol, prices, h.sector);
+    const sector = sectorOf(h.symbol, prices, h.sector, sectors);
     const value = px == null ? null : h.shares * px;
     const cost = h.shares * h.avg_cost;
-    if (value != null) bySector.set(sector, (bySector.get(sector) ?? 0) + value);
+    const agg = bySector.get(sector) ?? { value: 0, count: 0 };
+    bySector.set(sector, { value: agg.value + (value ?? 0), count: agg.count + 1 });
     if (p?.change != null) dayChange = (dayChange ?? 0) + h.shares * p.change;
     const weight = value != null && total > 0 ? (value / total) * 100 : null;
     const ref = refPrice(h);
@@ -122,8 +129,8 @@ export function buildPortfolio(holdings: Holding[], prices: PriceMap, settings: 
 
   const totalCost = priced.reduce((s, h) => s + h.shares * h.avg_cost, 0);
   const sectorWeights = [...bySector.entries()]
-    .map(([sector, v]) => ({ sector, pct: total > 0 ? (v / total) * 100 : 0 }))
-    .sort((a, b) => b.pct - a.pct);
+    .map(([sector, v]) => ({ sector, pct: total > 0 ? (v.value / total) * 100 : 0, value: v.value, count: v.count }))
+    .sort((a, b) => b.pct - a.pct || a.sector.localeCompare(b.sector));
   const overLimit = sectorWeights.filter((s) => s.pct > rules.holding.sector_limit_pct);
   const rebalance: RebalanceTip[] = [
     ...rows.filter((r) => r.flags.over_cap).map((r) => ({
@@ -150,8 +157,46 @@ export function buildPortfolio(holdings: Holding[], prices: PriceMap, settings: 
   };
 }
 
-/** Allocation slices for the donut: biggest first, at most `max` slices, the rest grouped as "Other". */
-export function allocationSlices(view: PortfolioView, max = 6): { label: string; value: number; pct: number }[] {
+export interface Slice { label: string; value: number; pct: number }
+
+/** Sector slices for the Home donut: biggest first, at most `max`, the rest grouped as "Other". */
+export function sectorSlices(view: PortfolioView, max = 6): Slice[] {
+  const ws = view.sector_weights.filter((w) => w.value > 0);
+  const top = ws.slice(0, ws.length > max ? max - 1 : max).map((w) => ({ label: sectorLabel(w.sector), value: w.value, pct: w.pct }));
+  const rest = ws.slice(top.length);
+  if (rest.length) {
+    const value = rest.reduce((a, w) => a + w.value, 0);
+    top.push({ label: `Other (${rest.length})`, value, pct: view.total_value > 0 ? (value / view.total_value) * 100 : 0 });
+  }
+  return top;
+}
+
+export interface SectorGroup {
+  sector: string;
+  label: string;
+  value: number;
+  pct: number; // of the whole portfolio
+  count: number;
+  rows: (HoldingView & { sector_pct: number | null })[]; // biggest first; sector_pct = share of this sector
+}
+
+/** Every sector with its stocks, biggest first, for the full breakdown view. */
+export function sectorBreakdown(view: PortfolioView): SectorGroup[] {
+  const groups = new Map<string, HoldingView[]>();
+  for (const r of view.rows) groups.set(r.sector, [...(groups.get(r.sector) ?? []), r]);
+  return [...groups.entries()].map(([sector, rows]) => {
+    const value = rows.reduce((a, r) => a + (r.value ?? 0), 0);
+    return {
+      sector, label: sectorLabel(sector), value, count: rows.length,
+      pct: view.total_value > 0 ? (value / view.total_value) * 100 : 0,
+      rows: [...rows].sort((a, b) => (b.value ?? -1) - (a.value ?? -1))
+        .map((r) => ({ ...r, sector_pct: r.value != null && value > 0 ? (r.value / value) * 100 : null })),
+    };
+  }).sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
+}
+
+/** Per-stock slices (used by tests and the breakdown): biggest first, at most `max`, the rest grouped as "Other". */
+export function allocationSlices(view: PortfolioView, max = 6): Slice[] {
   const priced = view.rows.filter((r) => r.value != null && r.value > 0);
   const top = priced.slice(0, priced.length > max ? max - 1 : max).map((r) => ({ label: r.holding.symbol, value: r.value!, pct: r.weight_pct! }));
   const rest = priced.slice(top.length);

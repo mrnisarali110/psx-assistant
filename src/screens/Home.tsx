@@ -1,16 +1,18 @@
+import { useState } from 'react';
 import type { ScreenProps } from '../App.tsx';
-import { allocationSlices } from '../../shared/portfolio.ts';
+import { sectorSlices } from '../../shared/portfolio.ts';
 import { dayStance, todayBanner } from '../../shared/signals.ts';
 import { investedThisMonth } from '../../shared/changes.ts';
 import { isMarketOpen, isStale, minutesToClose, pktDate, pktParts } from '../../shared/time.ts';
 import { DEFAULT_RULES } from '../../shared/types.ts';
 import { asOfLabel, num, pct, rs, signedRs, titleCase } from '../../shared/format.ts';
 import { AiBadge, AiCard } from '../components/AiCard.tsx';
+import { BreakdownSheet } from '../components/Breakdown.tsx';
 import { Donut } from '../components/Donut.tsx';
 import { GrowthCard } from '../components/Growth.tsx';
 import { freshInsight, useHoldingActions } from '../components/HoldingActions.tsx';
 import { Icon } from '../components/Icon.tsx';
-import { Card, Section, Sparkline, SymbolAvatar, changeTone } from '../components/ui.tsx';
+import { Button, Card, Section, Sparkline, SymbolAvatar, changeTone } from '../components/ui.tsx';
 import { useLongPress } from '../lib/gestures.ts';
 
 const HERO = {
@@ -43,7 +45,8 @@ export function Home(props: ScreenProps) {
   const open = isMarketOpen(now, DEFAULT_RULES.market_hours_pkt);
   const toClose = minutesToClose(now, DEFAULT_RULES.market_hours_pkt);
   const idx = data.index;
-  const slices = allocationSlices(view);
+  const slices = sectorSlices(view);
+  const [breakdown, setBreakdown] = useState(false);
   const tips = [...view.rebalance.map((t) => t.text), ...(ai?.rebalance ? [ai.rebalance] : [])];
 
   return (
@@ -99,7 +102,11 @@ export function Home(props: ScreenProps) {
 
       {slices.length > 0 && (
         <Section title="Where your money is">
-          <Card><Donut slices={slices} total={view.total_value} caption={`${view.rows.length} stocks`} /></Card>
+          <Card>
+            <Donut slices={slices} total={view.total_value} caption={`${view.sector_weights.length} sector${view.sector_weights.length === 1 ? '' : 's'}`} />
+            <Button kind="ghost" className="mt-2 w-full" onClick={() => setBreakdown(true)}>Show more<Icon name="chevron" className="h-4 w-4" /></Button>
+          </Card>
+          <BreakdownSheet open={breakdown} onClose={() => setBreakdown(false)} view={view} onOpenStock={(s) => { setBreakdown(false); acts.open(s); }} />
         </Section>
       )}
 

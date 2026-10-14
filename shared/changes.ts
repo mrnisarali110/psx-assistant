@@ -87,7 +87,7 @@ export function cleanImported(rows: unknown[]): { rows: ImportedRow[]; dropped: 
  * an existing portfolio), nothing counts as bought or sold this month.
  */
 export function diffImport(current: Holding[], imported: ImportedRow[], today: string, prices: PriceMap,
-  opts: { removeMissing: boolean; recordTxns: boolean }): ImportChange[] {
+  opts: { removeMissing: boolean; recordTxns: boolean; sectors?: Record<string, string | null | undefined> }): ImportChange[] {
   const { removeMissing, recordTxns } = opts;
   const track = (t: Txn | null) => (recordTxns ? t : null);
   const byS = new Map(current.map((h) => [h.symbol, h]));
@@ -95,7 +95,8 @@ export function diffImport(current: Holding[], imported: ImportedRow[], today: s
     const before = byS.get(row.symbol);
     if (!before) {
       const p = prices[row.symbol];
-      const after: Holding = { symbol: row.symbol, shares: row.shares, avg_cost: row.avg_cost, status: 'core', sector: p?.sector ?? null, is_shariah: p?.is_shariah ?? false, note: null };
+      // Filed under PSX's sector straight away (price row, else the market screen); never asked of the user.
+      const after: Holding = { symbol: row.symbol, shares: row.shares, avg_cost: row.avg_cost, status: 'core', sector: p?.sector ?? opts.sectors?.[row.symbol] ?? null, is_shariah: p?.is_shariah ?? false, note: null };
       const txn = track(txnFromChange(undefined, after, today, p?.price, 'import'));
       return { symbol: row.symbol, kind: 'new', after: withLastBuy(after, txn), txn };
     }

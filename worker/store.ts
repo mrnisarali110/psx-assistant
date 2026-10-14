@@ -54,6 +54,8 @@ export interface Store {
   saveDividend(d: DividendEvent): Promise<void>;
   dividends(symbols: string[] | null, sinceDate: string): Promise<DividendEvent[]>;
   savePicks(kind: AiPicks['kind'], items: AiPicks['items'], model: string | null): Promise<void>;
+  /** File holdings under PSX's sector (only ones still without a sector are passed). */
+  saveHoldingSectors(rows: { id: string; sector: string }[]): Promise<void>;
 }
 
 const READ_KINDS = ['dividend', 'results', 'board_meeting'];
@@ -235,6 +237,10 @@ export class SupabaseStore implements Store {
   async savePicks(kind: AiPicks['kind'], items: AiPicks['items'], model: string | null) {
     check(await this.sb.from('ai_picks').insert({ kind, items, model }), 'save picks');
   }
+
+  async saveHoldingSectors(rows: { id: string; sector: string }[]) {
+    for (const r of rows) check(await this.sb.from('holdings').update({ sector: r.sector }).eq('id', r.id), 'save sector');
+  }
 }
 
 /** In-memory store for dry runs and tests. */
@@ -295,6 +301,9 @@ export class MemoryStore implements Store {
   async latestInsightAt(userId: string) { return this.insights.filter((i) => i.user_id === userId).map((i) => i.created_at).sort().at(-1) ?? null; }
   async transactionsSince(userId: string, since: string) { return this.txns.filter((t) => t.user_id === userId && t.executed_on >= since); }
   async saveDividend(d: DividendEvent) { this.divs = [...this.divs.filter((x) => x.id !== d.id), d]; }
+  async saveHoldingSectors(rows: { id: string; sector: string }[]) {
+    for (const u of this.users) for (const h of u.holdings) { const r = rows.find((x) => x.id === h.id); if (r) h.sector = r.sector; }
+  }
   async dividends(symbols: string[] | null, since: string) { return this.divs.filter((d) => (!symbols || symbols.includes(d.symbol)) && d.announced_on >= since); }
   async savePicks(kind: AiPicks['kind'], items: AiPicks['items'], model: string | null) {
     this.picks.push({ id: this.picks.length + 1, kind, items, model, created_at: this.clock().toISOString() });

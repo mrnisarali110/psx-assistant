@@ -77,7 +77,7 @@ export function Portfolio(props: ScreenProps) {
       <Watchlist {...props} onOpen={acts.open} onMenu={acts.menu} />
 
       {acts.ui}
-      <ImportSheet open={importing} onClose={() => setImporting(false)} source={source} holdings={data.holdings} prices={data.prices}
+      <ImportSheet open={importing} onClose={() => setImporting(false)} source={source} holdings={data.holdings} prices={data.prices} sectors={acts.sectors}
         onApplied={async (summary) => { await reload(); toast(summary); }} />
     </>
   );

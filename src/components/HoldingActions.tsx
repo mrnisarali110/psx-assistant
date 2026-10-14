@@ -3,7 +3,7 @@
  * long-press menu, edit / record-buy form, remove with Undo, watchlist actions.
  */
 import { useMemo, useState } from 'react';
-import { buildPortfolio, mergeCall, type HoldingView } from '../../shared/portfolio.ts';
+import { buildPortfolio, mergeCall, screenSectors, type HoldingView } from '../../shared/portfolio.ts';
 import { upcomingDividends } from '../../shared/discover.ts';
 import { pktDate } from '../../shared/time.ts';
 import { DEFAULT_RULES, type AiInsight, type Holding } from '../../shared/types.ts';
@@ -24,7 +24,9 @@ export function useHoldingActions({ data, source, reload }: Pick<ScreenProps, 'd
   const [detail, setDetail] = useState<string | null>(null);
   const [menu, setMenu] = useState<string | null>(null);
   const [form, setForm] = useState<FormMode | null>(null);
-  const view = useMemo(() => buildPortfolio(data.holdings, data.prices, data.settings), [data]);
+  // PSX's sector for every listed symbol, so a holding is filed under its sector the moment it is added.
+  const sectors = useMemo(() => screenSectors(data.screen), [data.screen]);
+  const view = useMemo(() => buildPortfolio(data.holdings, data.prices, data.settings, DEFAULT_RULES, sectors), [data, sectors]);
   const ai = freshInsight(data.aiInsight);
   const callFor = (row: HoldingView) => mergeCall(row, ai, data.settings);
   const rowOf = (sym: string | null) => view.rows.find((r) => r.holding.symbol === sym);
@@ -79,7 +81,7 @@ export function useHoldingActions({ data, source, reload }: Pick<ScreenProps, 'd
         { label: 'Details', icon: 'eye', onSelect: () => setDetail(menu) },
         { label: 'Stop watching', icon: 'x', destructive: true, onSelect: () => unwatch(menu) },
       ] : []} />
-      <HoldingForm open={!!form} onClose={() => setForm(null)} form={form} prices={data.prices}
+      <HoldingForm open={!!form} onClose={() => setForm(null)} form={form} prices={data.prices} sectors={sectors}
         onSave={async (before, after, txn) => {
           await source.saveHoldingChange(before, after, txn);
           await reload();
@@ -89,7 +91,7 @@ export function useHoldingActions({ data, source, reload }: Pick<ScreenProps, 'd
   );
 
   return {
-    view, callFor, ui,
+    view, sectors, callFor, ui,
     open: setDetail, menu: setMenu, edit, buy, remove, unwatch,
     add: () => setForm({ mode: 'add' }),
   };

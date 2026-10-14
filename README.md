@@ -32,8 +32,12 @@ Running cost: Rs 0 (free tiers of Supabase, GitHub Actions, Cloudflare Workers, 
 
 - **Home:** Buy / Hold / Wait for today (the AI's stance when fresh, never "Buy" on a rally day), portfolio
   value, invested this month vs your monthly SIP, story-style circles per holding (ring = today's move),
-  allocation donut (biggest slice red), rebalance tips, AI Assistant suggestions, KSE-100, wealth growth (your monthly
-  investment and its yearly increase from Profile, compounded at a chosen return).
+  sector donut (biggest slice red) with **Show more** → the full breakdown: every sector with its share of your money,
+  flagged over the sector limit, and the stocks inside it (value, share of the sector, profit/loss; tap for details).
+  Sectors are PSX's own classification, filed automatically for every holding (price row, else the market screen; the
+  worker fills in any that are missing), so you are never asked to pick one. Also rebalance tips, AI Assistant
+  suggestions, KSE-100, wealth growth (your monthly investment and its yearly increase from Profile, compounded at a
+  chosen return).
 - **Portfolio:** each holding shows a call: *Hold*, *Buy more* (average down) or *Opportunity*, from how far
   the price is below **your last buy**, or *Trim* / *Review*. The AI can refine calls but never against your
   own rules (hold-no-add, review, cap, Shariah). Swipe left: edit / remove (with Undo). Swipe right: record a
