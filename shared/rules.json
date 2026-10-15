@@ -11,7 +11,11 @@
     "average_down_pct": 5,
     "repeat_days": 7,
     "trim_near_high_pct": 5,
-    "trim_weight_of_cap": 0.8
+    "trim_weight_of_cap": 0.8,
+    "hard_stock_cap_pct": 30,
+    "hard_sector_cap_pct": 40,
+    "review_after_loss_quarters": 2,
+    "sell_after_loss_quarters": 4
   },
   "notifications": {
     "max_per_day": 3

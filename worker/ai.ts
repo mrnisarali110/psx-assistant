@@ -25,6 +25,8 @@ export interface AnnouncementDigest {
   figures: { label: string; value: string; verified: boolean }[];
   verified: boolean; // every number in the summary and figures was found in the PDF text
   dividend: { dps: number; type: 'interim' | 'final' | 'special' | null; book_closure_from: string | null; book_closure_to: string | null; verified: boolean } | null;
+  /** Profit after tax of the latest quarter, when the filing reports one (results only). */
+  earnings: { period_end: string; profit_after_tax: number; verified: boolean } | null;
   /** The dates the AI wrote do not fit the filing date: a re-upload of an old notice, or a date that cannot be right (ISSUE-06). */
   date_note: 'older_document' | 'date_unclear' | null;
   model: string;
@@ -43,6 +45,8 @@ const ANN_SCHEMA = {
     dividend_type: { type: 'STRING', enum: ['interim', 'final', 'special'], nullable: true },
     book_closure_from: { type: 'STRING', nullable: true, description: 'YYYY-MM-DD start of share transfer book closure for that dividend, or null.' },
     book_closure_to: { type: 'STRING', nullable: true, description: 'YYYY-MM-DD end of book closure, or null.' },
+    quarter_end: { type: 'STRING', nullable: true, description: 'Financial results only: YYYY-MM-DD last day of the latest THREE-MONTH quarter reported, else null.' },
+    quarter_profit_after_tax: { type: 'NUMBER', nullable: true, description: 'Profit after tax for that single three-month quarter in RUPEES (convert "thousand"/"million"), negative for a loss. Not the half-year or nine-month total. null if not printed.' },
   },
   required: ['summary', 'figures'],
 };
@@ -83,9 +87,16 @@ export async function readAnnouncement(ai: LlmRouter, pdf: Uint8Array, meta: { s
     // "70%" on Rs 10 face value is printed as 70, so accept either the DPS or the percentage form.
     verified: !!text && (numbersGrounded(String(dps), known).ok || numbersGrounded(String(dps * 10), known).ok),
   } : null;
+  // The quarter's profit counts only with a plausible quarter end (a quarter closes 0-120 days before the filing).
+  const qEnd = isoDate(data.quarter_end);
+  const qProfit = Number(data.quarter_profit_after_tax);
+  const qOk = qEnd && Number.isFinite(qProfit) && qProfit !== 0 && (!meta.published_at || (qEnd <= meta.published_at && Date.parse(meta.published_at) - Date.parse(qEnd) <= 120 * 86400000));
+  // Printed in rupees, thousands or millions: verified when one of those forms is in the PDF text.
+  const qVerified = !!qOk && !!text && [1, 1e3, 1e6].some((u) => numbersGrounded(String(Math.round(Math.abs(qProfit) / u)), known).ok);
+  const earnings = qOk ? { period_end: qEnd as string, profit_after_tax: Math.round(qProfit), verified: qVerified } : null;
   const verdict = meta.published_at ? dateVerdict([summary, ...figures.map((f: { value: string }) => f.value)], meta.published_at) : 'ok';
   return {
-    summary, figures, dividend, model,
+    summary, figures, dividend, earnings, model,
     verified: checks(summary || '0') && figures.every((f: { value: string; verified: boolean }) => f.verified || numbersIn(f.value).length === 0),
     date_note: verdict === 'ok' ? null : verdict,
   };
@@ -117,7 +128,7 @@ export interface InsightFacts {
   recent_news: { symbol: string; date: string; summary: string }[];
 }
 
-const CALLS: HoldingCallKind[] = ['hold', 'average_down', 'opportunity', 'trim', 'review'];
+const CALLS: HoldingCallKind[] = ['hold', 'average_down', 'opportunity', 'trim', 'review', 'sell'];
 const ACTIONS: AiSuggestion['action'][] = ['buy', 'add', 'hold', 'trim', 'sell', 'watch', 'review'];
 
 const INSIGHT_SCHEMA = {
@@ -173,7 +184,7 @@ Never compare numbers from different periods: portfolio.pnl_since_bought_pct is 
 (all time); market.change_pct and portfolio.day_change_pct are today only. Compare today with today, or say each on its own.`;
 
 export interface GuardContext {
-  holdings: { symbol: string; status: string; weight_pct: number | null; is_shariah: boolean | null }[];
+  holdings: { symbol: string; status: string; weight_pct: number | null; is_shariah: boolean | null; rules_call?: string }[];
   universe: Set<string>; // holdings + watchlist + screen candidates
   shariahOf: (s: string) => boolean | null;
   maxPositionPct: number;
@@ -208,10 +219,13 @@ export function guardInsight(raw: any, facts: unknown, g: GuardContext): { insig
     const text = clamp(s.text, 180);
     const why = clamp(s.why, 220);
     const buying = action === 'buy' || action === 'add';
+    const cutting = action === 'trim' || action === 'sell';
+    const ruleCall = g.holdings.find((h) => h.symbol === sym)?.rules_call;
     const reject = !ACTIONS.includes(action) ? `unknown action ${action}`
       : sym && !g.universe.has(sym) ? `${sym} is not in your portfolio, watchlist or screen`
       : !text ? 'empty'
       : buying ? buyBlocked(sym, g) ?? grounded(`${text} ${why}`)
+      : cutting && ruleCall && ruleCall !== 'trim' && ruleCall !== 'sell' ? `${sym} is not a Trim under your rules`
       : grounded(`${text} ${why}`);
     if (reject) { reasons.push(`${action} ${sym ?? ''}: ${reject}`.trim()); continue; }
     if (suggestions.length < 4) suggestions.push({ action, symbol: sym, text, why, confidence: ['low', 'medium', 'high'].includes(s.confidence) ? s.confidence : 'low' });
@@ -224,7 +238,9 @@ export function guardInsight(raw: any, facts: unknown, g: GuardContext): { insig
     const text = clamp(c?.text, 100);
     if (!g.holdings.some((h) => h.symbol === sym) || !CALLS.includes(call) || !text || holdingCalls.some((x) => x.symbol === sym)) continue;
     const adding = call === 'average_down' || call === 'opportunity';
-    const reject = (adding ? buyBlocked(sym, { ...g, rulesSay: 'Hold' }) : null) ?? grounded(text);
+    const ruleCall = g.holdings.find((h) => h.symbol === sym)?.rules_call;
+    const raising = (call === 'trim' || call === 'review' || call === 'sell') && ruleCall && ruleCall !== call;
+    const reject = (adding ? buyBlocked(sym, { ...g, rulesSay: 'Hold' }) : null) ?? (raising ? `${call} needs a reason from your rules` : null) ?? grounded(text);
     if (reject) { reasons.push(`call ${call} ${sym}: ${reject}`); continue; }
     holdingCalls.push({ symbol: sym, call, text });
   }

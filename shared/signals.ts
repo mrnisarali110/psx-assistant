@@ -133,6 +133,11 @@ export function holdingAlerts(view: PortfolioView, settings: Settings, date: str
         kind: 'over_cap', symbol: s, level: 'market', url: '/#/portfolio', dedupe_key: `over_cap:${s}:${week}`,
         title: `${s} over your ${settings.max_position_pct}% cap`, message: `${s} is ${r.weight_pct!.toFixed(1)}% of your portfolio. Pause new money to it.`,
       });
+    } else if (call.call === 'sell') {
+      out.push({
+        kind: 'sell', symbol: s, level: 'market', url: '/#/portfolio', dedupe_key: `sell:${s}:${week}`,
+        title: `Sell? ${s}`, message: `${s} Rs ${p.toFixed(2)}: ${call.text}. Plan the sale in Portfolio → Sell.`,
+      });
     } else if (call.call === 'trim') {
       // Your own sell/trim rules (target price, P/E far above the sector, a dividend cut) or the AI's trim call: once a week per stock.
       out.push({

@@ -3,7 +3,7 @@
  * long-press menu, edit / record-buy form, remove with Undo, watchlist actions.
  */
 import { useMemo, useState } from 'react';
-import { buildPortfolio, mergeCall, screenSectors, screenShariah, sectorPeMap, type HoldingView } from '../../shared/portfolio.ts';
+import { buildPortfolio, cleanInsight, mergeCall, screenSectors, screenShariah, sectorPeMap, type HoldingView } from '../../shared/portfolio.ts';
 import { upcomingDividends } from '../../shared/discover.ts';
 import { tradingCalendar } from '../../shared/calendar.ts';
 import { pktDate } from '../../shared/time.ts';
@@ -32,8 +32,8 @@ export function useHoldingActions({ data, source, reload }: Pick<ScreenProps, 'd
   const shariah = useMemo(() => screenShariah(data.screen), [data.screen]);
   const today = pktDate(new Date());
   const sectorPe = useMemo(() => sectorPeMap(data.screen), [data.screen]);
-  const view = useMemo(() => buildPortfolio(data.holdings, data.prices, data.settings, DEFAULT_RULES, sectors, { today, sectorPe, dividends: data.dividends }), [data, sectors, today, sectorPe]);
-  const ai = freshInsight(data.aiInsight);
+  const view = useMemo(() => buildPortfolio(data.holdings, data.prices, data.settings, DEFAULT_RULES, sectors, { today, sectorPe, dividends: data.dividends, earnings: data.earnings }), [data, sectors, today, sectorPe]);
+  const ai = cleanInsight(freshInsight(data.aiInsight), view, data.settings);
   const callFor = (row: HoldingView) => mergeCall(row, ai, data.settings);
   const rowOf = (sym: string | null) => view.rows.find((r) => r.holding.symbol === sym);
   const watchOf = (sym: string | null) => data.watchlist.find((w) => w.symbol === sym);
@@ -110,7 +110,7 @@ export function useHoldingActions({ data, source, reload }: Pick<ScreenProps, 'd
   );
 
   return {
-    view, sectors, callFor, ui, today,
+    view, sectors, callFor, ui, today, ai,
     open: setDetail, menu: setMenu, edit, buy, remove, unwatch, planSale,
     add: () => setForm({ mode: 'add' }),
   };

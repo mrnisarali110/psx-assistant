@@ -42,7 +42,7 @@ function fakeAi(fail = false, oldNotice = false): LlmRouter & { calls: string[] 
       calls.push(task);
       if (fail) throw new Error('AI unavailable: 429');
       if (task === 'pdf' && oldNotice) return { model: 'fake', data: { summary: 'Board meeting held on September 30, 2020 approved an interim dividend.', figures: [{ label: 'Meeting date', value: 'September 30, 2020' }], cash_dividend_per_share: 7, dividend_type: 'interim', book_closure_from: '2020-10-20', book_closure_to: '2020-10-22' } };
-      if (task === 'pdf') return { model: 'fake', data: { summary: 'MEBL profit up; interim dividend Rs 7.', figures: [], cash_dividend_per_share: 7, dividend_type: 'interim', book_closure_from: '2026-10-19', book_closure_to: '2026-10-21' } };
+      if (task === 'pdf') return { model: 'fake', data: { summary: 'MEBL profit up; interim dividend Rs 7.', figures: [], cash_dividend_per_share: 7, dividend_type: 'interim', book_closure_from: '2026-10-19', book_closure_to: '2026-10-21', quarter_end: '2026-09-30', quarter_profit_after_tax: -539104000 } };
       if (system.includes('cautious assistant')) return { model: 'fake', data: {
         headline: 'Banks are cheap versus your last buys.', stance: 'buy',
         holding_calls: [{ symbol: 'UBL', call: 'opportunity', text: 'UBL 6.5% below your last buy' }],
@@ -146,6 +146,7 @@ describe('AI in the market job', () => {
     expect(r.ai).toMatchObject({ announcements_read: 1, dividends: 1, insights: 1 });
     expect(store.insights[0]).toMatchObject({ stance: 'buy', job: 'market' });
     expect(store.divs[0]).toMatchObject({ symbol: 'MEBL', dps: 7, book_closure_from: '2026-10-19' });
+    expect(store.earningsRows[0]).toMatchObject({ symbol: 'MEBL', period_end: '2026-09-30', profit_after_tax: -539104000 }); // the quarter's profit feeds the loss-quarter rules
     const alerts = n.sent.flatMap((s) => s.n.alerts);
     expect(alerts.find((a) => a.kind === 'ai_suggestion')?.message).toMatch(/^AI Assistant suggests: Add MEBL/);
     expect(alerts.find((a) => a.kind === 'buy_chance' && a.symbol === 'UBL')?.title).toBe('Opportunity: UBL'); // AI upgraded it

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { allocationSlices, buildPortfolio, mergeCall, sectorBreakdown, sectorSlices } from './portfolio.ts';
+import { allocationSlices, buildPortfolio, cleanInsight, mergeCall, sectorBreakdown, sectorSlices } from './portfolio.ts';
 import { sectorLabel } from './format.ts';
 import { applyBuy, cleanImported, describeChange, diffImport, investedThisMonth, txnFromChange, withLastBuy } from './changes.ts';
 import { dividendLeaders, frequencyOf, sortDividends, sortUndervalued, sortUpcoming, undervalued, upcomingDividends, workingDaysBefore, type ScreenRow } from './discover.ts';
@@ -68,14 +68,23 @@ describe('portfolio', () => {
     expect(r.call.call).toBe('hold'); // 548.11 is only 0.3% below 550
   });
 
-  it('lets the AI call a holding, unless it breaks your own rules', () => {
+  it('lets the AI call a holding, unless it breaks your own rules or raises a Trim your rules do not support', () => {
     const v = view();
     const ai = { holding_calls: [
-      { symbol: 'DCR', call: 'trim', text: 'REIT near its 52-week high' },
+      { symbol: 'DCR', call: 'trim', text: '5.9% below last buy' }, // no rule says trim: refused, so a Trim always has a real reason
       { symbol: 'EFERT', call: 'average_down', text: 'cheap' }, // hold_no_add: refused
+      { symbol: 'SYS', call: 'hold', text: 'wait for results' },
     ] } as AiInsight;
-    expect(mergeCall(row('DCR', v), ai, SEED_SETTINGS)).toEqual({ call: 'trim', text: 'REIT near its 52-week high', source: 'ai' });
+    expect(mergeCall(row('DCR', v), ai, SEED_SETTINGS)).toEqual(row('DCR', v).call);
     expect(mergeCall(row('EFERT', v), ai, SEED_SETTINGS).source).toBe('rules');
+    expect(mergeCall(row('SYS', v), ai, SEED_SETTINGS)).toEqual({ call: 'hold', text: 'wait for results', source: 'ai' });
+    // Saved suggestions are cleaned the same way: no "Reduce" without a rule, no add where new money is blocked.
+    const clean = cleanInsight({ suggestions: [
+      { action: 'trim', symbol: 'DCR', text: 'Reduce DCR', why: '', confidence: 'high' },
+      { action: 'add', symbol: 'EFERT', text: 'Add EFERT', why: '', confidence: 'high' },
+      { action: 'add', symbol: 'SYS', text: 'Add SYS', why: '', confidence: 'high' },
+    ] } as AiInsight, v, SEED_SETTINGS)!;
+    expect(clean.suggestions.map((x) => x.symbol)).toEqual(['SYS']);
   });
 
   it('suggests rebalancing over-cap stocks and heavy sectors, with the sector cap from your settings', () => {
@@ -148,6 +157,36 @@ describe('P/E trim needs a second signal', () => {
     expect(mebl.call.call).not.toBe('trim');
     const near = buildPortfolio(SEED_HOLDINGS, { ...SEED_PRICES, MEBL: { ...SEED_PRICES.MEBL, high_52w: 560 } }, SEED_SETTINGS, DEFAULT_RULES, {}, { today: TODAY, sectorPe: { 'COMMERCIAL BANKS': 6.5 } });
     expect(near.rows.find((r) => r.holding.symbol === 'MEBL')!.call.text).toMatch(/near its 52-week high/);
+  });
+});
+
+describe('hard caps and loss quarters', () => {
+  const q = (symbol: string, period_end: string, profit_after_tax: number) => ({ id: `${symbol}-${period_end}`, symbol, period_end, profit_after_tax, verified: true });
+  it('the soft cap only stops new money; Trim comes above the hard cap, with the reason', () => {
+    const holdings = SEED_HOLDINGS.map((h) => (h.symbol === 'SYS' ? { ...h, shares: 150 } : h)); // about 28%: over 25% soft, under 30% hard
+    const soft = buildPortfolio(holdings, SEED_PRICES, SEED_SETTINGS).rows.find((r) => r.holding.symbol === 'SYS')!;
+    expect(soft.flags.over_cap).toBe(true);
+    expect(soft.call.call).not.toBe('trim');
+    const big = SEED_HOLDINGS.map((h) => (h.symbol === 'SYS' ? { ...h, shares: 250 } : h));
+    const hard = buildPortfolio(big, SEED_PRICES, SEED_SETTINGS).rows.find((r) => r.holding.symbol === 'SYS')!;
+    expect(hard.call).toMatchObject({ call: 'trim' });
+    expect(hard.call.text).toMatch(/over your 30% hard cap/);
+  });
+  it('a sector over its hard cap trims its biggest holding', () => {
+    const v = buildPortfolio(SEED_HOLDINGS, SEED_PRICES, { ...SEED_SETTINGS, hard_sector_cap_pct: 25 });
+    const banks = v.rows.filter((r) => r.sector === 'COMMERCIAL BANKS');
+    expect(banks.find((r) => r.holding.symbol === 'MEBL')!.call.text).toMatch(/sector is 31% of your money, over your 25% hard cap/);
+    expect(banks.find((r) => r.holding.symbol === 'UBL')!.call.call).not.toBe('trim');
+  });
+  it('Review after 2 loss quarters in a row, Sell after 4; a profit in between resets the count', () => {
+    const earnings = [q('AVN', '2026-06-30', -5e6), q('AVN', '2026-03-31', -2e6), q('AVN', '2025-12-31', -1e6), q('AVN', '2025-09-30', -3e6),
+      q('FCCL', '2026-06-30', -1e6), q('FCCL', '2026-03-31', -1e6), q('FCCL', '2025-12-31', 4e6), q('FCCL', '2025-09-30', -1e6)];
+    const holdings = SEED_HOLDINGS.map((h) => ({ ...h, status: 'core' as const }));
+    const v = buildPortfolio(holdings, SEED_PRICES, SEED_SETTINGS, DEFAULT_RULES, {}, { today: TODAY, earnings });
+    expect(v.rows.find((r) => r.holding.symbol === 'AVN')!.call).toMatchObject({ call: 'sell', text: 'Loss in each of the last 4 quarters (your rule: sell after 4)' });
+    expect(v.rows.find((r) => r.holding.symbol === 'FCCL')!.call).toMatchObject({ call: 'review', text: 'Loss in each of the last 2 quarters: re-check why you own it' });
+    const off = buildPortfolio(holdings, SEED_PRICES, { ...SEED_SETTINGS, review_after_loss_quarters: 0, sell_after_loss_quarters: 0 }, DEFAULT_RULES, {}, { today: TODAY, earnings });
+    expect(off.rows.find((r) => r.holding.symbol === 'AVN')!.call.call).not.toBe('sell');
   });
 });
 

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { ScreenProps } from '../App.tsx';
 import { investedThisMonth } from '../../shared/changes.ts';
+import { headlineReturn } from '../../shared/performance.ts';
 import { pktDate } from '../../shared/time.ts';
 import { pct, rs, rs2, signedRs } from '../../shared/format.ts';
 import { missingNum, peOutlier } from '../../shared/quality.ts';
@@ -39,6 +40,7 @@ export function Portfolio(props: ScreenProps) {
   const [hint, setHint] = useState(() => { try { return !localStorage.getItem(HINT_KEY); } catch { return false; } });
   const invested = investedThisMonth(data.transactions, pktDate(new Date()));
   const budget = data.settings.monthly_budget_pkr;
+  const hr = headlineReturn(view, data.receipts); // the same figure as Home
   const swipe = useSwipeTabs(TABS.length, TABS.findIndex((t) => t.value === tab), (i) => setTab(TABS[i].value));
   useEffect(() => {
     const onHash = () => setTab(tabFromHash());
@@ -61,7 +63,8 @@ export function Portfolio(props: ScreenProps) {
         <Card>
           <p className="text-xs text-slate-500 dark:text-slate-400">Value</p>
           <p className="num text-lg font-bold">{rs(view.total_value)}</p>
-          <p className={`num text-xs font-semibold ${changeTone(view.total_pnl)}`}>{signedRs(view.total_pnl)} ({pct(view.total_pnl_pct)}) price only</p>
+          <p className={`num text-xs font-semibold ${changeTone(hr.total)}`}>{signedRs(hr.total)} ({pct(hr.pct)}) total</p>
+          {hr.dividends > 0 && <p className="num text-[11px] text-slate-500 dark:text-slate-400">incl. {rs(hr.dividends)} dividends</p>}
         </Card>
         <Card>
           <p className="text-xs text-slate-500 dark:text-slate-400">Invested this month</p>

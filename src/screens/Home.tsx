@@ -3,13 +3,13 @@ import type { ScreenProps } from '../App.tsx';
 import { tradingCalendar, weekAhead } from '../../shared/calendar.ts';
 import { investedThisMonth } from '../../shared/changes.ts';
 import { todayState } from '../../shared/quality.ts';
-import { dividendsReceivedNet } from '../../shared/performance.ts';
+import { headlineReturn } from '../../shared/performance.ts';
 import { dayStance, todayBanner } from '../../shared/signals.ts';
 import { isMarketOpen, isStale, minutesToClose, pktDate, pktParts } from '../../shared/time.ts';
 import { DEFAULT_RULES } from '../../shared/types.ts';
 import { asOfLabel, num, pct, rs, signedRs } from '../../shared/format.ts';
-import { AiBadge, AiCard } from '../components/AiCard.tsx';
-import { freshInsight, useHoldingActions } from '../components/HoldingActions.tsx';
+import { AiCard } from '../components/AiCard.tsx';
+import { useHoldingActions } from '../components/HoldingActions.tsx';
 import { Button, Card, Section, Sparkline, SymbolAvatar, changeTone } from '../components/ui.tsx';
 import { useLongPress } from '../lib/gestures.ts';
 import { WeekRow } from './News.tsx';
@@ -19,6 +19,7 @@ const HERO = {
   add: { word: 'ADD', cls: 'from-emerald-500 to-teal-600 text-white' },
   hold: { word: 'HOLD', cls: 'from-slate-700 to-slate-900 text-white dark:from-slate-800 dark:to-slate-900' },
   review: { word: 'REVIEW', cls: 'from-amber-400 to-orange-500 text-slate-950' },
+  trim: { word: 'TRIM', cls: 'from-amber-400 to-orange-500 text-slate-950' },
 };
 
 export function latestAsOf(data: ScreenProps['data']): string | null {
@@ -38,8 +39,9 @@ export function Home(props: ScreenProps) {
   const { view, today } = acts;
   const asOf = latestAsOf(data);
   const stale = isStale(asOf, now, DEFAULT_RULES.data.stale_minutes, DEFAULT_RULES.market_hours_pkt);
-  const ai = freshInsight(data.aiInsight, now);
-  const stance = dayStance(todayBanner(data.index, data.settings, { stale }), ai, now);
+  const ai = acts.ai; // the AI insight after your rules: no trim without a rule, no add where new money is blocked
+  const banner = todayBanner(data.index, data.settings, { stale });
+  const stance = dayStance(banner, ai, now);
   const invested = investedThisMonth(data.transactions, pktDate(now));
   const budget = data.settings.monthly_budget_pkr;
   const open = isMarketOpen(now, DEFAULT_RULES.market_hours_pkt);
@@ -49,13 +51,13 @@ export function Home(props: ScreenProps) {
   // One story with the AI card below: what it suggests adding or trimming decides the Today card too (the worker's
   // guardrails already dropped any add that breaks your caps, Shariah or hold-no-add rules).
   const aiAdds = (ai?.suggestions ?? []).filter((x) => (x.action === 'add' || x.action === 'buy') && x.symbol).map((x) => x.symbol as string);
-  const ruleTrims = view.rows.filter((r) => r.call.call === 'trim').map((r) => r.holding.symbol);
-  const aiTrims = (ai?.suggestions ?? []).filter((x) => (x.action === 'trim' || x.action === 'sell') && x.symbol).map((x) => x.symbol as string);
+  const trimRows = view.rows.filter((r) => r.call.call === 'trim' || r.call.call === 'sell');
+  const ruleTrims = trimRows.map((r) => r.holding.symbol);
   const addable = [...new Set([
     ...view.rows.filter((r) => { const c = acts.callFor(r).call; return c === 'average_down' || c === 'opportunity'; }).map((r) => r.holding.symbol),
     ...aiAdds,
   ])].filter((s) => !ruleTrims.includes(s));
-  const trims = [...new Set([...ruleTrims, ...aiTrims])];
+  const trims = trimRows.map((r) => ({ symbol: r.holding.symbol, reason: r.call.text }));
   const state = todayState({
     stance: stance.action === 'Hold' && aiAdds.length ? 'Buy' : stance.action, cash_left: budget - invested, attention: 0, addable, trims,
   });
@@ -71,9 +73,8 @@ export function Home(props: ScreenProps) {
   // Profit / loss on your average cost, as before: the full return with dividends and the KSE-100 comparison live on
   // Portfolio → Performance, where they only show once your buys list explains every holding.
   // Total return: price profit/loss on your average cost plus dividends received (net of tax), one line.
-  const divNet = dividendsReceivedNet(data.receipts);
-  const total = view.total_pnl + divNet;
-  const totalPct = view.total_cost > 0 ? (total / view.total_cost) * 100 : null;
+  const hr = headlineReturn(view, data.receipts);
+  const { total, pct: totalPct, dividends: divNet } = hr;
   const retLine = !data.holdings.length || nonePriced ? null
     : `${signedRs(total)} (${pct(totalPct)}) total${divNet > 0 ? `, incl. ${rs(divNet)} dividends` : ''}${unpriced ? ` · ${unpriced} not priced yet` : ''}`;
 
@@ -97,9 +98,8 @@ export function Home(props: ScreenProps) {
         </div>
         <div className="min-w-0 flex-1">
           <p className="text-[13px] leading-snug font-semibold">{state.headline}</p>
-          <p className="mt-0.5 text-xs leading-snug opacity-90">{stance.reason}</p>
+          <p className="mt-0.5 text-xs leading-snug opacity-90">{banner.reason}</p>
         </div>
-        {stance.source === 'ai' && <span className="shrink-0 self-start"><AiBadge /></span>}
       </div>
 
       <Card onClick={() => go('portfolio')}>

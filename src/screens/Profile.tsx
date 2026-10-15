@@ -129,10 +129,10 @@ export function Profile({ data, source, reload, onExitDemo }: ScreenProps & { on
 
       <Section title="Your rules">
         <Card className="divide-y divide-slate-100 py-0 dark:divide-slate-800">
-          <Row icon="scale" label="Max per stock" hint="No new money above this share of the portfolio.">
+          <Row icon="scale" label="Max per stock" hint="Soft cap: no new money above this share of the portfolio.">
             <NumberInput label="Max per stock" suffix="%" value={s.max_position_pct} min={1} max={100} width="w-24" onSave={(v) => save({ max_position_pct: v })} />
           </Row>
-          <Row icon="scale" label="Max per sector" hint="No new money into a sector above this share. A breach shows under Needs attention on Home.">
+          <Row icon="scale" label="Max per sector" hint="Soft cap: no new money into a sector above this share.">
             <NumberInput label="Max per sector" suffix="%" value={s.max_sector_pct} min={1} max={100} width="w-24" onSave={(v) => save({ max_sector_pct: v })} />
           </Row>
           <Row icon="bag" label="Opportunity alert" hint="Tell me when a stock is this far below my last buy.">
@@ -142,7 +142,21 @@ export function Profile({ data, source, reload, onExitDemo }: ScreenProps & { on
             <Toggle label="Shariah-compliant only" checked={s.shariah_only} onChange={(v) => save({ shariah_only: v })} />
           </Row>
         </Card>
-        <p className="px-1 text-xs text-slate-500 dark:text-slate-400">Sell and trim rules. A holding over its cap or at its target price is always marked Trim; a review date reached marks it Review.</p>
+        <Card className="divide-y divide-slate-100 py-0 dark:divide-slate-800">
+          <Row icon="tag" label="Hard cap per stock" hint="Above this a holding is marked Trim, with the reason.">
+            <NumberInput label="Hard cap per stock" suffix="%" value={s.hard_stock_cap_pct} min={1} max={100} width="w-24" onSave={(v) => save({ hard_stock_cap_pct: v })} />
+          </Row>
+          <Row icon="tag" label="Hard cap per sector" hint="Above this the sector's biggest holding is marked Trim.">
+            <NumberInput label="Hard cap per sector" suffix="%" value={s.hard_sector_cap_pct} min={1} max={100} width="w-24" onSave={(v) => save({ hard_sector_cap_pct: v })} />
+          </Row>
+          <Row icon="flag" label="Review after loss quarters" hint="Loss-making quarters in a row, from the results filings the AI reads. 0 turns it off.">
+            <NumberInput label="Review after this many loss quarters" value={s.review_after_loss_quarters} min={0} max={12} width="w-20" decimals={0} onSave={(v) => save({ review_after_loss_quarters: v })} />
+          </Row>
+          <Row icon="alert" label="Sell after loss quarters" hint="Marks the holding Sell. 0 turns it off.">
+            <NumberInput label="Sell after this many loss quarters" value={s.sell_after_loss_quarters} min={0} max={12} width="w-20" decimals={0} onSave={(v) => save({ sell_after_loss_quarters: v })} />
+          </Row>
+        </Card>
+        <p className="px-1 text-xs text-slate-500 dark:text-slate-400">Sell and trim rules. A holding over its hard cap or at its target price is always marked Trim, with the reason; a review date reached marks it Review.</p>
         <Card className="divide-y divide-slate-100 py-0 dark:divide-slate-800">
           <Row icon="up" label="Trim when P/E runs ahead of its sector by" hint="Compared with the sector's typical P/E on the KSE-100 screen. 0 turns it off.">
             <NumberInput label="Trim when P/E is this much above its sector" suffix="%" value={s.trim_pe_over_sector_pct} min={0} max={500} width="w-24" onSave={(v) => save({ trim_pe_over_sector_pct: v })} />

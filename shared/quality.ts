@@ -251,15 +251,19 @@ const nameList = (symbols: string[]) => {
  *   `addable` may take money;
  * - 'hold' otherwise, with a headline that says why and never suggests buying.
  */
-export function todayState(o: { stance: 'Buy' | 'Hold' | 'Wait'; cash_left: number; attention: number; addable: string[]; trims?: string[] }): { state: 'hold' | 'add' | 'review'; headline: string } {
+export function todayState(o: { stance: 'Buy' | 'Hold' | 'Wait'; cash_left: number; attention: number; addable: string[]; trims?: { symbol: string; reason: string }[] }):
+  { state: 'hold' | 'add' | 'review' | 'trim'; headline: string } {
   if (o.attention > 0) {
     return { state: 'review', headline: o.attention === 1 ? 'Review first: one of your rules is broken' : `Review first: ${o.attention} of your rules are broken` };
+  }
+  // A trim from your own rules comes first and always says why; never under a "Hold".
+  if (o.trims?.length) {
+    const [t] = o.trims;
+    return { state: 'trim', headline: o.trims.length === 1 ? `Trim ${t.symbol}: ${t.reason}` : `Trim ${nameList(o.trims.map((x) => x.symbol))}; first ${t.symbol}: ${t.reason}` };
   }
   if (o.stance === 'Buy' && o.cash_left > 0 && o.addable.length > 0) {
     return { state: 'add', headline: `Add money: ${rs(o.cash_left)} left for ${nameList(o.addable)}` };
   }
-  // A suggested trim must not sit under "nothing to do": say it in the headline.
-  if (o.trims?.length) return { state: 'hold', headline: `No new buys today; consider trimming ${nameList(o.trims)}` };
   if (o.stance === 'Wait') return { state: 'hold', headline: 'Hold: the market says wait today' };
   if (o.stance === 'Buy' && o.cash_left <= 0) return { state: 'hold', headline: "Hold: this month's money is all invested" };
   if (o.stance === 'Buy') return { state: 'hold', headline: 'Hold: nothing qualifies for more money today' };

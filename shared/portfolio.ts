@@ -1,4 +1,4 @@
-import type { AiInsight, DividendEvent, Holding, HoldingCallKind, Price, PriceMap, Rules, Settings } from './types.ts';
+import type { AiInsight, DividendEvent, Holding, HoldingCallKind, Price, PriceMap, QuarterEarnings, Rules, Settings } from './types.ts';
 import { DEFAULT_RULES } from './types.ts';
 import { sectorLabel, rs2 } from './format.ts';
 import { dividendCut, missingNum, peOutlier } from './quality.ts';
@@ -66,7 +66,17 @@ export function sectorPeMap(screen: { sector: string | null; pe: number | null }
 }
 
 /** What the trim and review rules need besides prices: today's date, sector P/Es and the dividend filings. */
-export interface RuleContext { today?: string; sectorPe?: Record<string, number>; dividends?: DividendEvent[] }
+export interface RuleContext { today?: string; sectorPe?: Record<string, number>; dividends?: DividendEvent[]; earnings?: QuarterEarnings[] }
+
+/** Loss-making quarters in a row, counted back from the latest quarter the filings show (one row per quarter end). */
+export function lossQuartersInARow(symbol: string, earnings: QuarterEarnings[] | undefined): { count: number; latest: string | null } {
+  const mine = new Map<string, number>();
+  for (const e of earnings ?? []) if (e.symbol === symbol && !mine.has(e.period_end)) mine.set(e.period_end, e.profit_after_tax);
+  const ends = [...mine.keys()].sort().reverse();
+  let count = 0;
+  for (const d of ends) { if ((mine.get(d) as number) < 0) count++; else break; }
+  return { count, latest: ends[0] ?? null };
+}
 
 /** PSX's own sector name (one taxonomy for everything): from the price row, else the screen, else what is stored. */
 export function sectorOf(symbol: string, prices: PriceMap, fallback?: string | null, extra: SectorMap = {}): string {
@@ -92,8 +102,13 @@ const SHORT: Record<string, string> = { 'you set it to hold, no add': 'hold only
 const shortReason = (r: string) => SHORT[r] ?? (r.includes('sector') ? 'sector at cap' : r.includes('cap') ? 'at cap' : r);
 
 /** Sell and trim triggers (FEATURE-05), each a setting: over the stock cap, target price reached, P/E far above the sector, a dividend cut. */
-export function trimReason(h: Holding, p: Price | null, weight: number | null, sector: string, settings: Settings, ctx: RuleContext, rules: Rules = DEFAULT_RULES): string | null {
-  if (weight != null && weight > settings.max_position_pct) return `${weight.toFixed(1)}% of your portfolio, over your ${settings.max_position_pct}% cap`;
+export function trimReason(h: Holding, p: Price | null, weight: number | null, sector: string, settings: Settings, ctx: RuleContext, rules: Rules = DEFAULT_RULES,
+  sectorTop?: { pct: number; biggest: boolean }): string | null {
+  // Soft caps (max per stock / sector) only stop new money; the hard caps ask you to trim.
+  const hardStock = settings.hard_stock_cap_pct ?? rules.holding.hard_stock_cap_pct;
+  const hardSector = settings.hard_sector_cap_pct ?? rules.holding.hard_sector_cap_pct;
+  if (weight != null && weight > hardStock) return `${weight.toFixed(1)}% of your portfolio, over your ${hardStock}% hard cap`;
+  if (sectorTop?.biggest && sectorTop.pct > hardSector) return `its sector is ${sectorTop.pct.toFixed(0)}% of your money, over your ${hardSector}% hard cap; this is the sector's biggest holding`;
   const px = p?.price ?? null;
   if (h.target_price && px != null && px >= h.target_price) return `Reached your target price of ${rs2(h.target_price)}`;
   const cut = settings.trim_on_dividend_cut && ctx.dividends?.length ? dividendCut(h.symbol, ctx.dividends) : null;
@@ -113,18 +128,25 @@ export function trimReason(h: Holding, p: Price | null, weight: number | null, s
 }
 
 /** Why the thesis needs a look (FEATURE-04): the review date arrived, or the status says so. */
-export function reviewReason(h: Holding, ctx: RuleContext): string | null {
+export function reviewReason(h: Holding, ctx: RuleContext, settings?: Pick<Settings, 'review_after_loss_quarters'>): string | null {
   if (h.status === 'review') return 'Under review: decide before adding more';
+  const n = settings?.review_after_loss_quarters ?? 0;
+  const losses = lossQuartersInARow(h.symbol, ctx.earnings).count;
+  if (n > 0 && losses >= n) return `Loss in each of the last ${losses} quarters: re-check why you own it`;
   if (h.review_on && ctx.today && h.review_on <= ctx.today) return `Review date reached: re-check why you own it${h.thesis ? ` (${h.thesis})` : ''}`;
   return null;
 }
 
-function ruleCall(h: Holding, p: Price | null, weight: number | null, sectorPct: number | null, sector: string, vsRef: number | null, settings: Settings, rules: Rules, ctx: RuleContext): HoldingCall {
+function ruleCall(h: Holding, p: Price | null, weight: number | null, sectorPct: number | null, sector: string, vsRef: number | null, settings: Settings, rules: Rules, ctx: RuleContext,
+  biggestInSector = false): HoldingCall {
   const below = vsRef != null && vsRef < 0 ? Math.abs(vsRef) : 0;
   const blocked = addBlockedReason(h, weight, settings, sectorPct);
-  const trim = trimReason(h, p, weight, sector, settings, ctx, rules);
+  const sellAfter = settings.sell_after_loss_quarters ?? 0;
+  const losses = lossQuartersInARow(h.symbol, ctx.earnings).count;
+  if (sellAfter > 0 && losses >= sellAfter) return { call: 'sell', text: `Loss in each of the last ${losses} quarters (your rule: sell after ${sellAfter})`, source: 'rules' };
+  const trim = trimReason(h, p, weight, sector, settings, ctx, rules, sectorPct == null ? undefined : { pct: sectorPct, biggest: biggestInSector });
   if (trim) return { call: 'trim', text: trim, source: 'rules' };
-  const review = reviewReason(h, ctx);
+  const review = reviewReason(h, ctx, settings);
   if (review) return { call: 'review', text: review, source: 'rules' };
   if (below >= settings.drop_alert_pct && !blocked) {
     return { call: 'opportunity', text: `${below.toFixed(1)}% below your last buy`, source: 'rules' };
@@ -142,8 +164,30 @@ export function mergeCall(row: HoldingView, ai: Pick<AiInsight, 'holding_calls'>
   if (!c) return row.call;
   const adding = c.call === 'average_down' || c.call === 'opportunity';
   if (adding && addBlockedReason(row.holding, row.weight_pct, settings, row.sector_pct)) return row.call;
-  if (row.call.call === 'trim' || row.call.call === 'review') return row.call; // your own sell, trim and review rules come first
+  if (row.call.call !== 'hold' && row.call.call !== 'average_down' && row.call.call !== 'opportunity') return row.call; // your own sell, trim and review rules come first
+  // A Trim, Review or Sell must carry a reason from your rules; the AI cannot raise one on its own.
+  if (c.call === 'trim' || c.call === 'review' || c.call === 'sell') return row.call;
   return { call: c.call, text: c.text, source: 'ai' };
+}
+
+/**
+ * The AI insight as the app may show it: suggestions to trim or sell only where your own rules say so, suggestions to
+ * add only where your rules allow new money. Insights saved before a rule changed are cleaned the same way, so an old
+ * "Reduce MEBL" disappears once MEBL is no longer a Trim.
+ */
+export function cleanInsight<T extends Pick<AiInsight, 'suggestions'>>(ai: T | null, view: PortfolioView, settings: Settings): T | null {
+  if (!ai) return ai;
+  const row = (s: string | null) => view.rows.find((r) => r.holding.symbol === s);
+  const suggestions = ai.suggestions.filter((x) => {
+    const r = row(x.symbol);
+    if (x.action === 'trim' || x.action === 'sell') return !!r && (r.call.call === 'trim' || r.call.call === 'sell');
+    if (x.action === 'add' || x.action === 'buy') {
+      if (!r) return true; // a stock you do not own: the worker's guardrails already checked it
+      return r.call.call !== 'trim' && r.call.call !== 'sell' && r.call.call !== 'review' && !addBlockedReason(r.holding, r.weight_pct, settings, r.sector_pct);
+    }
+    return true;
+  });
+  return { ...ai, suggestions };
 }
 
 export function buildPortfolio(holdings: Holding[], prices: PriceMap, settings: Settings,
@@ -157,6 +201,13 @@ export function buildPortfolio(holdings: Holding[], prices: PriceMap, settings: 
     const px = prices[h.symbol]?.price ?? null;
     const agg = bySector.get(sector) ?? { value: 0, count: 0 };
     bySector.set(sector, { value: agg.value + (px == null ? 0 : h.shares * px), count: agg.count + 1 });
+  }
+  const biggest = new Map<string, number>(); // the largest holding value in each sector (it is the one to trim first)
+  for (const h of holdings) {
+    const px = prices[h.symbol]?.price;
+    if (px == null) continue;
+    const sector = sectorOf(h.symbol, prices, h.sector, sectors);
+    biggest.set(sector, Math.max(biggest.get(sector) ?? 0, h.shares * px));
   }
   const sectorPctOf = (sector: string) => (total > 0 ? ((bySector.get(sector)?.value ?? 0) / total) * 100 : null);
   let dayChange: number | null = null;
@@ -186,7 +237,7 @@ export function buildPortfolio(holdings: Holding[], prices: PriceMap, settings: 
         over_sector: sectorPct != null && sectorPct > sectorLimit,
         big_move: p?.change_pct != null && Math.abs(p.change_pct) >= rules.holding.big_move_pct,
       },
-      call: ruleCall(h, p, weight, sectorPct, sector, vsRef, settings, rules, ctx),
+      call: ruleCall(h, p, weight, sectorPct, sector, vsRef, settings, rules, ctx, value != null && value >= (biggest.get(sector) ?? Infinity)),
     };
   });
 

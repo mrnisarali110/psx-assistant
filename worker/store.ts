@@ -4,7 +4,7 @@
  */
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import type {
-  AiPicks, Announcement, AlertLogRow, DividendEvent, Holding, IndexDay, IndexSnapshot, PortfolioDay, Price, PriceMap, Settings, Txn, WatchItem,
+  AiPicks, Announcement, AlertLogRow, DividendEvent, Holding, IndexDay, QuarterEarnings, IndexSnapshot, PortfolioDay, Price, PriceMap, Settings, Txn, WatchItem,
 } from '../shared/types.ts';
 import { DEFAULT_SETTINGS } from '../shared/types.ts';
 import type { ScreenRow } from '../shared/discover.ts';
@@ -54,6 +54,8 @@ export interface Store {
   latestInsightAt(userId: string): Promise<string | null>;
   transactionsSince(userId: string, sinceDate: string): Promise<Txn[]>;
   saveDividend(d: DividendEvent): Promise<void>;
+  saveEarnings(e: QuarterEarnings): Promise<void>;
+  earnings(symbols: string[], sinceDate: string): Promise<QuarterEarnings[]>;
   dividends(symbols: string[] | null, sinceDate: string): Promise<DividendEvent[]>;
   savePicks(kind: AiPicks['kind'], items: AiPicks['items'], model: string | null): Promise<void>;
   /** File holdings under PSX's sector (only ones still without a sector are passed). */
@@ -103,7 +105,12 @@ export class SupabaseStore implements Store {
         ...DEFAULT_SETTINGS, ...s,
         monthly_budget_pkr: Number(s.monthly_budget_pkr), sip_step_up_pct: Number(s.sip_step_up_pct ?? 0), crash_fund_pkr: Number(s.crash_fund_pkr),
         crash_trigger_kse: Number(s.crash_trigger_kse), max_position_pct: Number(s.max_position_pct),
-        drop_alert_pct: Number(s.drop_alert_pct), max_sector_pct: Number(s.max_sector_pct ?? DEFAULT_SETTINGS.max_sector_pct),
+        drop_alert_pct: Number(s.drop_alert_pct),
+        hard_stock_cap_pct: Number(s.hard_stock_cap_pct ?? DEFAULT_SETTINGS.hard_stock_cap_pct),
+        hard_sector_cap_pct: Number(s.hard_sector_cap_pct ?? DEFAULT_SETTINGS.hard_sector_cap_pct),
+        review_after_loss_quarters: Number(s.review_after_loss_quarters ?? DEFAULT_SETTINGS.review_after_loss_quarters),
+        sell_after_loss_quarters: Number(s.sell_after_loss_quarters ?? DEFAULT_SETTINGS.sell_after_loss_quarters),
+        max_sector_pct: Number(s.max_sector_pct ?? DEFAULT_SETTINGS.max_sector_pct),
         trim_pe_over_sector_pct: Number(s.trim_pe_over_sector_pct ?? DEFAULT_SETTINGS.trim_pe_over_sector_pct),
         commission_pct: Number(s.commission_pct ?? DEFAULT_SETTINGS.commission_pct),
         min_commission_per_share: Number(s.min_commission_per_share ?? DEFAULT_SETTINGS.min_commission_per_share),
@@ -240,6 +247,16 @@ export class SupabaseStore implements Store {
     return rows.map((t) => ({ ...t, shares: Number(t.shares), price: Number(t.price), amount: Number(t.amount) }));
   }
 
+  async saveEarnings(e: QuarterEarnings) {
+    check(await this.sb.from('earnings').upsert(e, { onConflict: 'id' }), 'save earnings');
+  }
+
+  async earnings(symbols: string[], sinceDate: string) {
+    if (!symbols.length) return [];
+    const rows = check(await this.sb.from('earnings').select('*').in('symbol', symbols).gte('period_end', sinceDate).order('period_end', { ascending: false }).limit(1000), 'earnings') as any[];
+    return rows.map((r) => ({ ...r, profit_after_tax: Number(r.profit_after_tax) }));
+  }
+
   async saveDividend(d: DividendEvent) {
     check(await this.sb.from('dividends').upsert(d, { onConflict: 'id' }), 'save dividend');
   }
@@ -328,6 +345,9 @@ export class MemoryStore implements Store {
   async latestInsightAt(userId: string) { return this.insights.filter((i) => i.user_id === userId).map((i) => i.created_at).sort().at(-1) ?? null; }
   async transactionsSince(userId: string, since: string) { return this.txns.filter((t) => t.user_id === userId && t.executed_on >= since); }
   async saveDividend(d: DividendEvent) { this.divs = [...this.divs.filter((x) => x.id !== d.id), d]; }
+  earningsRows: QuarterEarnings[] = [];
+  async saveEarnings(e: QuarterEarnings) { this.earningsRows = [...this.earningsRows.filter((x) => x.id !== e.id), e]; }
+  async earnings(symbols: string[], since: string) { return this.earningsRows.filter((e) => symbols.includes(e.symbol) && e.period_end >= since); }
   async saveHoldingSectors(rows: { id: string; sector: string }[]) {
     for (const u of this.users) for (const h of u.holdings) { const r = rows.find((x) => x.id === h.id); if (r) h.sector = r.sector; }
   }

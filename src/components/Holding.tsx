@@ -23,6 +23,7 @@ const CALL: Record<HoldingCallKind, { label: string; tone: Tone }> = {
   opportunity: { label: 'Opportunity', tone: 'green' },
   trim: { label: 'Trim', tone: 'amber' },
   review: { label: 'Review', tone: 'amber' },
+  sell: { label: 'Sell', tone: 'red' },
 };
 
 export function CallChip({ call }: { call: HoldingCall }) {

@@ -589,3 +589,14 @@ export function benchmarkFromSnapshot(snapshots: PortfolioDay[], txns: Txn[], re
 
 /** Net dividends received in total (all receipts), for "total return = price profit/loss + dividends". */
 export const dividendsReceivedNet = (receipts: DividendReceipt[]) => r2(receipts.reduce((a, r) => a + (finite(r.net) ? r.net : 0), 0));
+
+/**
+ * The one headline return the app shows everywhere (Home, Portfolio, Performance): profit/loss of what you hold on
+ * your average cost plus every dividend received (net of tax), as % of that cost. Price-only is the same minus dividends.
+ */
+export function headlineReturn(view: { total_pnl: number; total_cost: number; total_pnl_pct: number | null }, receipts: DividendReceipt[]):
+  { total: number; pct: number | null; dividends: number; price_only: number; price_only_pct: number | null } {
+  const dividends = dividendsReceivedNet(receipts);
+  const total = r2(view.total_pnl + dividends);
+  return { total, pct: view.total_cost > 0 ? r1((total / view.total_cost) * 100) : null, dividends, price_only: r2(view.total_pnl), price_only_pct: view.total_pnl_pct };
+}

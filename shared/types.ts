@@ -68,6 +68,10 @@ export interface Settings {
   max_sector_pct: number; // no new money into a sector above this share of the portfolio
   trim_pe_over_sector_pct: number; // "Trim" when a holding's P/E is this much above its sector's typical P/E
   trim_on_dividend_cut: boolean; // "Trim" when the latest declared dividend is below the previous one of its kind
+  hard_stock_cap_pct: number; // above this share of the portfolio a holding is a Trim (max_position_pct only stops new money)
+  hard_sector_cap_pct: number; // above this a sector's biggest holding is a Trim (max_sector_pct only stops new money)
+  review_after_loss_quarters: number; // Review after this many loss-making quarters in a row (0 = off)
+  sell_after_loss_quarters: number; // Sell after this many loss-making quarters in a row (0 = off)
   // Broker & tax (every rate is a setting with a default from rules.json; never a constant in code)
   broker: string;
   commission_pct: number; // % of trade value per side
@@ -92,6 +96,10 @@ export const DEFAULT_SETTINGS: Settings = {
   max_sector_pct: rulesJson.holding.sector_limit_pct,
   trim_pe_over_sector_pct: 50,
   trim_on_dividend_cut: true,
+  hard_stock_cap_pct: rulesJson.holding.hard_stock_cap_pct,
+  hard_sector_cap_pct: rulesJson.holding.hard_sector_cap_pct,
+  review_after_loss_quarters: rulesJson.holding.review_after_loss_quarters,
+  sell_after_loss_quarters: rulesJson.holding.sell_after_loss_quarters,
   broker: 'JS Global',
   commission_pct: rulesJson.costs.commission_pct,
   min_commission_per_share: rulesJson.costs.min_commission_per_share,
@@ -154,6 +162,9 @@ export interface DividendReceipt {
   note?: string | null;
 }
 
+/** Profit after tax of one quarter, read by the AI from a results filing (negative = loss). */
+export interface QuarterEarnings { id: string; symbol: string; period_end: string; profit_after_tax: number; verified: boolean; pdf_url?: string | null }
+
 /** KSE-100 closing level for one trading day (written by the worker; backfilled from index_snapshots). */
 export interface IndexDay { day: string; close: number }
 
@@ -173,7 +184,7 @@ export interface DividendEvent {
   pdf_url: string | null;
 }
 
-export type HoldingCallKind = 'hold' | 'average_down' | 'opportunity' | 'trim' | 'review';
+export type HoldingCallKind = 'hold' | 'average_down' | 'opportunity' | 'trim' | 'review' | 'sell';
 
 export interface AiSuggestion {
   action: 'buy' | 'add' | 'hold' | 'trim' | 'sell' | 'watch' | 'review';

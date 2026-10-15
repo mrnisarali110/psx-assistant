@@ -16,7 +16,7 @@ import type { LlmRouter } from '../shared/llm.ts';
 import { buildPortfolio, screenSectors, sectorPeMap, type PortfolioView } from '../shared/portfolio.ts';
 import { holdingAlerts, marketAlerts, planDelivery, todayBanner, type AlertCandidate, type AlertLevel } from '../shared/signals.ts';
 import { addDays, daysBetween, isMarketOpen, isoWeek, minutesToClose, pktDate } from '../shared/time.ts';
-import { DEFAULT_RULES, type Announcement, type DividendEvent, type IndexSnapshot, type PriceMap } from '../shared/types.ts';
+import { DEFAULT_RULES, type Announcement, type DividendEvent, type IndexSnapshot, type PriceMap, type QuarterEarnings } from '../shared/types.ts';
 import { discoverPicks, portfolioInsight, readAnnouncement, type GuardContext, type Insight, type InsightFacts } from './ai.ts';
 import { FetchError, isUsable, toPrice, toScreenRows, type Snapshot } from './feed.ts';
 import type { Notifier } from './notify.ts';
@@ -54,7 +54,7 @@ const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 interface RunCtx {
   job: JobName; deps: JobDeps; now: Date; today: string; prices: PriceMap; idx: IndexSnapshot | null;
   usable: boolean; tradedToday: boolean; preclose: boolean; news: Announcement[]; dividends: DividendEvent[];
-  screen: ScreenRow[]; report: RunReport; aiBudget: { left: number };
+  screen: ScreenRow[]; report: RunReport; aiBudget: { left: number }; earnings: QuarterEarnings[];
 }
 
 export async function runJob(job: JobName, deps: JobDeps): Promise<RunReport> {
@@ -138,12 +138,13 @@ export async function runJob(job: JobName, deps: JobDeps): Promise<RunReport> {
     }
     const news = await store.recentAnnouncements(userSymbols, addDays(today, -14)).catch(() => [] as Announcement[]);
     const dividends = await store.dividends(null, addDays(today, -1100)).catch(() => [] as DividendEvent[]);
+    const earnings = await store.earnings(userSymbols, addDays(today, -1100)).catch(() => [] as QuarterEarnings[]);
 
     // ---- Discover picks (nightly, market-wide) ------------------------
     if (job === 'night' && deps.ai?.available && screen.length) await refreshPicks(screen, dividends, today, deps, report);
 
     log(`job=${job} users=${users.length} symbols=${userSymbols.length}+${readSymbols.length - userSymbols.length} usable=${usable} tradedToday=${tradedToday} preclose=${preclose} aiRead=${report.ai.announcements_read}`);
-    const ctx: RunCtx = { job, deps, now, today, prices, idx, usable, tradedToday, preclose, news, dividends, screen, report, aiBudget: { left: rules.ai.max_users_per_run } };
+    const ctx: RunCtx = { job, deps, now, today, prices, idx, usable, tradedToday, preclose, news, dividends, screen, report, aiBudget: { left: rules.ai.max_users_per_run }, earnings };
     for (const u of users) {
       try {
         await processUser(u, ctx);
@@ -199,6 +200,9 @@ async function readFilings(symbols: string[], today: string, limit: number, deps
         });
         report.ai.dividends++;
       }
+      if (d.earnings) {
+        await deps.store.saveEarnings({ id: a.id, symbol: a.symbol, ...d.earnings, pdf_url: a.pdf_url }).catch((e) => report.errors.push(`earnings: ${errMsg(e)}`));
+      }
     } catch (e) {
       report.errors.push(`ai: filing ${a.id}: ${errMsg(e)}`);
       if (/AI unavailable/.test(errMsg(e))) break; // both providers down or rate limited: try next run
@@ -230,7 +234,7 @@ async function processUser(u: UserCtx, c: RunCtx) {
   const lastSent = (kind: string, symbol: string) =>
     recent.filter((r) => r.kind === kind && r.symbol === symbol && r.channel && r.channel !== 'none')
       .map((r) => pktDate(new Date(r.sent_at))).sort().at(-1) ?? null;
-  const view = buildPortfolio(u.holdings, c.prices, u.settings, rules, screenSectors(c.screen), { today: c.today, sectorPe: sectorPeMap(c.screen), dividends: c.dividends });
+  const view = buildPortfolio(u.holdings, c.prices, u.settings, rules, screenSectors(c.screen), { today: c.today, sectorPe: sectorPeMap(c.screen), dividends: c.dividends, earnings: c.earnings });
   const mine = new Set([...u.holdings.map((h) => h.symbol), ...u.watchlist.map((w) => w.symbol)]);
   const night = c.job === 'night';
   const cands: AlertCandidate[] = [];
@@ -368,7 +372,7 @@ export function buildFacts(u: UserCtx, view: PortfolioView, mine: Set<string>,
     recent_news: dedupeFilings(c.news.filter((a) => mine.has(a.symbol) && a.ai_summary)).slice(0, 8).map((a) => ({ symbol: a.symbol, date: a.published_at, summary: a.ai_summary as string })),
   };
   const guard: GuardContext = {
-    holdings: view.rows.map((r) => ({ symbol: r.holding.symbol, status: r.holding.status, weight_pct: r.weight_pct, is_shariah: r.holding.is_shariah })),
+    holdings: view.rows.map((r) => ({ symbol: r.holding.symbol, status: r.holding.status, weight_pct: r.weight_pct, is_shariah: r.holding.is_shariah, rules_call: r.call.call })),
     universe: new Set([...mine, ...candidates.map((o) => o.symbol)]),
     shariahOf: (sym) => u.holdings.find((h) => h.symbol === sym)?.is_shariah ?? c.prices[sym]?.is_shariah ?? candidates.find((o) => o.symbol === sym)?.is_shariah ?? null,
     maxPositionPct: s.max_position_pct,

@@ -10,7 +10,7 @@ import type { AppData, DataSource } from '../lib/data.ts';
 import type { DividendReceipt, Holding } from '../../shared/types.ts';
 import { screenSectors, type PortfolioView } from '../../shared/portfolio.ts';
 import {
-  benchmark, benchmarkFromSnapshot, cashFlows, dividendsReceivedNet, expectedDividends, expectedYearlyIncome, logGaps, receiptFrom, totalReturn, valueSeries, whtPct, type ExpectedDividend,
+  benchmark, benchmarkFromSnapshot, cashFlows, expectedDividends, headlineReturn, expectedYearlyIncome, logGaps, receiptFrom, totalReturn, valueSeries, whtPct, type ExpectedDividend,
 } from '../../shared/performance.ts';
 import { daysBetween, pktDate } from '../../shared/time.ts';
 import { dateLabel, num, pct, rs, rs2, signedRs } from '../../shared/format.ts';
@@ -63,9 +63,7 @@ export function PerformanceTab({ data, view, source, reload, onTransactions }: {
   // price-only figure from your average cost and leave total return, XIRR and the KSE-100 comparison out.
   const partial = gaps.length > 0;
   // Average-cost view: price profit/loss of what you hold plus every dividend received, net of tax.
-  const divNet = dividendsReceivedNet(data.receipts);
-  const avgTotal = view.total_pnl + divNet;
-  const avgTotalPct = view.total_cost > 0 ? (avgTotal / view.total_cost) * 100 : null;
+  const hr = headlineReturn(view, data.receipts);
   const snapGap = snap && snap.bm.my_return_pct != null && snap.bm.index_return_pct != null ? r1(snap.bm.my_return_pct - snap.bm.index_return_pct) : null;
 
   useEffect(() => {
@@ -109,26 +107,17 @@ export function PerformanceTab({ data, view, source, reload, onTransactions }: {
     <div className="space-y-4">
       {/* 1. Hero */}
       <Card>
-        {noTxns || partial ? (
-          <>
-            <p className={`text-xs ${muted}`}>Total return on your average cost, dividends included</p>
-            <p className={`num text-3xl font-bold tracking-tight ${changeTone(avgTotal)}`}>
-              {signedRs(avgTotal)} <span className="text-base font-semibold">({pct(avgTotalPct)})</span>
-            </p>
-            <p className={`num mt-1 text-sm ${muted}`}>Price only {signedRs(view.total_pnl)} ({pct(view.total_pnl_pct)}) · dividends {rs(divNet)} net</p>
-            <p className={`mt-1 text-sm ${muted}`}>
-              {noTxns ? 'Record your buys and sells to see the full return with charges and dividends.'
-                : `Your buys list is missing older buys of ${gaps.map((g) => g.symbol).slice(0, 4).join(', ')}${gaps.length > 4 ? ` and ${gaps.length - 4} more` : ''}. Add them under Buys and sells to see the full return and the KSE-100 comparison.`}
-            </p>
-          </>
-        ) : (
-          <>
-            <p className={`text-xs ${muted}`}>Total return, dividends included</p>
-            <p className={`num text-3xl font-bold tracking-tight ${changeTone(tr.total_return)}`}>
-              {signedRs(tr.total_return)} <span className="text-base font-semibold">({pct(tr.total_return_pct)})</span>
-            </p>
-            <p className={`num mt-1 text-sm ${muted}`}>Price only {signedRs(tr.price_pnl)} · dividends {rs(tr.dividends_net)} net</p>
-          </>
+        {/* The same headline as Home and the Portfolio header: profit/loss on your average cost plus dividends received. */}
+        <p className={`text-xs ${muted}`}>Total return, dividends included</p>
+        <p className={`num text-3xl font-bold tracking-tight ${changeTone(hr.total)}`}>
+          {signedRs(hr.total)} <span className="text-base font-semibold">({pct(hr.pct)})</span>
+        </p>
+        <p className={`num mt-1 text-sm ${muted}`}>Price only {signedRs(hr.price_only)} ({pct(hr.price_only_pct)}) · dividends {rs(hr.dividends)} net</p>
+        {(noTxns || partial) && (
+          <p className={`mt-1 text-sm ${muted}`}>
+            {noTxns ? 'Record your buys and sells to see the yearly rate and charges paid.'
+              : `Your buys list is missing older buys of ${gaps.map((g) => g.symbol).slice(0, 4).join(', ')}${gaps.length > 4 ? ` and ${gaps.length - 4} more` : ''}. Add them under Buys and sells for the yearly rate and the full KSE-100 comparison.`}
+          </p>
         )}
         {!partial && <p className={`num mt-1 text-sm ${muted}`}>
           {tr.xirr_pct == null ? 'XIRR needs a sale, a dividend or more than one day of history'

@@ -4,7 +4,7 @@
  */
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import type {
-  AiInsight, AiPicks, Announcement, AlertLogRow, DividendEvent, DividendReceipt, Holding, IndexDay, IndexSnapshot, PortfolioDay, PriceMap, Settings, Txn, WatchItem,
+  AiInsight, AiPicks, Announcement, AlertLogRow, DividendEvent, DividendReceipt, Holding, IndexDay, IndexSnapshot, PortfolioDay, PriceMap, QuarterEarnings, Settings, Txn, WatchItem,
 } from '../../shared/types.ts';
 import { DEFAULT_SETTINGS } from '../../shared/types.ts';
 import type { ScreenRow } from '../../shared/discover.ts';
@@ -38,6 +38,7 @@ export interface AppData {
   receipts: DividendReceipt[]; // dividends credited to the account, newest first
   indexDaily: IndexDay[]; // KSE-100 close per trading day, oldest first (benchmark)
   portfolioDaily: PortfolioDay[]; // your value per trading day, oldest first (Performance chart)
+  earnings: QuarterEarnings[]; // quarterly profit after tax read from results filings (loss-quarter rules)
   picks: { undervalued: AiPicks | null; dividend: AiPicks | null };
 }
 
@@ -107,6 +108,8 @@ function normSettings(s: any): Settings {
     monthly_budget_pkr: num('monthly_budget_pkr'), sip_step_up_pct: num('sip_step_up_pct'), crash_fund_pkr: num('crash_fund_pkr'),
     crash_trigger_kse: num('crash_trigger_kse'), max_position_pct: num('max_position_pct'), drop_alert_pct: num('drop_alert_pct'),
     max_sector_pct: num('max_sector_pct'), trim_pe_over_sector_pct: num('trim_pe_over_sector_pct'),
+    hard_stock_cap_pct: num('hard_stock_cap_pct'), hard_sector_cap_pct: num('hard_sector_cap_pct'),
+    review_after_loss_quarters: num('review_after_loss_quarters'), sell_after_loss_quarters: num('sell_after_loss_quarters'),
     commission_pct: num('commission_pct'), min_commission_per_share: num('min_commission_per_share'), sales_tax_pct: num('sales_tax_pct'),
     cgt_paid: s.cgt_paid ?? {}, loss_carry_forward: s.loss_carry_forward ?? {},
   };
@@ -148,7 +151,7 @@ export class LiveSource implements DataSource {
     const H = (ok(holdings) as any[]).map(normHolding);
     const W = ok(watchlist) as WatchItem[];
     const symbols = [...new Set([...H.map((h) => h.symbol), ...W.map((w) => w.symbol)])];
-    const [prices, anns, insights, screen, txns, divs, uv, dv, receipts, indexDaily, portfolioDaily] = await Promise.all([
+    const [prices, anns, insights, screen, txns, divs, uv, dv, receipts, indexDaily, portfolioDaily, earnings] = await Promise.all([
       symbols.length ? optional(sb.from('prices').select('*').in('symbol', symbols), [] as any[]) : Promise.resolve([] as any[]),
       symbols.length ? optional(sb.from('announcements').select('*').in('symbol', symbols).gte('published_at', addDays(today, -60)).order('published_at', { ascending: false }).limit(150), [] as any[]) : Promise.resolve([] as any[]),
       optional(sb.from('ai_insights').select('created_at, job, headline, stance, suggestions, holding_calls, rebalance, cash_note, risks, model').order('created_at', { ascending: false }).limit(1), [] as any[]),
@@ -160,6 +163,7 @@ export class LiveSource implements DataSource {
       allRows((a, b) => sb.from('dividend_receipts').select('*').order('paid_on', { ascending: false }).range(a, b)),
       allRows((a, b) => sb.from('index_daily').select('day, close').order('day').range(a, b)),
       allRows((a, b) => sb.from('portfolio_daily').select('day, value, invested').order('day').range(a, b)),
+      symbols.length ? optional(sb.from('earnings').select('*').in('symbol', symbols).gte('period_end', addDays(today, -1100)).order('period_end', { ascending: false }).limit(1000), [] as any[]) : Promise.resolve([] as any[]),
     ]);
     const s = ok(settings) as any;
     const history = (ok(idx) as any[]).map(normIdx);
@@ -185,6 +189,7 @@ export class LiveSource implements DataSource {
       receipts: receipts.map(normReceipt),
       indexDaily: indexDaily.map((r: any) => ({ day: r.day, close: Number(r.close) })),
       portfolioDaily: portfolioDaily.map((r: any) => ({ day: r.day, value: Number(r.value), invested: Number(r.invested) })),
+      earnings: earnings.map((r: any) => ({ ...r, profit_after_tax: Number(r.profit_after_tax) })),
       picks: { undervalued: (uv[0] ?? null) as AiPicks | null, dividend: (dv[0] ?? null) as AiPicks | null },
     };
   }
@@ -274,7 +279,7 @@ export class DemoSource implements DataSource {
       lastRun: { job: 'market', started_at: SEED_CAPTURED_AT, finished_at: SEED_CAPTURED_AT, ok: true },
       aiInsight: null, // never show made-up AI text; real suggestions appear after the first signed-in run
       screen: SEED_SCREEN, transactions: [...this.txns], dividends: [], picks: { undervalued: null, dividend: null },
-      receipts: [...this.receipts], indexDaily: [{ day: SEED_INDEX.ts.slice(0, 10), close: SEED_INDEX.kse100 }], portfolioDaily: [],
+      receipts: [...this.receipts], indexDaily: [{ day: SEED_INDEX.ts.slice(0, 10), close: SEED_INDEX.kse100 }], portfolioDaily: [], earnings: [],
     };
   }
   async saveTxns(txns: Txn[]) { this.txns.push(...txns.map((t, i) => ({ ...t, id: t.id ?? `demo-t${Date.now()}-${i}` }))); }

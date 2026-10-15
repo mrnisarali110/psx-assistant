@@ -19,7 +19,7 @@ interface Pick { on: boolean; shares: string; price: string }
 /** Loss-making holdings the planner may suggest as offsets: under review, marked Trim, or past their review date. Tax alone never drives a sale. */
 function offsetCandidates(view: PortfolioView, chosen: Set<string>) {
   return view.rows
-    .filter((r) => !chosen.has(r.holding.symbol) && r.price?.price != null && (r.pnl ?? 0) < 0 && (r.holding.status === 'review' || r.call.call === 'trim' || r.call.call === 'review'))
+    .filter((r) => !chosen.has(r.holding.symbol) && r.price?.price != null && (r.pnl ?? 0) < 0 && (r.holding.status === 'review' || r.call.call === 'trim' || r.call.call === 'sell' || r.call.call === 'review'))
     .map((r) => ({ symbol: r.holding.symbol, shares: r.holding.shares, price: r.price!.price as number, avg_cost: r.holding.avg_cost, bought_on: r.holding.last_buy_on ?? null }));
 }
 
@@ -72,7 +72,7 @@ function PlannerBody({ view, txns, settings, preselect }: { view: PortfolioView;
               <div className="flex items-center gap-3">
                 <Toggle checked={p.on} onChange={(on) => set(s, { on })} label={`Sell ${s}`} />
                 <button type="button" className="min-w-0 flex-1 cursor-pointer text-left" onClick={() => set(s, { on: !p.on })}>
-                  <span className="flex items-center gap-1.5 font-semibold">{s}{r.call.call === 'trim' && <Tag tone="amber">Trim</Tag>}{r.call.call === 'review' && <Tag tone="amber">Review</Tag>}</span>
+                  <span className="flex items-center gap-1.5 font-semibold">{s}{r.call.call === 'trim' && <Tag tone="amber">Trim</Tag>}{r.call.call === 'sell' && <Tag tone="red">Sell</Tag>}{r.call.call === 'review' && <Tag tone="amber">Review</Tag>}</span>
                   <span className="num block text-xs text-slate-500 dark:text-slate-400">{r.holding.shares} shares · {rs2(r.price!.price)} · {signedRs(r.pnl)} unrealised</span>
                 </button>
                 {p.on && line && (
