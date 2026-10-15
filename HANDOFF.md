@@ -1,6 +1,6 @@
 # PSX Assistant — Work Handoff
 
-_Last updated: 2026-10-15 (evening PKT). Read this first in a new chat; `README.md` describes the product and the
+_Last updated: 2026-10-15 (13:45 PKT, after the owner's phone check). Read this first in a new chat; `README.md` describes the product and the
 architecture in full. This file is about state, open issues and what to build next._
 
 ## Where everything is
@@ -24,7 +24,24 @@ architecture in full. This file is about state, open issues and what to build ne
 
 ## State right now
 
-Build of 2026-10-15 (see git log for the commit): tests green, typecheck clean, CI green. What changed:
+Live: commit `d623087`, Worker version `20f67f9f`, 324 tests green, CI green, migration 0006 applied.
+
+**Owner's feedback on the phone (2026-10-15 13:33 PKT), and what was done about it:**
+- Home showed "+Rs 66,016 (+279%) total, dividends included" and "vs KSE-100 +279% better". Wrong: the
+  transaction log held only this month's buys (Rs 23,663) while the value counted every holding (Rs 89,679), so
+  older shares counted as free. Fix: `performance.logGaps(txns, holdings)`; while any holding has more shares than
+  the log explains, Performance shows profit/loss on the average cost, names the stocks with missing older buys, and
+  hides total return, XIRR, the KSE-100 line and the chart. Rule for the future: **never show a log-based return
+  unless the log explains every holding.**
+- The owner wants **Home clean, as it was**: value, profit/loss on average cost ("total"), today's move, invested
+  this month; holdings strip; This week; AI suggestions; KSE-100. **No Needs attention, no dividends, no KSE-100
+  comparison on Home** (they live in Portfolio). The Today card shows Add / Hold only (todayState gets attention 0);
+  Trim/Review stay as chips on the Holdings list. Do not add cards to Home without asking.
+- Open question for the owner: MEBL and LUCK are marked Trim by the "P/E more than 50% above its sector" rule
+  (banks' median P/E is ~6.5, MEBL 10.7) while the AI suggests buying more MEBL. Offered to turn that rule off by
+  default (`trim_pe_over_sector_pct` = 0); not changed yet.
+
+The build of 2026-10-15 (commit `9e67f40`), as it stands after that fix:
 
 - **Data trust (ISSUE-01/02/03/04/05/06/07/10):** PSX's XD/XB/XR spellings are merged into one row per company
   (`shared/symbols.ts`, applied in the worker feed and the app data layer; the marker shows as a badge). A P/E
@@ -40,16 +57,15 @@ Build of 2026-10-15 (see git log for the commit): tests green, typecheck clean, 
   suggestions). Settings: Profile → Broker & tax. UI: Portfolio → Tax tab, Sell Planner (header "Sell", holding menu
   "Plan a sale"), order ticket in "Record a buy" with an optional charges field from the contract note.
 - **Performance (FEATURE-01/02, ISSUE-08):** `shared/performance.ts` (total return with dividends, XIRR, KSE-100
-  benchmark from `index_daily`, expected and received dividends, value series). Portfolio → Performance tab; Home
-  portfolio card shows total return and "vs KSE-100". The worker writes `index_daily` every tick (last tick after
+  benchmark from `index_daily`, expected and received dividends, value series). Portfolio → Performance tab only
+  (not on Home), and only once the buys log explains every holding (`logGaps`). The worker writes `index_daily` every tick (last tick after
   the close wins) and `portfolio_daily` per user in the night job; the migration backfilled `index_daily` from
   `index_snapshots` (history starts early Oct 2026, so older buys are "uncovered" in the benchmark).
-- **Rules (FEATURE-03/04/05):** `settings.max_sector_pct` (default 30%) blocks new money and shows under Needs
-  attention; thesis / review date / target price per holding; Trim triggers (over cap, target reached, P/E
+- **Rules (FEATURE-03/04/05):** `settings.max_sector_pct` (default 30%) blocks new money and shows as a rebalance
+  note and on the Allocation tab (Needs attention was removed from Home); thesis / review date / target price per holding; Trim triggers (over cap, target reached, P/E
   `trim_pe_over_sector_pct` (default 50%) above the sector median, dividend cut) and Review (date reached). Alerts:
   `trim` (market, weekly per stock) and `review_due` (digest). The AI cannot override Trim/Review.
-- **Home / IA (FEATURE-07/11, ISSUE-09, §3):** Today card with three states (Add / Hold / Review), Needs
-  attention, This week (`calendar.weekAhead`), Wealth growth moved to Profile → Goals & projection, sector donut
+- **Home / IA (FEATURE-07/11, ISSUE-09, §3):** Today card (Add / Hold), This week (`calendar.weekAhead`), Wealth growth moved to Profile → Goals & projection, sector donut
   moved to Portfolio → Allocation. News has "My week". Discover has filters and quality chips (FEATURE-06, with ROE
   and net debt left out: PSX's screener has no such fields, so they are not invented).
 - **Transactions (FEATURE-09, HANDOFF issue 4):** Portfolio → Holdings → "Buys and sells": the full log, edit /
@@ -65,8 +81,9 @@ Build of 2026-10-15 (see git log for the commit): tests green, typecheck clean, 
    commission and any flat minimum (one buy + one sell contract note), sales tax 13% vs 15%, non-filer CGT from
    1 Jul 2026 (NCCPL), whether NCCPL's cost basis includes commission (toggle "Match NCCPL statement" if not), HUBC/
    KAPCO dividend WHT 7.5%, the T+1 last-day-to-buy rule (one book closure with JS). See README's table.
-3. **Enter the real trade dates.** Holdings imported from screenshots are dated the import day; fix them under
-   Portfolio → Holdings → Buys and sells (or import a CSV), otherwise XIRR, lots and the benchmark use wrong dates.
+3. **Add the older buys and real trade dates** (optional, only if the owner wants the full return, Tax and the
+   KSE-100 comparison): Portfolio → Holdings → Buys and sells, one by one or a CSV. Until the log explains every
+   holding, Performance stays on average-cost P/L and the Tax ledger / Sell Planner gains are incomplete.
 4. **Enter CGT deducted so far** (Profile → Broker & tax) from the NCCPL monthly statement, and any carry-forward
    losses, so Tax shows what is still due or refundable.
 5. **Gemini key hygiene**, **CPU time of `/api/import`**, **stored sector text**, **OpenRouter model drift**,
@@ -75,10 +92,11 @@ Build of 2026-10-15 (see git log for the commit): tests green, typecheck clean, 
 
 ## Pending on Claude's side (not done, or done but not yet verified on the phone)
 
-- **Phone check** of every new screen at real size: Home (Today card states, Needs attention, This week, vs KSE-100
-  line), Portfolio tabs (Allocation bars, Performance chart, Tax ledger), Sell Planner, Buys and sells + CSV import,
+- **Phone check** of every new screen at real size: Home after the clean-up, Portfolio tabs (Allocation bars, Performance chart, Tax ledger), Sell Planner, Buys and sells + CSV import,
   Profile → Broker & tax and Goals sheet, Discover filters and chips. Checked only in the desktop browser at 375 px
   on demo data and signed in.
+- **The partial-log Performance view** (average-cost P/L plus the "missing older buys" note) is unit-tested but was
+  not seen in the browser (the pane resized mid-test); the owner's real account is exactly this case, so check it there.
 - **First real `portfolio_daily` rows** appear after the first night job following the deploy; the Performance chart
   draws your value line only from then on (the index-equivalent and invested lines work from day one).
 - **Verify the Cloudflare schedule end to end** once the token is set (issue 1).
