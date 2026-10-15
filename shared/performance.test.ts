@@ -524,3 +524,15 @@ describe('valueSeries', () => {
     expect(valueSeries(FLOWS, [], [], '2026-01-09')).toEqual([]);
   });
 });
+
+describe('logGaps', () => {
+  it('names holdings whose older buys are missing from the log, so returns are not inflated', async () => {
+    const { logGaps } = await import('./performance.ts');
+    const t = (symbol: string, side: 'buy' | 'sell', shares: number) =>
+      ({ symbol, side, shares, price: 100, amount: shares * 100, executed_on: '2026-10-06', source: 'manual' as const });
+    const holdings = [{ symbol: 'MEBL', shares: 28 }, { symbol: 'SYS', shares: 118 }, { symbol: 'UBL', shares: 16 }];
+    const txns = [t('MEBL', 'buy', 8), t('SYS', 'buy', 118), t('UBL', 'buy', 20), t('UBL', 'sell', 4)];
+    expect(logGaps(txns, holdings)).toEqual([{ symbol: 'MEBL', held: 28, logged: 8 }]);
+    expect(logGaps([], holdings).map((g) => g.symbol)).toEqual(['MEBL', 'SYS', 'UBL']);
+  });
+});

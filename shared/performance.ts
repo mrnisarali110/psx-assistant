@@ -552,3 +552,22 @@ export function valueSeries(flows: Flow[], index: IndexDay[], snapshots: Portfol
   }
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// Is the transaction log complete?
+// ---------------------------------------------------------------------------
+
+/**
+ * Holdings the transaction log does not fully explain: the log's net shares (buys minus sells) for the symbol are
+ * fewer than the holding's shares. Older buys made before the app (or a first screenshot import recorded without
+ * transactions) leave such gaps. While any gap exists, total return, XIRR and the KSE-100 comparison would treat
+ * those shares as free, so callers must fall back to the price-only figures from the average cost.
+ */
+export function logGaps(txns: Txn[], holdings: Pick<Holding, 'symbol' | 'shares'>[]): { symbol: string; held: number; logged: number }[] {
+  const out: { symbol: string; held: number; logged: number }[] = [];
+  for (const h of holdings) {
+    const logged = sharesHeldOn(txns, h.symbol, '9999-12-31');
+    if (logged < h.shares) out.push({ symbol: sym(h.symbol), held: h.shares, logged });
+  }
+  return out;
+}

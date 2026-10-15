@@ -10,7 +10,7 @@ import type { AppData, DataSource } from '../lib/data.ts';
 import type { DividendReceipt, Holding } from '../../shared/types.ts';
 import { screenSectors, type PortfolioView } from '../../shared/portfolio.ts';
 import {
-  benchmark, cashFlows, expectedDividends, expectedYearlyIncome, receiptFrom, totalReturn, valueSeries, whtPct, type ExpectedDividend,
+  benchmark, cashFlows, expectedDividends, expectedYearlyIncome, logGaps, receiptFrom, totalReturn, valueSeries, whtPct, type ExpectedDividend,
 } from '../../shared/performance.ts';
 import { daysBetween, pktDate } from '../../shared/time.ts';
 import { dateLabel, num, pct, rs, rs2, signedRs } from '../../shared/format.ts';
@@ -54,9 +54,13 @@ export function PerformanceTab({ data, view, source, reload, onTransactions }: {
     const expected = expectedDividends(data.transactions, data.dividends, data.receipts, sectorsMap, data.settings);
     const income = expectedYearlyIncome(data.holdings, data.prices);
     const received = [...data.receipts].sort((a, b) => b.paid_on.localeCompare(a.paid_on));
-    return { tr, bm, series, expected, income, received };
+    const gaps = logGaps(data.transactions, data.holdings);
+    return { tr, bm, series, expected, income, received, gaps };
   }, [data, view.total_value, today, screenMap]);
-  const { tr, bm, series, expected, income, received } = m;
+  const { tr, bm, series, expected, income, received, gaps } = m;
+  // Older buys missing from the log would count as free shares: until the log explains every holding, show the
+  // price-only figure from your average cost and leave total return, XIRR and the KSE-100 comparison out.
+  const partial = gaps.length > 0;
 
   useEffect(() => {
     if (!confirm) return;
@@ -99,13 +103,16 @@ export function PerformanceTab({ data, view, source, reload, onTransactions }: {
     <div className="space-y-4">
       {/* 1. Hero */}
       <Card>
-        {noTxns ? (
+        {noTxns || partial ? (
           <>
-            <p className={`text-xs ${muted}`}>Price gain, no buys recorded yet</p>
+            <p className={`text-xs ${muted}`}>Profit / loss on your average cost</p>
             <p className={`num text-3xl font-bold tracking-tight ${changeTone(view.total_pnl)}`}>
               {signedRs(view.total_pnl)} <span className="text-base font-semibold">({pct(view.total_pnl_pct)})</span>
             </p>
-            <p className={`mt-1 text-sm ${muted}`}>Record your buys and sells to see the full return with charges and dividends.</p>
+            <p className={`mt-1 text-sm ${muted}`}>
+              {noTxns ? 'Record your buys and sells to see the full return with charges and dividends.'
+                : `Your buys list is missing older buys of ${gaps.map((g) => g.symbol).slice(0, 4).join(', ')}${gaps.length > 4 ? ` and ${gaps.length - 4} more` : ''}. Add them under Buys and sells to see the full return and the KSE-100 comparison.`}
+            </p>
           </>
         ) : (
           <>
@@ -116,13 +123,13 @@ export function PerformanceTab({ data, view, source, reload, onTransactions }: {
             <p className={`num mt-1 text-sm ${muted}`}>Price only {signedRs(tr.price_pnl)} · dividends {rs(tr.dividends_net)} net</p>
           </>
         )}
-        <p className={`num mt-1 text-sm ${muted}`}>
+        {!partial && <p className={`num mt-1 text-sm ${muted}`}>
           {tr.xirr_pct == null ? 'XIRR needs a sale, a dividend or more than one day of history'
             : yearly ? `${pct(tr.xirr_pct)} a year, money-weighted (XIRR)`
               : `A yearly rate (XIRR) comes after ${MIN_XIRR_DAYS} days of history; ${historyDays} day${historyDays === 1 ? '' : 's'} so far`}
-        </p>
+        </p>}
         {noPrices && <p className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-400">No prices yet for your holdings, so the value side reads Rs 0 until the next market check.</p>}
-        <div className="mt-3 border-t border-slate-100 pt-3 dark:border-slate-800">
+        {!partial && <div className="mt-3 border-t border-slate-100 pt-3 dark:border-slate-800">
           {gap != null ? (
             <>
               <p className={`num text-sm font-semibold ${diffTone}`}>{diffLine}</p>
@@ -132,10 +139,11 @@ export function PerformanceTab({ data, view, source, reload, onTransactions }: {
             <p className={`text-sm ${muted}`}>KSE-100 comparison needs index history from your first buy</p>
           )}
           {bm.coverage.note && <p className={`mt-1 text-[11px] leading-snug ${muted}`}>{bm.coverage.note}</p>}
-        </div>
+        </div>}
       </Card>
 
-      {/* 2. Chart */}
+      {/* 2. Chart: only when the buys log explains every holding */}
+      {!partial && (
       <Card>
         <h3 className="font-semibold">Your money vs the KSE-100</h3>
         {series.length < 2 ? (
@@ -148,12 +156,13 @@ export function PerformanceTab({ data, view, source, reload, onTransactions }: {
           <ValueChart series={series} todayValue={view.total_value} />
         )}
       </Card>
+      )}
 
       {/* 3. Breakdown */}
       <Card>
         <h3 className="font-semibold">Where the return comes from</h3>
         <div className="mt-1 divide-y divide-slate-100 dark:divide-slate-800">
-          <Row label="Put in" value={noTxns ? 'n/a' : rs(tr.invested)} note="incl. charges" />
+          <Row label="Put in" value={noTxns ? 'n/a' : partial ? rs(view.total_cost) : rs(tr.invested)} note={partial ? 'at your average cost' : 'incl. charges'} />
           <Row label="Value now" value={rs(tr.current_value)} />
           <Row label="Sold" value={noTxns ? 'n/a' : rs(tr.proceeds)} note="net of charges" />
           {received.length > 0 ? (
