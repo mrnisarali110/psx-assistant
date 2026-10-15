@@ -21,10 +21,14 @@ const owner = (ai = true): UserCtx => ({
 
 const filing: Announcement = { id: 'psx-doc-1', symbol: 'MEBL', title: 'Financial results with interim cash dividend', kind: 'results', published_at: '2026-10-05', pdf_url: 'https://dps.psx.com.pk/download/document/1.pdf' };
 
+/** Peers of the held tech stocks and banks on a high P/E, so SYS, MEBL and UBL are cheap on earnings and the price rules fire. */
+const richPeers = (r: { symbol: string; sector: string | null; pe: number | null }) =>
+  ['TECHNOLOGY & COMMUNICATION', 'COMMERCIAL BANKS'].includes(r.sector ?? '') && !SEED_HOLDINGS.some((h) => h.symbol === r.symbol) ? 40 : r.pe;
+
 function snap(changePct = -1.36, asOf = AS_OF, symbols?: string[]): Snapshot {
   const screener = Object.fromEntries(SEED_SCREEN.map((r) => [r.symbol, {
     symbol: r.symbol, ex: null, sector_code: '', sector: r.sector, listed_in: ['KSE100', ...(r.is_shariah ? ['KMIALLSHR'] : [])], price: r.price,
-    change_pct: r.change_pct, change_1y_pct: r.change_1y_pct ?? null, pe: r.pe, dividend_yield_pct: r.dividend_yield_pct, market_cap: r.market_cap,
+    change_pct: r.change_pct, change_1y_pct: r.change_1y_pct ?? null, pe: richPeers(r), dividend_yield_pct: r.dividend_yield_pct, market_cap: r.market_cap,
   }]));
   const quotes = Object.fromEntries(Object.values(SEED_PRICES).filter((p) => !symbols || symbols.includes(p.symbol)).map((p) => [p.symbol, {
     ...p, open: null, high: null, low: null, as_of: asOf, announcements: p.symbol === 'MEBL' ? [filing] : [],
@@ -149,7 +153,7 @@ describe('AI in the market job', () => {
     expect(store.earningsRows[0]).toMatchObject({ symbol: 'MEBL', period_end: '2026-09-30', profit_after_tax: -539104000 }); // the quarter's profit feeds the loss-quarter rules
     const alerts = n.sent.flatMap((s) => s.n.alerts);
     expect(alerts.find((a) => a.kind === 'ai_suggestion')?.message).toMatch(/^AI Assistant suggests: Add MEBL/);
-    expect(alerts.find((a) => a.kind === 'buy_chance' && a.symbol === 'UBL')?.title).toBe('Opportunity: UBL'); // AI upgraded it
+    expect(alerts.find((a) => a.kind === 'buy_chance' && a.symbol === 'UBL')?.title).toBe('Average down: UBL'); // the AI asked for Opportunity; only your rules set Buy more / Opportunity
   });
 
   it('drops book closure dates that cannot belong to the filing and flags an old notice (ISSUE-06)', async () => {

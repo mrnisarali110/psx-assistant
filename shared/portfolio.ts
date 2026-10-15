@@ -127,6 +127,18 @@ export function trimReason(h: Holding, p: Price | null, weight: number | null, s
   return null;
 }
 
+/** Is the stock cheap on earnings? P/E at or under its sector's typical P/E, and profit not falling two quarters in a row. */
+export function valueCheck(symbol: string, p: Price | null, sector: string, ctx: RuleContext): { ok: boolean; text: string } {
+  const pe = p && !missingNum(p.pe) && !peOutlier(p.pe).outlier ? (p.pe as number) : null;
+  const sectorPe = ctx.sectorPe?.[sector] ?? null;
+  if (pe == null) return { ok: false, text: 'no P/E figure to check its value' };
+  if (sectorPe == null) return { ok: false, text: `P/E ${pe.toFixed(1)}, no sector figure to compare` };
+  if (pe > sectorPe) return { ok: false, text: `P/E ${pe.toFixed(1)} is above its sector's ${sectorPe.toFixed(1)}` };
+  const q = [...new Map((ctx.earnings ?? []).filter((e) => e.symbol === symbol).map((e) => [e.period_end, e.profit_after_tax])).entries()].sort((a, b) => b[0].localeCompare(a[0]));
+  if (q.length >= 3 && q[0][1] < q[1][1] && q[1][1] < q[2][1]) return { ok: false, text: 'profit fell two quarters in a row' };
+  return { ok: true, text: `P/E ${pe.toFixed(1)}, at or under its sector's ${sectorPe.toFixed(1)}` };
+}
+
 /** Why the thesis needs a look (FEATURE-04): the review date arrived, or the status says so. */
 export function reviewReason(h: Holding, ctx: RuleContext, settings?: Pick<Settings, 'review_after_loss_quarters'>): string | null {
   if (h.status === 'review') return 'Under review: decide before adding more';
@@ -148,13 +160,18 @@ function ruleCall(h: Holding, p: Price | null, weight: number | null, sectorPct:
   if (trim) return { call: 'trim', text: trim, source: 'rules' };
   const review = reviewReason(h, ctx, settings);
   if (review) return { call: 'review', text: review, source: 'rules' };
-  if (below >= settings.drop_alert_pct && !blocked) {
-    return { call: 'opportunity', text: `${below.toFixed(1)}% below your last buy`, source: 'rules' };
+  // Buy more needs three things: far enough below your last buy (your setting), a P/E at or under its sector's
+  // typical P/E (cheap on earnings, not just cheaper than you paid), and profit not falling two quarters running.
+  const buyAt = settings.buy_more_below_pct ?? rules.holding.average_down_pct;
+  const value = valueCheck(h.symbol, p, sector, ctx);
+  const why = `${below.toFixed(1)}% below your last buy`;
+  if (below >= buyAt && !blocked && value.ok) {
+    return { call: below >= settings.drop_alert_pct ? 'opportunity' : 'average_down', text: `${why} · ${value.text}`, source: 'rules' };
   }
-  if (below >= rules.holding.average_down_pct && !blocked) {
-    return { call: 'average_down', text: `${below.toFixed(1)}% below your last buy`, source: 'rules' };
+  if (below > 0) {
+    const note = blocked ? shortReason(blocked) : below >= buyAt ? value.text : null;
+    return { call: 'hold', text: `${why}${note ? ` · ${note}` : ''}`, source: 'rules' };
   }
-  if (below > 0) return { call: 'hold', text: `${below.toFixed(1)}% below your last buy${blocked ? ` · ${shortReason(blocked)}` : ''}`, source: 'rules' };
   return { call: 'hold', text: vsRef == null ? 'No live price yet' : `${vsRef.toFixed(1)}% above your last buy`, source: 'rules' };
 }
 
@@ -164,6 +181,9 @@ export function mergeCall(row: HoldingView, ai: Pick<AiInsight, 'holding_calls'>
   if (!c) return row.call;
   const adding = c.call === 'average_down' || c.call === 'opportunity';
   if (adding && addBlockedReason(row.holding, row.weight_pct, settings, row.sector_pct)) return row.call;
+  // Buy more and Opportunity come only from your own rule (with its reason); the AI may only agree or say Hold.
+  if (adding && row.call.call !== 'average_down' && row.call.call !== 'opportunity') return row.call;
+  if (adding) return row.call;
   if (row.call.call !== 'hold' && row.call.call !== 'average_down' && row.call.call !== 'opportunity') return row.call; // your own sell, trim and review rules come first
   // A Trim, Review or Sell must carry a reason from your rules; the AI cannot raise one on its own.
   if (c.call === 'trim' || c.call === 'review' || c.call === 'sell') return row.call;
@@ -171,23 +191,42 @@ export function mergeCall(row: HoldingView, ai: Pick<AiInsight, 'holding_calls'>
 }
 
 /**
+ * Whether an AI summary line agrees with your rules. A cash note may name only holdings your rules mark Buy more or
+ * Opportunity ("Remaining Rs 6,386 could go to UBL" is dropped while UBL is a Hold). A rebalance line that says to
+ * trim, reduce or sell may name only holdings your rules mark Trim or Sell. Stocks you do not hold are not checked here.
+ */
+export function aiLineAllowed(text: string | null | undefined, kind: 'cash' | 'rebalance', calls: Record<string, string>): boolean {
+  if (!text) return true;
+  const named = Object.keys(calls).filter((sym) => new RegExp(`\\b${sym}\\b`).test(text));
+  if (kind === 'cash') return named.every((sym) => calls[sym] === 'average_down' || calls[sym] === 'opportunity');
+  const cutting = /\b(trim|reduce|sell|cut|lighten|take profit)/i.test(text);
+  return !cutting || named.every((sym) => calls[sym] === 'trim' || calls[sym] === 'sell');
+}
+
+/**
  * The AI insight as the app may show it: suggestions to trim or sell only where your own rules say so, suggestions to
  * add only where your rules allow new money. Insights saved before a rule changed are cleaned the same way, so an old
  * "Reduce MEBL" disappears once MEBL is no longer a Trim.
  */
-export function cleanInsight<T extends Pick<AiInsight, 'suggestions'>>(ai: T | null, view: PortfolioView, settings: Settings): T | null {
+export function cleanInsight<T extends Pick<AiInsight, 'suggestions'> & Partial<Pick<AiInsight, 'cash_note' | 'rebalance'>>>(ai: T | null, view: PortfolioView, settings: Settings): T | null {
   if (!ai) return ai;
+  const calls = Object.fromEntries(view.rows.map((r) => [r.holding.symbol, r.call.call]));
   const row = (s: string | null) => view.rows.find((r) => r.holding.symbol === s);
   const suggestions = ai.suggestions.filter((x) => {
     const r = row(x.symbol);
     if (x.action === 'trim' || x.action === 'sell') return !!r && (r.call.call === 'trim' || r.call.call === 'sell');
     if (x.action === 'add' || x.action === 'buy') {
       if (!r) return true; // a stock you do not own: the worker's guardrails already checked it
-      return r.call.call !== 'trim' && r.call.call !== 'sell' && r.call.call !== 'review' && !addBlockedReason(r.holding, r.weight_pct, settings, r.sector_pct);
+      return (r.call.call === 'average_down' || r.call.call === 'opportunity') && !addBlockedReason(r.holding, r.weight_pct, settings, r.sector_pct);
     }
     return true;
   });
-  return { ...ai, suggestions };
+  // The summary lines follow the same rules: money only towards a Buy more / Opportunity of yours, cuts only of a Trim / Sell.
+  return {
+    ...ai, suggestions,
+    cash_note: aiLineAllowed(ai.cash_note, 'cash', calls) ? ai.cash_note : null,
+    rebalance: aiLineAllowed(ai.rebalance, 'rebalance', calls) ? ai.rebalance : null,
+  };
 }
 
 export function buildPortfolio(holdings: Holding[], prices: PriceMap, settings: Settings,

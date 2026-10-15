@@ -10,7 +10,9 @@ import { DEFAULT_RULES, DEFAULT_SETTINGS, type AiInsight, type DividendEvent, ty
 import { SEED_HOLDINGS, SEED_INDEX, SEED_PRICES, SEED_SETTINGS, SEED_TXNS } from './fixtures/seed.ts';
 
 const TODAY = '2026-10-06'; // a Tuesday
-const view = () => buildPortfolio(SEED_HOLDINGS, SEED_PRICES, SEED_SETTINGS);
+/** Sector P/Es where SYS, MEBL and UBL are cheap on earnings, so the price rules can be tested on their own. */
+const CHEAP = { 'TECHNOLOGY & COMMUNICATION': 25, 'COMMERCIAL BANKS': 12 };
+const view = () => buildPortfolio(SEED_HOLDINGS, SEED_PRICES, SEED_SETTINGS, DEFAULT_RULES, {}, { sectorPe: CHEAP });
 const row = (sym: string, v = view()) => v.rows.find((r) => r.holding.symbol === sym)!;
 
 describe('portfolio', () => {
@@ -85,6 +87,12 @@ describe('portfolio', () => {
       { action: 'add', symbol: 'SYS', text: 'Add SYS', why: '', confidence: 'high' },
     ] } as AiInsight, v, SEED_SETTINGS)!;
     expect(clean.suggestions.map((x) => x.symbol)).toEqual(['SYS']);
+    // The summary lines too: no money towards a Hold, no cut of a holding that is not a Trim.
+    const hold = { ...v, rows: v.rows.map((r) => (r.holding.symbol === 'UBL' ? { ...r, call: { call: 'hold' as const, text: 'x', source: 'rules' as const } } : r)) };
+    const lines = cleanInsight({ suggestions: [], cash_note: 'Remaining Rs 6,386 could be used to add to UBL if price stays below last buy.', rebalance: 'Reduce MEBL to cut bank weight.' } as unknown as AiInsight, hold, SEED_SETTINGS)!;
+    expect(lines.cash_note).toBeNull();
+    expect(lines.rebalance).toBeNull();
+    expect(cleanInsight({ suggestions: [], cash_note: 'Keep the cash for a dip.', rebalance: 'Spread new money across sectors.' } as unknown as AiInsight, hold, SEED_SETTINGS)).toMatchObject({ cash_note: 'Keep the cash for a dip.', rebalance: 'Spread new money across sectors.' });
   });
 
   it('suggests rebalancing over-cap stocks and heavy sectors, with the sector cap from your settings', () => {
@@ -138,8 +146,12 @@ describe('sell, trim and review rules', () => {
     expect(call('UBL').text).toMatch(/Review date reached/);
     // Each trigger is a setting: off, and the calls fall back to the price rules.
     const off = buildPortfolio(holdings, screen, { ...SEED_SETTINGS, trim_pe_over_sector_pct: 0, trim_on_dividend_cut: false }, DEFAULT_RULES, {}, { today: TODAY, sectorPe, dividends: divs });
-    expect(off.rows.find((r) => r.holding.symbol === 'SYS')!.call.call).toBe('opportunity');
-    expect(off.rows.find((r) => r.holding.symbol === 'MEBL')!.call.call).toBe('average_down');
+    // With the trims off they are Hold, not Buy more: their P/E is above the sector's, so they are not cheap on earnings.
+    expect(off.rows.find((r) => r.holding.symbol === 'SYS')!.call).toMatchObject({ call: 'hold', text: "12.3% below your last buy · P/E 22.7 is above its sector's 15.0" });
+    expect(off.rows.find((r) => r.holding.symbol === 'MEBL')!.call.call).toBe('hold');
+    const cheap = buildPortfolio(holdings, screen, { ...SEED_SETTINGS, trim_pe_over_sector_pct: 0, trim_on_dividend_cut: false }, DEFAULT_RULES, {}, { today: TODAY, sectorPe: { 'TECHNOLOGY & COMMUNICATION': 25, 'COMMERCIAL BANKS': 12 } });
+    expect(cheap.rows.find((r) => r.holding.symbol === 'SYS')!.call).toMatchObject({ call: 'opportunity', text: "12.3% below your last buy · P/E 22.7, at or under its sector's 25.0" });
+    expect(cheap.rows.find((r) => r.holding.symbol === 'MEBL')!.call.call).toBe('average_down');
     // The AI cannot talk a Trim or Review back into a buy.
     const ai = { holding_calls: [{ symbol: 'DCR', call: 'opportunity', text: 'cheap' }] } as AiInsight;
     expect(mergeCall(v.rows.find((r) => r.holding.symbol === 'DCR')!, ai, SEED_SETTINGS).call).toBe('trim');

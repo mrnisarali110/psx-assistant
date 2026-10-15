@@ -106,6 +106,7 @@ export class SupabaseStore implements Store {
         monthly_budget_pkr: Number(s.monthly_budget_pkr), sip_step_up_pct: Number(s.sip_step_up_pct ?? 0), crash_fund_pkr: Number(s.crash_fund_pkr),
         crash_trigger_kse: Number(s.crash_trigger_kse), max_position_pct: Number(s.max_position_pct),
         drop_alert_pct: Number(s.drop_alert_pct),
+        buy_more_below_pct: Number(s.buy_more_below_pct ?? DEFAULT_SETTINGS.buy_more_below_pct),
         hard_stock_cap_pct: Number(s.hard_stock_cap_pct ?? DEFAULT_SETTINGS.hard_stock_cap_pct),
         hard_sector_cap_pct: Number(s.hard_sector_cap_pct ?? DEFAULT_SETTINGS.hard_sector_cap_pct),
         review_after_loss_quarters: Number(s.review_after_loss_quarters ?? DEFAULT_SETTINGS.review_after_loss_quarters),

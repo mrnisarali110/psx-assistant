@@ -4,7 +4,7 @@ import { buildFacts } from './jobs.ts';
 import type { UserCtx } from './store.ts';
 import { GeminiProvider, GroqProvider, LlmHealth, LlmRouter, makeRouter, parseJsonLoose } from '../shared/llm.ts';
 import { buildPortfolio } from '../shared/portfolio.ts';
-import { DEFAULT_SETTINGS } from '../shared/types.ts';
+import { DEFAULT_RULES, DEFAULT_SETTINGS } from '../shared/types.ts';
 import { SEED_HOLDINGS, SEED_INDEX, SEED_PRICES, SEED_WATCHLIST } from '../shared/fixtures/seed.ts';
 import { dispatchJob, handleImport, handleStatus, handleTick, importError, jobForTick, keyShape, whenPkt, type Env } from '../edge/index.ts';
 
@@ -12,7 +12,7 @@ const owner = (): UserCtx => ({ id: 'owner-1', settings: { ...DEFAULT_SETTINGS, 
 const seedFacts = () => {
   const u = owner();
   const mine = new Set([...SEED_HOLDINGS.map((h) => h.symbol), ...SEED_WATCHLIST.map((w) => w.symbol)]);
-  return buildFacts(u, buildPortfolio(u.holdings, SEED_PRICES, u.settings), mine, {
+  return buildFacts(u, buildPortfolio(u.holdings, SEED_PRICES, u.settings, DEFAULT_RULES, {}, { sectorPe: { 'TECHNOLOGY & COMMUNICATION': 25, 'COMMERCIAL BANKS': 12 } }), mine, {
     today: '2026-10-06', idx: SEED_INDEX, prices: SEED_PRICES, news: [], dividends: [], now: new Date('2026-10-06T07:00:00Z'),
     screen: [{ symbol: 'ENGRO', sector: 'FERTILIZER', price: 300, change_pct: 0, change_1y_pct: -10, pe: 4, dividend_yield_pct: 9.1, market_cap: 1e11, is_shariah: true },
       { symbol: 'FFX', sector: 'FERTILIZER', price: 100, change_pct: 0, change_1y_pct: 0, pe: 9, dividend_yield_pct: 5, market_cap: 1e11, is_shariah: true },
@@ -62,7 +62,7 @@ describe('AI guardrails', () => {
         { symbol: 'DCR', call: 'hold', text: 'up 1.8%' },
         { symbol: 'NOPE', call: 'hold', text: 'x' },
       ],
-      cash_note: 'Put the remaining Rs 40,530 into MEBL and UBL.',
+      cash_note: 'Put the remaining Rs 40,530 into SYS.',
       rebalance: 'Banks would reach 99% if you only buy banks.', // invented number -> blanked
     }, facts, guard);
     expect(r.insight.suggestions.map((s) => `${s.action} ${s.symbol}`)).toEqual(['add MEBL', 'watch ENGRO']);

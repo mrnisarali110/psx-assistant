@@ -68,6 +68,7 @@ export interface Settings {
   max_sector_pct: number; // no new money into a sector above this share of the portfolio
   trim_pe_over_sector_pct: number; // "Trim" when a holding's P/E is this much above its sector's typical P/E
   trim_on_dividend_cut: boolean; // "Trim" when the latest declared dividend is below the previous one of its kind
+  buy_more_below_pct: number; // "Buy more" when this far below your last buy AND the P/E is at or under its sector's
   hard_stock_cap_pct: number; // above this share of the portfolio a holding is a Trim (max_position_pct only stops new money)
   hard_sector_cap_pct: number; // above this a sector's biggest holding is a Trim (max_sector_pct only stops new money)
   review_after_loss_quarters: number; // Review after this many loss-making quarters in a row (0 = off)
@@ -96,6 +97,7 @@ export const DEFAULT_SETTINGS: Settings = {
   max_sector_pct: rulesJson.holding.sector_limit_pct,
   trim_pe_over_sector_pct: 50,
   trim_on_dividend_cut: true,
+  buy_more_below_pct: rulesJson.holding.average_down_pct,
   hard_stock_cap_pct: rulesJson.holding.hard_stock_cap_pct,
   hard_sector_cap_pct: rulesJson.holding.hard_sector_cap_pct,
   review_after_loss_quarters: rulesJson.holding.review_after_loss_quarters,

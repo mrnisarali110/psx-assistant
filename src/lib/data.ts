@@ -108,7 +108,7 @@ function normSettings(s: any): Settings {
     monthly_budget_pkr: num('monthly_budget_pkr'), sip_step_up_pct: num('sip_step_up_pct'), crash_fund_pkr: num('crash_fund_pkr'),
     crash_trigger_kse: num('crash_trigger_kse'), max_position_pct: num('max_position_pct'), drop_alert_pct: num('drop_alert_pct'),
     max_sector_pct: num('max_sector_pct'), trim_pe_over_sector_pct: num('trim_pe_over_sector_pct'),
-    hard_stock_cap_pct: num('hard_stock_cap_pct'), hard_sector_cap_pct: num('hard_sector_cap_pct'),
+    buy_more_below_pct: num('buy_more_below_pct'), hard_stock_cap_pct: num('hard_stock_cap_pct'), hard_sector_cap_pct: num('hard_sector_cap_pct'),
     review_after_loss_quarters: num('review_after_loss_quarters'), sell_after_loss_quarters: num('sell_after_loss_quarters'),
     commission_pct: num('commission_pct'), min_commission_per_share: num('min_commission_per_share'), sales_tax_pct: num('sales_tax_pct'),
     cgt_paid: s.cgt_paid ?? {}, loss_carry_forward: s.loss_carry_forward ?? {},

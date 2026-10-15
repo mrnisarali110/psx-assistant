@@ -12,6 +12,7 @@ import type { AiSuggestion, HoldingCallKind } from '../shared/types.ts';
 
 import { numberSet, numbersGrounded, numbersIn } from '../shared/grounding.ts';
 import { dateSane, dateVerdict } from '../shared/calendar.ts';
+import { aiLineAllowed } from '../shared/portfolio.ts';
 export { numberSet, numbersGrounded, numbersIn };
 
 const clamp = (s: unknown, n: number) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, n);
@@ -246,13 +247,19 @@ export function guardInsight(raw: any, facts: unknown, g: GuardContext): { insig
   }
 
   const safe = (s: unknown, n: number) => { const t = clamp(s, n); return t && !grounded(t) ? t : null; };
+  // Summary lines follow your rules too: money only towards a Buy more / Opportunity, cuts only of a Trim / Sell.
+  const calls = Object.fromEntries(g.holdings.filter((h) => h.rules_call).map((h) => [h.symbol, h.rules_call as string]));
+  const ruleOk = (t: string | null, kind: 'cash' | 'rebalance') => {
+    if (t && !aiLineAllowed(t, kind, calls)) { reasons.push(`${kind} line breaks your rules`); return null; }
+    return t;
+  };
   let stance: Insight['stance'] = ['buy', 'hold', 'wait'].includes(raw?.stance) ? raw.stance : null;
   if (stance === 'buy' && g.rulesSay === 'Wait') { reasons.push('stance buy on a Wait day'); stance = 'wait'; }
   return {
     insight: {
       headline: safe(raw?.headline, 130) ?? suggestions[0]?.text ?? 'Nothing stands out today. Stick to your plan.',
       stance, suggestions, holding_calls: holdingCalls,
-      rebalance: safe(raw?.rebalance, 220), cash_note: safe(raw?.cash_note, 200), risks: safe(raw?.risks, 180),
+      rebalance: ruleOk(safe(raw?.rebalance, 220), 'rebalance'), cash_note: ruleOk(safe(raw?.cash_note, 200), 'cash'), risks: safe(raw?.risks, 180),
     },
     dropped: rawS.length - suggestions.length,
     reasons,

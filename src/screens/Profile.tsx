@@ -135,7 +135,10 @@ export function Profile({ data, source, reload, onExitDemo }: ScreenProps & { on
           <Row icon="scale" label="Max per sector" hint="Soft cap: no new money into a sector above this share.">
             <NumberInput label="Max per sector" suffix="%" value={s.max_sector_pct} min={1} max={100} width="w-24" onSave={(v) => save({ max_sector_pct: v })} />
           </Row>
-          <Row icon="bag" label="Opportunity alert" hint="Tell me when a stock is this far below my last buy.">
+          <Row icon="bag" label="Buy more below" hint="Mark Buy more this far below my last buy, only when its P/E is at or under its sector's and profit is not falling.">
+            <NumberInput label="Buy more below last buy" suffix="%" value={s.buy_more_below_pct} min={1} max={99} width="w-24" onSave={(v) => save({ buy_more_below_pct: v })} />
+          </Row>
+          <Row icon="bag" label="Opportunity alert" hint="Tell me when a stock is this far below my last buy, with the same value check.">
             <NumberInput label="Opportunity alert" suffix="%" value={s.drop_alert_pct} min={1} max={99} width="w-24" onSave={(v) => save({ drop_alert_pct: v })} />
           </Row>
           <Row icon="shield" label="Shariah-compliant only" hint="Discover and AI suggest only KMI All Share stocks.">
