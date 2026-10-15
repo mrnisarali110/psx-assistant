@@ -186,16 +186,20 @@
     "top_by_market_cap": 30,
     "min_traded_value_pkr": 50000000,
     "liquidity_basis": "PSX screener 30-day average volume x price (PSX publishes no 60-day daily series on a page we read honestly)",
-    "profit_years": 5,
+    "profit_years": 4,
     "dividend_years_needed": 4,
     "dividend_years_window": 5,
-    "require_audit_check": true,
+    "require_audit_check": false,
     "lose_after_fails": 2,
     "recheck_days": 7,
     "annual_full_run_months": [
       9,
       10
     ],
-    "pages_per_night": 35
+    "pages_per_night": 35,
+    "profit_years_note": "4 = what PSX Financials shows (owner chose 2026-10-16); set 5 for the strict rule once a 5th year is stored",
+    "dividend_mode": "available",
+    "dividend_mode_note": "'available': PSX trailing yield > 0 and no gap in the years covered by filings read so far; 'strict': a dividend in dividend_years_needed of dividend_years_window years, from filings only",
+    "audit_note": "false: a qualified opinion still fails once an annual report is read; a missing report does not block the badge"
   }
 }

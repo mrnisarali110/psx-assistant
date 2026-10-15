@@ -251,6 +251,7 @@ function demoBluechip(): Record<string, BcState> {
   return Object.fromEntries(symbols.map((symbol) => [symbol, nextBcState(null, evaluateBc({
     symbol, today, index_members: null, market_cap_rank: ranks[symbol] ?? null, avg_volume_30d: null,
     price: SEED_PRICES[symbol]?.price ?? SEED_SCREEN.find((r) => r.symbol === symbol)?.price ?? null,
+    trailing_yield_pct: SEED_SCREEN.find((r) => r.symbol === symbol)?.dividend_yield_pct ?? null,
     annual: [], dividends: [], filings_since: null, audit: null,
   }), today)]));
 }

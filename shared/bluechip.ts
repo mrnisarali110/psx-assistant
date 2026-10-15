@@ -42,6 +42,7 @@ export interface BcFacts {
   market_cap_rank: number | null; // 1 = largest, among the screener's stocks; null = no market cap
   avg_volume_30d: number | null; // PSX screener "30D VOLUME AVG."
   price: number | null;
+  trailing_yield_pct?: number | null; // PSX screener dividend yield (last 12 months); 0 = no dividend in a year
   annual: AnnualProfit[];
   dividends: DividendEvent[];
   filings_since: string | null; // earliest filing date stored for this company: dividend years before it are unknown
@@ -132,6 +133,18 @@ function dividendCheck(f: BcFacts, c: BcConfig): BcCheck {
   }
   const detail = `dividends in ${paid} of the last ${n} years${unknown ? ` (${unknown} not covered by filings read so far)` : ''}`;
   const source = f.filings_since ? `dividend filings read since ${f.filings_since}` : null;
+  if (c.dividend_mode === 'available') {
+    // What PSX publishes now: its trailing yield says whether the company paid in the last 12 months; the filings we
+    // have read must show no year without a dividend. Missing history is not held against it.
+    const missed = n - paid - unknown;
+    const allowed = n - c.dividend_years_needed;
+    const y = f.trailing_yield_pct;
+    const src = ['PSX trailing yield', source].filter(Boolean).join(' + ');
+    if (y == null) return { key: 'dividends', label, ok: null, detail: 'no PSX dividend yield yet', source: src };
+    if (y <= 0) return { key: 'dividends', label, ok: false, detail: 'no dividend in the last 12 months (PSX yield 0%)', source: src };
+    const filed = paid + missed > 0 ? `; dividends in ${paid} of ${paid + missed} years covered by filings read so far` : '';
+    return { key: 'dividends', label, ok: missed <= allowed, detail: `pays now (PSX trailing yield ${y.toFixed(1)}%)${filed}`, source: src };
+  }
   if (paid >= c.dividend_years_needed) return { key: 'dividends', label, ok: true, detail, source };
   if (paid + unknown < c.dividend_years_needed) return { key: 'dividends', label, ok: false, detail, source };
   return { key: 'dividends', label, ok: null, detail, source };
@@ -148,7 +161,8 @@ function redFlagCheck(f: BcFacts, c: BcConfig): BcCheck {
   // Defaulter segment: PSX does not publish it on a page we read, but its indices exclude defaulters, so membership proves it.
   if (f.index_members?.includes(c.index_code)) notes.push(`not a defaulter (${c.index_code} member)`);
   else { ok = null; notes.push('defaulter status not published'); }
-  if (c.require_audit_check) {
+  // A qualified opinion always fails once an annual report is read; a report not read yet blocks only when required.
+  if (f.audit || c.require_audit_check) {
     if (!f.audit) { ok = null; notes.push('annual report not read yet'); }
     else if (f.audit.qualified) return { key: 'red_flags', label, ok: false, detail: `qualified audit opinion in the ${f.audit.year} annual report`, source: `annual report ${f.audit.filing_id}` };
     else notes.push(`clean audit opinion ${f.audit.year}`);
@@ -180,7 +194,7 @@ export interface BcState {
 /** A short fingerprint of the thresholds: a full recheck runs whenever it changes. */
 export function configHash(rules: Rules = DEFAULT_RULES): string {
   const c = bcConfig(rules);
-  const s = JSON.stringify([c.index_code, c.top_by_market_cap, c.min_traded_value_pkr, c.profit_years, c.dividend_years_needed, c.dividend_years_window, c.require_audit_check, c.lose_after_fails]);
+  const s = JSON.stringify([c.index_code, c.top_by_market_cap, c.min_traded_value_pkr, c.profit_years, c.dividend_years_needed, c.dividend_years_window, c.require_audit_check, c.lose_after_fails, c.dividend_mode]);
   let h = 0x811c9dc5;
   for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 0x01000193);
   return (h >>> 0).toString(16);

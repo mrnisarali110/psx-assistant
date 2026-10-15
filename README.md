@@ -146,9 +146,13 @@ Worked out by the night job from PSX data only (`shared/bluechip.ts`, `worker/bl
 | --- | --- |
 | Big company | KSE-30 membership from the screener's "listed in", or top 30 by market cap |
 | Easy to trade | PSX's 30-day average volume × price ≥ Rs 50M/day (PSX publishes no 60-day daily series on a page we can read) |
-| Profitable for years | Profit after tax > 0 in each of the last 5 years: PSX's Financials table (4 years) plus results filings (consolidated preferred) |
-| Pays dividends regularly | A cash dividend in 4 of the last 5 years, from dividend filings; years before the first filing we stored are unknown |
-| No red flags | Traded in the last 30 days; not a defaulter (implied by KSE-30 membership); no qualified audit opinion in the latest annual report (PDF text, no AI) |
+| Profitable for years | Profit after tax > 0 in each of the last 4 years (PSX's Financials table; results filings add years, consolidated preferred) |
+| Pays dividends regularly | Paid in the last 12 months (PSX trailing yield > 0), and no year without a dividend among the years covered by filings read so far |
+| No red flags | Traded in the last 30 days; not a defaulter (implied by KSE-30 membership); no qualified audit opinion once an annual report is read (PDF text, no AI) |
+
+These are the relaxed defaults the owner chose on 2026-10-16 to match what PSX publishes now. The original strict rule
+(5 profit years; dividends in 4 of 5 years from filings only; annual report required) is one config change away:
+`profit_years: 5`, `dividend_mode: "strict"`, `require_audit_check: true`.
 
 Anything that cannot be worked out is "not enough data": no badge, no guess. Badges are gained on the first full pass
 and lost only after two failed rechecks in a row ("BC at risk" in between). Rechecks: weekly, after a results or

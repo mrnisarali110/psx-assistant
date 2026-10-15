@@ -16,11 +16,13 @@ const strong = (o: Partial<BcFacts> = {}): BcFacts => ({
   dividends: ['2026-08-20', '2025-08-20', '2024-08-20', '2023-08-20', '2022-08-20'].map((d) => div('AAA', d)),
   filings_since: '2021-01-01', audit: { symbol: 'AAA', year: 2025, qualified: false, filing_id: 'psx-doc-1' }, ...o,
 });
-const check = (f: BcFacts, key: string) => evaluateBc(f).checks.find((c) => c.key === key)!;
+/** Your original strict rule set (5 profit years, dividends from filings only, audit report required). */
+const STRICT: Rules = { ...DEFAULT_RULES, bluechip: { ...DEFAULT_RULES.bluechip, profit_years: 5, dividend_mode: 'strict', require_audit_check: true } };
+const check = (f: BcFacts, key: string, rules: Rules = STRICT) => evaluateBc(f, rules).checks.find((c) => c.key === key)!;
 
 describe('each BC rule', () => {
   it('a company passing all five checks is a blue chip, with real numbers on every line', () => {
-    const r = evaluateBc(strong());
+    const r = evaluateBc(strong(), STRICT);
     expect(r.status).toBe('pass');
     expect(r.checks.map((c) => c.detail)).toEqual([
       'KSE30 member', 'avg traded Rs 800M/day (needs Rs 50M)', 'profitable 5/5 years (2021-2025)',
@@ -58,7 +60,7 @@ describe('missing data: "not enough data", never a guess', () => {
   it('four of five profit years read is unknown, not a pass', () => {
     const f = strong({ annual: [2025, 2024, 2023, 2022].map((y) => annual('AAA', y, 1e9)) });
     expect(check(f, 'profit')).toMatchObject({ ok: null, detail: 'profitable 4/5 years read; 2021 not read yet' });
-    expect(evaluateBc(f).status).toBe('unknown');
+    expect(evaluateBc(f, STRICT).status).toBe('unknown');
   });
   it('years before the first filing we read are unknown for dividends', () => {
     const f = strong({ dividends: [div('AAA', '2026-08-20')], filings_since: '2026-06-01' });
@@ -66,7 +68,7 @@ describe('missing data: "not enough data", never a guess', () => {
   });
   it('no screener row, no annual report, no defaulter evidence: unknown', () => {
     const f = strong({ index_members: null, market_cap_rank: null, audit: null });
-    const r = evaluateBc(f);
+    const r = evaluateBc(f, STRICT);
     expect(r.status).toBe('unknown');
     expect(nextBcState(null, r, TODAY).status).toBe('not_enough_data');
     expect(nextBcState(null, r, TODAY).badge).toBe(false);
@@ -83,8 +85,8 @@ describe('consolidated vs unconsolidated profit', () => {
 });
 
 describe('the badge does not flicker', () => {
-  const fail = evaluateBc(strong({ avg_volume_30d: 10_000 }));
-  const pass = evaluateBc(strong());
+  const fail = evaluateBc(strong({ avg_volume_30d: 10_000 }), STRICT);
+  const pass = evaluateBc(strong(), STRICT);
   it('gains BC at once, is "at risk" after one failed recheck, loses it after the second', () => {
     const s1 = nextBcState(null, pass, TODAY);
     expect(s1).toMatchObject({ status: 'bc', badge: true, fails: 0 });
@@ -111,7 +113,7 @@ describe('KSE-30 changes and the recheck schedule', () => {
     expect(marketCapRanks([{ symbol: 'A', market_cap: 5 }, { symbol: 'B', market_cap: 9 }, { symbol: 'C', market_cap: null }])).toEqual({ B: 1, A: 2 });
   });
   it('rechecks weekly, after a filing, on a membership change, when the config changes and once in the annual season', () => {
-    const s = nextBcState(null, evaluateBc(strong()), '2026-08-03');
+    const s = nextBcState(null, evaluateBc(strong(), STRICT), '2026-08-03');
     expect(bcDue(null, { today: TODAY })).toBe(true);
     expect(bcDue(s, { today: '2026-08-05' })).toBe(false);
     expect(bcDue(s, { today: '2026-08-10' })).toBe(true); // 7 days
@@ -119,7 +121,7 @@ describe('KSE-30 changes and the recheck schedule', () => {
     expect(bcDue(s, { today: '2026-08-05', membershipChanged: true })).toBe(true);
     expect(bcDue({ ...s, config_hash: 'old' }, { today: '2026-08-05' })).toBe(true);
     expect(configHash()).toBe(s.config_hash);
-    const sept = nextBcState(null, evaluateBc(strong()), '2026-09-01');
+    const sept = nextBcState(null, evaluateBc(strong(), STRICT), '2026-09-01');
     expect(bcDue({ ...sept, checked_on: '2026-08-31' }, { today: '2026-09-01' })).toBe(true); // first check of the season month
   });
 });
@@ -134,5 +136,28 @@ describe('no ticker list in the code', () => {
       const quoted = [...src.matchAll(/['"`]([A-Z][A-Z0-9]{2,9})['"`]/g)].map((m) => m[1]).filter((w) => !words.has(w));
       expect({ file: f, quoted }).toEqual({ file: f, quoted: [] });
     }
+  });
+});
+
+describe('relaxed defaults: what PSX publishes now', () => {
+  const relaxed = (o: Partial<BcFacts> = {}) => strong({
+    annual: [2025, 2024, 2023, 2022].map((y) => annual('AAA', y, 1e9)), dividends: [div('AAA', '2026-08-20')],
+    filings_since: '2026-06-01', audit: null, trailing_yield_pct: 6.2, ...o,
+  });
+  it('4 of 4 PSX profit years, a dividend paid now (PSX trailing yield) and no annual report read yet: a blue chip', () => {
+    const r = evaluateBc(relaxed());
+    expect(r.status).toBe('pass');
+    expect(r.checks.find((c) => c.key === 'profit')!.detail).toBe('profitable 4/4 years (2022-2025)');
+    expect(r.checks.find((c) => c.key === 'dividends')!.detail).toBe('pays now (PSX trailing yield 6.2%); dividends in 1 of 1 years covered by filings read so far');
+  });
+  it('no dividend in the last 12 months fails; a qualified audit opinion still fails once a report is read', () => {
+    expect(evaluateBc(relaxed({ trailing_yield_pct: 0 })).checks.find((c) => c.key === 'dividends')!.ok).toBe(false);
+    expect(evaluateBc(relaxed({ audit: { symbol: 'AAA', year: 2025, qualified: true, filing_id: 'psx-doc-2' } })).status).toBe('fail');
+  });
+  it('missing PSX yield is still "not enough data", never a guess', () => {
+    expect(evaluateBc(relaxed({ trailing_yield_pct: null })).status).toBe('unknown');
+  });
+  it('changing the rule set changes the config fingerprint, so everything is rechecked', () => {
+    expect(configHash(STRICT)).not.toBe(configHash());
   });
 });

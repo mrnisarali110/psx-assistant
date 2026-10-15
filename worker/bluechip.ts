@@ -84,6 +84,7 @@ export async function runBluechip(o: {
     const result = evaluateBc({
       symbol: s, today: o.today, index_members: row?.listed_in ?? null, market_cap_rank: row?.mcap_rank ?? null,
       avg_volume_30d: row?.avg_volume_30d ?? null, price: row?.price ?? snap.quotes[s]?.price ?? null,
+      trailing_yield_pct: row?.dividend_yield_pct ?? null,
       annual: annuals.filter((a) => a.symbol === s), dividends: o.dividends.filter((d) => d.symbol === s),
       filings_since: since[s] ?? null, audit,
     }, rules);
