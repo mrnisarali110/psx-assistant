@@ -20,7 +20,7 @@ interface Pick { on: boolean; shares: string; price: string }
 function offsetCandidates(view: PortfolioView, chosen: Set<string>) {
   return view.rows
     .filter((r) => !chosen.has(r.holding.symbol) && r.price?.price != null && (r.pnl ?? 0) < 0 && (r.holding.status === 'review' || r.call.call === 'trim' || r.call.call === 'review'))
-    .map((r) => ({ symbol: r.holding.symbol, shares: r.holding.shares, price: r.price!.price as number }));
+    .map((r) => ({ symbol: r.holding.symbol, shares: r.holding.shares, price: r.price!.price as number, avg_cost: r.holding.avg_cost, bought_on: r.holding.last_buy_on ?? null }));
 }
 
 export function SellPlanner({ open, onClose, view, txns, settings, preselect }: {
@@ -44,7 +44,7 @@ function PlannerBody({ view, txns, settings, preselect }: { view: PortfolioView;
   const book: LotBook = useMemo(() => buildLots(txns, settings), [txns, settings]);
   const plan: PlannedSale[] = rows
     .filter((r) => picks[r.holding.symbol]?.on)
-    .map((r) => ({ symbol: r.holding.symbol, shares: Number(picks[r.holding.symbol].shares), price: Number(picks[r.holding.symbol].price) }))
+    .map((r) => ({ symbol: r.holding.symbol, shares: Number(picks[r.holding.symbol].shares), price: Number(picks[r.holding.symbol].price), avg_cost: r.holding.avg_cost, bought_on: r.holding.last_buy_on ?? null }))
     .filter((p) => Number.isInteger(p.shares) && p.shares > 0 && p.price > 0);
   const result = useMemo(() => (plan.length ? planSales(book, plan, today, settings) : null), [book, plan, today, settings]); // eslint-disable-line react-hooks/exhaustive-deps
   const chosen = new Set(plan.map((p) => p.symbol));
@@ -78,7 +78,7 @@ function PlannerBody({ view, txns, settings, preselect }: { view: PortfolioView;
                 {p.on && line && (
                   <span className="num shrink-0 text-right">
                     <span className={`block text-sm font-semibold ${changeTone(line.gain)}`}>{signedRs(line.gain)}</span>
-                    <span className="block text-[11px] text-slate-500 dark:text-slate-400">{line.rate_pct}% rate</span>
+                    <span className="block text-[11px] text-slate-500 dark:text-slate-400">{line.from_average_cost > 0 ? 'estimate · ' : ''}{line.rate_pct}% rate</span>
                   </span>
                 )}
               </div>

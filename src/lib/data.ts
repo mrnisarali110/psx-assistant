@@ -154,7 +154,7 @@ export class LiveSource implements DataSource {
       optional(sb.from('ai_insights').select('created_at, job, headline, stance, suggestions, holding_calls, rebalance, cash_note, risks, model').order('created_at', { ascending: false }).limit(1), [] as any[]),
       optional(sb.from('market_screen').select('*'), [] as any[]),
       allRows((a, b) => sb.from('transactions').select('*').order('executed_on').order('created_at').range(a, b)),
-      optional(sb.from('dividends').select('*').gte('announced_on', addDays(today, -400)).order('announced_on', { ascending: false }).limit(500), [] as any[]),
+      optional(sb.from('dividends').select('*').gte('announced_on', addDays(today, -1100)).order('announced_on', { ascending: false }).limit(500), [] as any[]),
       optional(sb.from('ai_picks').select('*').eq('kind', 'undervalued').order('created_at', { ascending: false }).limit(1), [] as any[]),
       optional(sb.from('ai_picks').select('*').eq('kind', 'dividend').order('created_at', { ascending: false }).limit(1), [] as any[]),
       allRows((a, b) => sb.from('dividend_receipts').select('*').order('paid_on', { ascending: false }).range(a, b)),

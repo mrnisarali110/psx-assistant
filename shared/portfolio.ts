@@ -92,18 +92,22 @@ const SHORT: Record<string, string> = { 'you set it to hold, no add': 'hold only
 const shortReason = (r: string) => SHORT[r] ?? (r.includes('sector') ? 'sector at cap' : r.includes('cap') ? 'at cap' : r);
 
 /** Sell and trim triggers (FEATURE-05), each a setting: over the stock cap, target price reached, P/E far above the sector, a dividend cut. */
-export function trimReason(h: Holding, p: Price | null, weight: number | null, sector: string, settings: Settings, ctx: RuleContext): string | null {
+export function trimReason(h: Holding, p: Price | null, weight: number | null, sector: string, settings: Settings, ctx: RuleContext, rules: Rules = DEFAULT_RULES): string | null {
   if (weight != null && weight > settings.max_position_pct) return `${weight.toFixed(1)}% of your portfolio, over your ${settings.max_position_pct}% cap`;
   const px = p?.price ?? null;
   if (h.target_price && px != null && px >= h.target_price) return `Reached your target price of ${rs2(h.target_price)}`;
+  const cut = settings.trim_on_dividend_cut && ctx.dividends?.length ? dividendCut(h.symbol, ctx.dividends) : null;
+  if (cut?.cut) return `Dividend cut: Rs ${cut.latest} vs Rs ${cut.previous} before`;
+  // A P/E above the sector's is not enough on its own: some names always trade richer (Meezan among banks). It counts
+  // only with a second sign the position has run: the price near its 52-week high, or the holding near your cap.
   const sectorPe = ctx.sectorPe?.[sector];
   if (p && !missingNum(p.pe) && !peOutlier(p.pe).outlier && sectorPe && settings.trim_pe_over_sector_pct > 0) {
     const over = ((p.pe as number) / sectorPe - 1) * 100;
-    if (over >= settings.trim_pe_over_sector_pct) return `P/E ${(p.pe as number).toFixed(1)} is ${over.toFixed(0)}% above its sector's ${sectorPe.toFixed(1)}`;
-  }
-  if (settings.trim_on_dividend_cut && ctx.dividends?.length) {
-    const cut = dividendCut(h.symbol, ctx.dividends);
-    if (cut.cut) return `Dividend cut: Rs ${cut.latest} vs Rs ${cut.previous} before`;
+    const nearHigh = px != null && p.high_52w != null && p.high_52w > 0 && px >= p.high_52w * (1 - rules.holding.trim_near_high_pct / 100);
+    const heavy = weight != null && weight >= settings.max_position_pct * rules.holding.trim_weight_of_cap;
+    if (over >= settings.trim_pe_over_sector_pct && (nearHigh || heavy)) {
+      return `P/E ${(p.pe as number).toFixed(1)} is ${over.toFixed(0)}% above its sector's ${sectorPe.toFixed(1)} and ${nearHigh ? 'the price is near its 52-week high' : `it is ${weight!.toFixed(0)}% of your money`}`;
+    }
   }
   return null;
 }
@@ -118,7 +122,7 @@ export function reviewReason(h: Holding, ctx: RuleContext): string | null {
 function ruleCall(h: Holding, p: Price | null, weight: number | null, sectorPct: number | null, sector: string, vsRef: number | null, settings: Settings, rules: Rules, ctx: RuleContext): HoldingCall {
   const below = vsRef != null && vsRef < 0 ? Math.abs(vsRef) : 0;
   const blocked = addBlockedReason(h, weight, settings, sectorPct);
-  const trim = trimReason(h, p, weight, sector, settings, ctx);
+  const trim = trimReason(h, p, weight, sector, settings, ctx, rules);
   if (trim) return { call: 'trim', text: trim, source: 'rules' };
   const review = reviewReason(h, ctx);
   if (review) return { call: 'review', text: review, source: 'rules' };

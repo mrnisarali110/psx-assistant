@@ -141,6 +141,16 @@ describe('sell, trim and review rules', () => {
   });
 });
 
+describe('P/E trim needs a second signal', () => {
+  it('a bank richer than its sector is not Trim while it is down, far from its high and well under the cap', () => {
+    const v = buildPortfolio(SEED_HOLDINGS, SEED_PRICES, SEED_SETTINGS, DEFAULT_RULES, {}, { today: TODAY, sectorPe: { 'COMMERCIAL BANKS': 6.5 } });
+    const mebl = v.rows.find((r) => r.holding.symbol === 'MEBL')!; // P/E 10.8 is 66% above 6.5; price 548 vs high 605; 19.5% of a 25% cap
+    expect(mebl.call.call).not.toBe('trim');
+    const near = buildPortfolio(SEED_HOLDINGS, { ...SEED_PRICES, MEBL: { ...SEED_PRICES.MEBL, high_52w: 560 } }, SEED_SETTINGS, DEFAULT_RULES, {}, { today: TODAY, sectorPe: { 'COMMERCIAL BANKS': 6.5 } });
+    expect(near.rows.find((r) => r.holding.symbol === 'MEBL')!.call.text).toMatch(/near its 52-week high/);
+  });
+});
+
 describe('holding changes and transactions', () => {
   const mebl = SEED_HOLDINGS.find((h) => h.symbol === 'MEBL')!; // 20 @ 583.06
 

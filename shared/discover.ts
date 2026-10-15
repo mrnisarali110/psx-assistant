@@ -6,7 +6,7 @@ import type { DividendEvent, Rules } from './types.ts';
 import { DEFAULT_RULES } from './types.ts';
 import { addDays } from './time.ts';
 import { dedupeBySymbol } from './symbols.ts';
-import { missingNum, payoutFrequency, peOutlier, regularDividend } from './quality.ts';
+import { impliedEps, missingNum, payoutFrequency, payoutRatio, peOutlier, regularDividend } from './quality.ts';
 import { buyByDate, tradingCalendar, type TradingCalendar } from './calendar.ts';
 
 export interface ScreenRow {
@@ -73,7 +73,7 @@ const bySymbol = (a: { symbol: string }, b: { symbol: string }) => a.symbol.loca
 
 export type UvSort = 'score' | 'discount' | 'pe' | 'yield' | 'ai';
 export const UV_SORTS: { value: UvSort; label: string }[] = [
-  { value: 'score', label: 'Most undervalued' }, { value: 'discount', label: 'Cheapest vs sector' }, { value: 'pe', label: 'Lowest P/E' },
+  { value: 'discount', label: 'Most undervalued' }, { value: 'pe', label: 'Lowest P/E' },
   { value: 'yield', label: 'Highest yield' }, { value: 'ai', label: 'AI picks first' },
 ];
 export function sortUndervalued<T extends Undervalued & AiMark>(rows: T[], by: UvSort): T[] {
@@ -104,7 +104,8 @@ export function sortDividends<T extends DividendLeader & AiMark>(rows: T[], by: 
     price: (a, b) => a.price - b.price,
     ai: (a, b) => aiRank(a) - aiRank(b),
   };
-  return [...rows].sort((a, b) => cmp[by](a, b) || b.dividend_yield_pct - a.dividend_yield_pct || bySymbol(a, b));
+  const suspect = (r: T) => Number((r as { suspect?: boolean }).suspect === true);
+  return [...rows].sort((a, b) => suspect(a) - suspect(b) || cmp[by](a, b) || b.dividend_yield_pct - a.dividend_yield_pct || bySymbol(a, b));
 }
 
 export type UpSort = 'soonest' | 'dps';
@@ -142,6 +143,9 @@ export interface DividendLeader {
   frequency: Frequency | null;
   frequency_enough: boolean; // at least 2 cash dividend filings behind `frequency`
   outlier: string | null; // why the P/E is not to be trusted, else null
+  payout_pct: number | null; // dividend per share behind the yield as % of earnings (price / P/E)
+  /** Over rules.dividends.suspect_payout_pct of profit with no filing showing which part is a one-off: ranked after the rest. */
+  suspect: boolean;
   is_shariah: boolean | null;
 }
 
@@ -165,6 +169,8 @@ export function dividendLeaders(screen: ScreenRow[], events: DividendEvent[], to
       const mine = events.filter((e) => e.symbol === r.symbol && e.dps != null).sort((a, b) => b.announced_on.localeCompare(a.announced_on));
       const freq = payoutFrequency(r.symbol, events, today, rules);
       const pe = missingNum(r.pe) ? null : (r.pe as number);
+      const annualDps = fromFilings ? regular.annual_dps : Math.round((psxYield * price) / 100 * 100) / 100;
+      const payout = payoutRatio(annualDps, impliedEps(price, pe)).pct;
       return {
         symbol: r.symbol, ex: r.ex ?? null, sector: r.sector, price, pe,
         dividend_yield_pct: yieldPct, psx_yield_pct: psxYield, yield_from: fromFilings ? 'filings' as const : 'psx' as const,
@@ -173,12 +179,16 @@ export function dividendLeaders(screen: ScreenRow[], events: DividendEvent[], to
         high_yield_hint: !regular && psxYield > d.special_yield_hint_pct,
         frequency: freq.enough ? freq.label : null, frequency_enough: freq.enough,
         outlier: pe == null ? null : peOutlier(pe, rules).reason,
+        payout_pct: payout,
+        suspect: !fromFilings && payout != null && payout > d.suspect_payout_pct,
         is_shariah: r.is_shariah,
       };
     })
     .filter((r) => r.dividend_yield_pct >= d.min_yield_pct)
     .sort((a, b) => b.dividend_yield_pct - a.dividend_yield_pct || a.symbol.localeCompare(b.symbol))
-    .slice(0, d.candidates);
+    .slice(0, d.candidates)
+    // Suspect payouts stay on the list but go to the bottom (sortDividends keeps them there in every order).
+    .sort((a, b) => Number(a.suspect) - Number(b.suspect));
 }
 
 /** Working day (Mon–Fri) `n` days before an ISO date, ignoring holidays. Prefer calendar.ts, which knows PSX's holidays and trading days. */

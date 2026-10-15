@@ -571,3 +571,21 @@ export function logGaps(txns: Txn[], holdings: Pick<Holding, 'symbol' | 'shares'
   }
   return out;
 }
+
+/**
+ * KSE-100 comparison when the buy history is incomplete: the first nightly snapshot (`portfolio_daily`) is the opening
+ * position, as if that day's value had been invested in both. Buys, sells and dividends after that day are added on
+ * both sides, as in benchmark(). Null until the night job has stored a snapshot. The figures cover only the days since
+ * `start`.
+ */
+export function benchmarkFromSnapshot(snapshots: PortfolioDay[], txns: Txn[], receipts: DividendReceipt[], myValue: number,
+  index: IndexDay[], today: string, settings: Settings, rules: Rules = DEFAULT_RULES): { start: PortfolioDay; bm: Benchmark } | null {
+  const start = [...snapshots].filter((s) => finite(s.value) && s.value > 0 && s.day <= today).sort((a, b) => a.day.localeCompare(b.day))[0];
+  if (!start) return null;
+  const later = cashFlows(txns, receipts, myValue, today, settings, rules).filter((f) => f.kind !== 'value' && f.date > start.day);
+  const flows: Flow[] = [{ date: start.day, amount: -start.value, kind: 'buy' }, ...later];
+  return { start, bm: benchmark(flows, myValue, index, today) };
+}
+
+/** Net dividends received in total (all receipts), for "total return = price profit/loss + dividends". */
+export const dividendsReceivedNet = (receipts: DividendReceipt[]) => r2(receipts.reduce((a, r) => a + (finite(r.net) ? r.net : 0), 0));

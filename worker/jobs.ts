@@ -137,7 +137,7 @@ export async function runJob(job: JobName, deps: JobDeps): Promise<RunReport> {
       await readFilings(readSymbols, today, job === 'night' ? rules.ai.announcements_per_night_run : rules.ai.announcements_per_market_run, deps, report);
     }
     const news = await store.recentAnnouncements(userSymbols, addDays(today, -14)).catch(() => [] as Announcement[]);
-    const dividends = await store.dividends(null, addDays(today, -400)).catch(() => [] as DividendEvent[]);
+    const dividends = await store.dividends(null, addDays(today, -1100)).catch(() => [] as DividendEvent[]);
 
     // ---- Discover picks (nightly, market-wide) ------------------------
     if (job === 'night' && deps.ai?.available && screen.length) await refreshPicks(screen, dividends, today, deps, report);
@@ -353,7 +353,8 @@ export function buildFacts(u: UserCtx, view: PortfolioView, mine: Set<string>,
     rules: { max_position_pct: s.max_position_pct, opportunity_below_last_buy_pct: s.drop_alert_pct, shariah_only: s.shariah_only, crash_fund_pkr: s.crash_fund_pkr },
     money: { monthly_budget_pkr: s.monthly_budget_pkr, invested_this_month_pkr: Math.round(investedPkr), cash_left_this_month_pkr: Math.max(0, Math.round(s.monthly_budget_pkr - investedPkr)) },
     portfolio: {
-      total_value_pkr: Math.round(view.total_value), total_pnl_pct: r1(view.total_pnl_pct),
+      total_value_pkr: Math.round(view.total_value), pnl_since_bought_pct: r1(view.total_pnl_pct),
+      day_change_pct: view.day_change != null && view.total_value > view.day_change ? r1((view.day_change / (view.total_value - view.day_change)) * 100) : null,
       sectors: view.sector_weights.map((w) => ({ sector: w.sector, pct: r1(w.pct)! })), rebalance_flags: view.rebalance.map((t) => t.text),
     },
     holdings: view.rows.map((r) => ({

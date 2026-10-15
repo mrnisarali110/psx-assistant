@@ -29,7 +29,7 @@ type Sorts = { uv: UvSort; dv: DvSort; up: UpSort };
 type Filters = { loss: boolean; special: boolean; shariah: boolean };
 const SORT_KEY = 'psx-discover-sort';
 const FILTER_KEY = 'psx-discover-filters';
-const DEFAULT_SORTS: Sorts = { uv: 'score', dv: 'yield', up: 'soonest' };
+const DEFAULT_SORTS: Sorts = { uv: 'discount', dv: 'yield', up: 'soonest' };
 const DEFAULT_FILTERS: Filters = { loss: false, special: false, shariah: false };
 function loadSorts(): Sorts {
   try {
@@ -54,7 +54,7 @@ function uvMetric(r: { discount_pct: number | null; pe: number | null; dividend_
 
 const TONE = { green: 'green', red: 'red', amber: 'amber', slate: 'slate' } as const;
 function QualityTags({ chips }: { chips: QualityChip[] }) {
-  return <>{chips.map((c) => <Tag key={c.key} tone={TONE[c.tone]}>{c.label}</Tag>)}</>;
+  return <>{chips.map((c) => <Tag key={c.key} tone={TONE[c.tone]} wrap>{c.label}</Tag>)}</>;
 }
 const ExTag = ({ ex }: { ex?: string | null }) => (ex ? <Tag tone="violet">{exLabel(ex)}</Tag> : null);
 /** A quality chip that means "do not trust the headline number" or "the dividend is not what it looks like". */
@@ -221,10 +221,11 @@ function DividendCard({ d, i, chips, watch, ai }: { d: DividendLeader & { ai: { 
         <div className="rounded-2xl bg-slate-50 p-2 dark:bg-slate-800/60"><p className="num text-sm font-semibold">{d.last?.dps != null ? `Rs ${d.last.dps}` : 'n/a'}</p><p className="text-[11px] text-slate-500 dark:text-slate-400">{d.last ? `last, ${dateLabel(d.last.announced_on).replace(/^\w+, /, '')}` : 'no filing read yet'}</p></div>
         <div className="rounded-2xl bg-slate-50 p-2 dark:bg-slate-800/60"><p className="text-sm font-semibold">{freq ?? 'n/a'}</p><p className="text-[11px] text-slate-500 dark:text-slate-400">{freqNote}</p></div>
       </div>
-      {(d.special || d.high_yield_hint || chips.length > 0) && (
+      {(d.special || d.high_yield_hint || d.suspect || chips.length > 0) && (
         <div className="mt-2 flex flex-wrap gap-1.5">
-          {d.special && <Tag tone="amber">Special Rs {d.special.dps} on {dateLabel(d.special.announced_on).replace(/^\w+, /, '')} · PSX yield {d.psx_yield_pct.toFixed(1)}%</Tag>}
-          {d.high_yield_hint && <Tag tone="amber">Above {DEFAULT_RULES.dividends.special_yield_hint_pct}%: may include a one-off</Tag>}
+          {d.special && <Tag tone="amber" wrap>Special Rs {d.special.dps} on {dateLabel(d.special.announced_on).replace(/^\w+, /, '')} · PSX yield {d.psx_yield_pct.toFixed(1)}%</Tag>}
+          {d.suspect && <Tag tone="amber" wrap>Ranked lower: pays out more than {DEFAULT_RULES.dividends.suspect_payout_pct}% of profit, one-off unclear</Tag>}
+          {d.high_yield_hint && <Tag tone="amber" wrap>Above {DEFAULT_RULES.dividends.special_yield_hint_pct}%: may include a one-off</Tag>}
           <QualityTags chips={chips} />
         </div>
       )}

@@ -30,8 +30,10 @@ export const TONES = {
 };
 export type Tone = keyof typeof TONES;
 
-export function Tag({ tone = 'slate', children }: { tone?: Tone; children: ReactNode }) {
-  return <span className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium ${TONES[tone]}`}>{children}</span>;
+/** A small label. `wrap` lets a long one break over lines inside its card (phones), instead of running off the edge. */
+export function Tag({ tone = 'slate', wrap = false, children }: { tone?: Tone; wrap?: boolean; children: ReactNode }) {
+  const shape = wrap ? 'max-w-full whitespace-normal break-words rounded-2xl' : 'whitespace-nowrap rounded-full';
+  return <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium ${shape} ${TONES[tone]}`}>{children}</span>;
 }
 
 export const changeTone = (v: number | null | undefined) =>

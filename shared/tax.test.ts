@@ -534,3 +534,22 @@ describe('suggestOffsets', () => {
     expect(s[0].text).toBe('Selling C (-Rs 3,031) as well would cut CGT by Rs 455.');
   });
 });
+
+describe('planSales with holdings bought before the log', () => {
+  it('uses the average cost (an estimate) instead of a zero gain, and sell charges still reduce it', () => {
+    const empty = buildLots([], NCCPL);
+    const nc = planSales(empty, [{ symbol: 'DCR', shares: 170, price: 38.76, avg_cost: 36.94 }], TODAY, NCCPL);
+    expect(nc.lines[0]).toMatchObject({ from_average_cost: 170, gain: 309.4 }); // 170 x (38.76 - 36.94)
+    expect(nc.lines[0].warning).toMatch(/average cost of Rs 36\.94 \(an estimate\)/);
+    const withCharges = planSales(empty, [{ symbol: 'DCR', shares: 170, price: 38.76, avg_cost: 36.94 }], TODAY, S({ match_nccpl: false }));
+    expect(withCharges.lines[0].gain).toBeLessThan(309.4); // sell charges come off the proceeds
+    const noAvg = planSales(empty, [{ symbol: 'DCR', shares: 170, price: 38.76 }], TODAY, NCCPL);
+    expect(noAvg.lines[0].gain).toBe(0); // nothing to estimate from: zero gain with a warning, as before
+  });
+
+  it('skips offset hints that save less than rules.tax.min_offset_saving_pkr', () => {
+    const book = buildLots([...BUYS, tx('F', 'buy', 100, 100, '2025-08-01', { id: 'buy-F' })], NCCPL);
+    const tiny = suggestOffsets(book, [sale('A')], [{ symbol: 'F', shares: 100, price: 99.9 }], TODAY, NCCPL); // loss Rs 10 saves Rs 1.50
+    expect(tiny).toEqual([]);
+  });
+});

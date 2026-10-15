@@ -109,7 +109,7 @@ export interface InsightFacts {
   market: { kse100: number | null; change_pct: number | null; rules_say: string; rules_reason: string; crash_level: number; market_open: boolean };
   rules: { max_position_pct: number; opportunity_below_last_buy_pct: number; shariah_only: boolean; crash_fund_pkr: number };
   money: { monthly_budget_pkr: number; invested_this_month_pkr: number; cash_left_this_month_pkr: number };
-  portfolio: { total_value_pkr: number; total_pnl_pct: number | null; sectors: { sector: string; pct: number }[]; rebalance_flags: string[] };
+  portfolio: { total_value_pkr: number; pnl_since_bought_pct: number | null; day_change_pct: number | null; sectors: { sector: string; pct: number }[]; rebalance_flags: string[] };
   holdings: Record<string, unknown>[];
   watchlist: Record<string, unknown>[];
   screen_candidates: Record<string, unknown>[];
@@ -168,7 +168,9 @@ For each holding pick a call:
 Never "average_down"/"opportunity"/"buy"/"add" for status hold_no_add or review, at or over max_position_pct, or non-Shariah when shariah_only.
 When rules_say is "Wait" the stance must not be "buy". Use recent_news (AI summaries of company filings) when relevant.
 Suggestions: at most 4, actions to DO or WATCH (skip plain holds). Mention screen_candidates only as "watch".
-Plain short English for a non-expert ("profit/loss", not "PnL"). No guarantees, no hype.`;
+Plain short English for a non-expert ("profit/loss", not "PnL"). No guarantees, no hype.
+Never compare numbers from different periods: portfolio.pnl_since_bought_pct is the profit/loss since the investor bought
+(all time); market.change_pct and portfolio.day_change_pct are today only. Compare today with today, or say each on its own.`;
 
 export interface GuardContext {
   holdings: { symbol: string; status: string; weight_pct: number | null; is_shariah: boolean | null }[];

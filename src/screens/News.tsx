@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { ScreenProps } from '../App.tsx';
 import { dedupeFilings, groupByDay, tidyTitle } from '../../shared/news.ts';
-import { tradingCalendar, weekAhead, type WeekEvent } from '../../shared/calendar.ts';
+import { dateSane, dateVerdict, datesIn, tradingCalendar, weekAhead, type WeekEvent } from '../../shared/calendar.ts';
 import { pktDate } from '../../shared/time.ts';
 import { asOfLabel, dateLabel } from '../../shared/format.ts';
 import { DEFAULT_RULES, type AlertLogRow, type Announcement } from '../../shared/types.ts';
@@ -104,6 +104,12 @@ const DATE_NOTE: Record<NonNullable<Announcement['ai_date_note']>, string> = { o
 
 function NewsCard({ a }: { a: Announcement }) {
   const [open, setOpen] = useState(false);
+  // ISSUE-06 for filings read before the worker checked dates: the same check runs here on what the AI wrote.
+  const note = a.ai_date_note ?? (a.ai_summary ? (() => {
+    const v = dateVerdict([a.ai_summary, ...(a.ai_figures ?? []).map((f) => f.value)], a.published_at);
+    return v === 'ok' ? null : v;
+  })() : null);
+  const badDate = (text: string) => datesIn(text).some((d) => !dateSane(d, a.published_at));
   return (
     <Card>
       <div className="flex gap-3">
@@ -113,20 +119,28 @@ function NewsCard({ a }: { a: Announcement }) {
             <span className="font-semibold">{a.symbol}</span>
             <Tag tone={KIND[a.kind].tone}>{KIND[a.kind].label}</Tag>
             {a.ai_summary && <AiBadge />}
-            {a.ai_date_note && <Tag tone="amber">{DATE_NOTE[a.ai_date_note]}</Tag>}
+            {note && <Tag tone="amber">{DATE_NOTE[note]}</Tag>}
           </div>
           <p className="mt-1 text-[15px] leading-snug">{a.ai_summary ?? tidyTitle(a.title, a.symbol)}</p>
           {a.ai_summary && <p className="mt-1 line-clamp-1 text-xs text-slate-500 dark:text-slate-400">{tidyTitle(a.title, a.symbol)}</p>}
           {!!a.ai_figures?.length && (
             <div className="mt-2 flex flex-wrap gap-1.5">
-              {(open ? a.ai_figures : a.ai_figures.slice(0, 3)).map((f) => (
-                <Tag key={f.label} tone={f.verified ? 'teal' : 'slate'}>{f.verified && <Icon name="check" className="h-3 w-3" label="checked against the PDF" />}{f.label}: {f.value}</Tag>
-              ))}
+              {(open ? a.ai_figures : a.ai_figures.slice(0, 3)).map((f) => {
+                const bad = badDate(f.value);
+                const tone = bad ? 'bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-300' : f.verified ? 'bg-teal-100 text-teal-800 dark:bg-teal-950 dark:text-teal-300' : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300';
+                // Figures wrap inside the card on a phone: long labels must never run past the edge.
+                return (
+                  <span key={f.label} className={`inline-flex max-w-full items-start gap-1 rounded-2xl px-2 py-0.5 text-xs font-medium break-words ${tone}`}>
+                    {f.verified && !bad && <Icon name="check" className="mt-0.5 h-3 w-3 shrink-0" label="checked against the PDF" />}
+                    <span className="min-w-0">{f.label}: {f.value}{bad ? ' (date unclear)' : ''}</span>
+                  </span>
+                );
+              })}
               {a.ai_figures.length > 3 && !open && <button type="button" className="cursor-pointer text-xs font-semibold text-teal-700 dark:text-teal-400" onClick={() => setOpen(true)}>+{a.ai_figures.length - 3}</button>}
             </div>
           )}
-          <div className="mt-2 flex items-center justify-between">
-            {a.ai_date_note ? <span className="text-[11px] text-amber-700 dark:text-amber-400">{a.ai_date_note === 'older_document' ? 'The dates inside are long before the filing: a re-upload of an old notice.' : 'A date inside does not fit the filing date; read the PDF.'}</span>
+          <div className="mt-2 flex items-center justify-between gap-2">
+            {note ? <span className="text-[11px] text-amber-700 dark:text-amber-400">{note === 'older_document' ? 'The dates inside are long before the filing: a re-upload of an old notice.' : 'A date inside does not fit the filing date; read the PDF.'}</span>
               : a.ai_summary && a.ai_verified === false ? <span className="text-[11px] text-amber-700 dark:text-amber-400">Some figures not checked (scanned PDF)</span> : <span />}
             {a.pdf_url && <a href={a.pdf_url} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-9 items-center gap-1 text-sm font-semibold text-teal-700 dark:text-teal-400">PDF <Icon name="external" className="h-4 w-4" /></a>}
           </div>

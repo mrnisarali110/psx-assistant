@@ -119,21 +119,27 @@ export function regularDividend(symbol: string, events: DividendEvent[], today: 
 }
 
 /**
- * How often the company pays, from its last rules.dividends.frequency_filings cash dividends (filings typed
- * 'special' left out): the number of distinct months with a payout in the 12 months ending `today` decides,
- * as in discover.frequencyOf (4+ Quarterly, 2-3 Half-yearly, 1 Yearly, none null). `count` is the filings
- * in that window and `enough` says whether there are at least 2 of them; with one filing the label is a
- * guess the caller should mark as such. A filing dated after `today` (a misread date) is not one of the
- * last N, so it cannot push a real one out.
+ * How often the company pays, from its last rules.dividends.frequency_filings cash dividends (specials left out)
+ * over up to rules.dividends.frequency_years years: for each 12-month window ending today, a year ago, two years
+ * ago..., count the distinct months with a payout; the busiest year decides (4+ Quarterly, 2-3 Half-yearly,
+ * 1 Yearly, none null). Filings the worker has not read only lower a year's count, so the best-covered year is the
+ * truest picture (MCB pays quarterly even when only one of this year's notices has been read). `enough` = at
+ * least 2 filings in total. A filing dated after `today` (a misread date) does not count.
  */
 export function payoutFrequency(symbol: string, events: DividendEvent[], today: string, rules: Rules = DEFAULT_RULES):
   { label: 'Quarterly' | 'Half-yearly' | 'Yearly' | null; count: number; enough: boolean } {
+  const years = (rules.dividends as { frequency_years?: number }).frequency_years ?? 1;
+  const since = addDays(today, -365 * years);
   const recent = cashDividends(events, symbol)
-    .filter((e) => e.dividend_type !== 'special' && e.announced_on <= today)
+    .filter((e) => e.dividend_type !== 'special' && e.announced_on <= today && e.announced_on > since)
     .sort(newestFirst)
-    .slice(0, rules.dividends.frequency_filings)
-    .filter((e) => inLastYear(e, today));
-  const months = new Set(recent.map((e) => e.announced_on.slice(0, 7))).size;
+    .slice(0, rules.dividends.frequency_filings);
+  let months = 0;
+  for (let y = 0; y < years; y++) {
+    const end = addDays(today, -365 * y);
+    const start = addDays(end, -365);
+    months = Math.max(months, new Set(recent.filter((e) => e.announced_on > start && e.announced_on <= end).map((e) => e.announced_on.slice(0, 7))).size);
+  }
   return { label: months >= 4 ? 'Quarterly' : months >= 2 ? 'Half-yearly' : months === 1 ? 'Yearly' : null, count: recent.length, enough: recent.length >= 2 };
 }
 
@@ -157,8 +163,8 @@ export interface QualityChip { key: 'loss' | 'payout' | 'trend' | 'special' | 'o
 
 /**
  * Small chips for a Discover card, in this order when they apply:
- * - loss (red): P/E below zero is "Loss-making"; P/E 0 or blank while a price exists is "Loss or no P/E"
- *   (PSX shows 0 for loss-makers and for gaps alike, so the chip says both).
+ * - loss (red): only a P/E below zero, "Loss-making". A 0 or blank P/E is missing data (BAFL is profitable but
+ *   PSX leaves its P/E blank), so it gets the slate "No P/E figure" chip and is never hidden as loss-making.
  * - payout (amber): regular dividend over 100% of earnings. Dividend per share comes from the last 12 months
  *   of filings when there are any, else from PSX's yield x price; earnings from price / P/E.
  * - trend (green up, red down, slate flat): "1y +12%" from change_1y_pct when known.
@@ -179,7 +185,6 @@ export function qualityChips(row: { symbol?: string; pe: number | null; price: n
   const peGap = peNumber == null || peNumber === 0; // PSX leaves the cell blank or prints 0 when it has no figure
 
   if (peNumber != null && peNumber < 0) chips.push({ key: 'loss', label: 'Loss-making', tone: 'red' });
-  else if (havePrice && peGap) chips.push({ key: 'loss', label: 'Loss or no P/E', tone: 'red' });
 
   const eps = impliedEps(row.price, row.pe);
   const regular = symbol ? regularDividend(symbol, events, today, row.price, rules) : null;
@@ -199,9 +204,9 @@ export function qualityChips(row: { symbol?: string; pe: number | null; price: n
 
   const gaps: string[] = [];
   if (!havePrice) gaps.push('price');
-  if (!havePrice && peGap) gaps.push('P/E');
+  if (peGap) gaps.push('P/E');
   if (missingNum(row.dividend_yield_pct)) gaps.push('yield');
-  if (gaps.length) chips.push({ key: 'missing', label: `No ${gaps.join(', ')}`, tone: 'slate' });
+  if (gaps.length) chips.push({ key: 'missing', label: gaps.length === 1 && gaps[0] === 'P/E' ? 'No P/E figure' : `No ${gaps.join(', ')}`, tone: 'slate' });
 
   return chips;
 }
@@ -246,13 +251,15 @@ const nameList = (symbols: string[]) => {
  *   `addable` may take money;
  * - 'hold' otherwise, with a headline that says why and never suggests buying.
  */
-export function todayState(o: { stance: 'Buy' | 'Hold' | 'Wait'; cash_left: number; attention: number; addable: string[] }): { state: 'hold' | 'add' | 'review'; headline: string } {
+export function todayState(o: { stance: 'Buy' | 'Hold' | 'Wait'; cash_left: number; attention: number; addable: string[]; trims?: string[] }): { state: 'hold' | 'add' | 'review'; headline: string } {
   if (o.attention > 0) {
     return { state: 'review', headline: o.attention === 1 ? 'Review first: one of your rules is broken' : `Review first: ${o.attention} of your rules are broken` };
   }
   if (o.stance === 'Buy' && o.cash_left > 0 && o.addable.length > 0) {
     return { state: 'add', headline: `Add money: ${rs(o.cash_left)} left for ${nameList(o.addable)}` };
   }
+  // A suggested trim must not sit under "nothing to do": say it in the headline.
+  if (o.trims?.length) return { state: 'hold', headline: `No new buys today; consider trimming ${nameList(o.trims)}` };
   if (o.stance === 'Wait') return { state: 'hold', headline: 'Hold: the market says wait today' };
   if (o.stance === 'Buy' && o.cash_left <= 0) return { state: 'hold', headline: "Hold: this month's money is all invested" };
   if (o.stance === 'Buy') return { state: 'hold', headline: 'Hold: nothing qualifies for more money today' };

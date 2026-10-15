@@ -3,6 +3,7 @@ import type { ScreenProps } from '../App.tsx';
 import { tradingCalendar, weekAhead } from '../../shared/calendar.ts';
 import { investedThisMonth } from '../../shared/changes.ts';
 import { todayState } from '../../shared/quality.ts';
+import { dividendsReceivedNet } from '../../shared/performance.ts';
 import { dayStance, todayBanner } from '../../shared/signals.ts';
 import { isMarketOpen, isStale, minutesToClose, pktDate, pktParts } from '../../shared/time.ts';
 import { DEFAULT_RULES } from '../../shared/types.ts';
@@ -45,8 +46,19 @@ export function Home(props: ScreenProps) {
   const toClose = minutesToClose(now, DEFAULT_RULES.market_hours_pkt);
   const idx = data.index;
 
-  const addable = view.rows.filter((r) => { const c = acts.callFor(r).call; return c === 'average_down' || c === 'opportunity'; }).map((r) => r.holding.symbol);
-  const state = todayState({ stance: stance.action, cash_left: budget - invested, attention: 0, addable });
+  // One story with the AI card below: what it suggests adding or trimming decides the Today card too (the worker's
+  // guardrails already dropped any add that breaks your caps, Shariah or hold-no-add rules).
+  const aiAdds = (ai?.suggestions ?? []).filter((x) => (x.action === 'add' || x.action === 'buy') && x.symbol).map((x) => x.symbol as string);
+  const ruleTrims = view.rows.filter((r) => r.call.call === 'trim').map((r) => r.holding.symbol);
+  const aiTrims = (ai?.suggestions ?? []).filter((x) => (x.action === 'trim' || x.action === 'sell') && x.symbol).map((x) => x.symbol as string);
+  const addable = [...new Set([
+    ...view.rows.filter((r) => { const c = acts.callFor(r).call; return c === 'average_down' || c === 'opportunity'; }).map((r) => r.holding.symbol),
+    ...aiAdds,
+  ])].filter((s) => !ruleTrims.includes(s));
+  const trims = [...new Set([...ruleTrims, ...aiTrims])];
+  const state = todayState({
+    stance: stance.action === 'Hold' && aiAdds.length ? 'Buy' : stance.action, cash_left: budget - invested, attention: 0, addable, trims,
+  });
   const hero = HERO[state.state];
 
   const week = useMemo(() => weekAhead({
@@ -58,8 +70,12 @@ export function Home(props: ScreenProps) {
   const nonePriced = data.holdings.length > 0 && unpriced === data.holdings.length;
   // Profit / loss on your average cost, as before: the full return with dividends and the KSE-100 comparison live on
   // Portfolio → Performance, where they only show once your buys list explains every holding.
+  // Total return: price profit/loss on your average cost plus dividends received (net of tax), one line.
+  const divNet = dividendsReceivedNet(data.receipts);
+  const total = view.total_pnl + divNet;
+  const totalPct = view.total_cost > 0 ? (total / view.total_cost) * 100 : null;
   const retLine = !data.holdings.length || nonePriced ? null
-    : `${signedRs(view.total_pnl)} (${pct(view.total_pnl_pct)}) total${unpriced ? ` · ${unpriced} not priced yet` : ''}`;
+    : `${signedRs(total)} (${pct(totalPct)}) total${divNet > 0 ? `, incl. ${rs(divNet)} dividends` : ''}${unpriced ? ` · ${unpriced} not priced yet` : ''}`;
 
   return (
     <>
@@ -91,7 +107,7 @@ export function Home(props: ScreenProps) {
           <div className="min-w-0">
             <p className="text-xs text-slate-500 dark:text-slate-400">Your portfolio</p>
             <p className="num text-2xl font-bold tracking-tight">{!data.holdings.length ? 'Empty' : nonePriced ? 'No prices yet' : rs(view.total_value)}</p>
-            {retLine && <p className={`num text-xs font-semibold ${changeTone(view.total_pnl)}`}>{retLine}</p>}
+            {retLine && <p className={`num text-xs font-semibold ${changeTone(total)}`}>{retLine}</p>}
           </div>
           {view.day_change != null && (
             <span className={`num shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${view.day_change >= 0 ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300' : 'bg-rose-50 text-rose-700 dark:bg-rose-950 dark:text-rose-300'}`}>

@@ -9,7 +9,9 @@
     "sector_limit_pct": 30,
     "big_move_pct": 5,
     "average_down_pct": 5,
-    "repeat_days": 7
+    "repeat_days": 7,
+    "trim_near_high_pct": 5,
+    "trim_weight_of_cap": 0.8
   },
   "notifications": {
     "max_per_day": 3
@@ -29,12 +31,14 @@
     "settlement_note": "T+1 since 2026-02-09: shares must settle before book closure starts, so the last day to buy is 2 working days before it. Confirm once with the broker.",
     "special_yield_hint_pct": 12,
     "special_multiple_of_median": 2,
-    "frequency_filings": 8
+    "frequency_filings": 12,
+    "suspect_payout_pct": 150,
+    "frequency_years": 3
   },
   "ai": {
     "announcements_per_market_run": 3,
     "announcements_per_night_run": 12,
-    "announcement_max_age_days": 400,
+    "announcement_max_age_days": 1100,
     "insight_every_minutes": 150,
     "fresh_hours": 20,
     "max_users_per_run": 25,
@@ -152,7 +156,8 @@
           "REAL ESTATE INVESTMENT TRUST"
         ]
       }
-    }
+    },
+    "min_offset_saving_pkr": 100
   },
   "psx_holidays": {
     "source": "Fixed national holidays only. Eid, Ashura and other lunar holidays must be added when PSX announces them; days with a KSE-100 close in index_daily count as traded regardless.",

@@ -10,14 +10,14 @@ import type { AppData, DataSource } from '../lib/data.ts';
 import type { DividendReceipt, Holding } from '../../shared/types.ts';
 import { screenSectors, type PortfolioView } from '../../shared/portfolio.ts';
 import {
-  benchmark, cashFlows, expectedDividends, expectedYearlyIncome, logGaps, receiptFrom, totalReturn, valueSeries, whtPct, type ExpectedDividend,
+  benchmark, benchmarkFromSnapshot, cashFlows, dividendsReceivedNet, expectedDividends, expectedYearlyIncome, logGaps, receiptFrom, totalReturn, valueSeries, whtPct, type ExpectedDividend,
 } from '../../shared/performance.ts';
 import { daysBetween, pktDate } from '../../shared/time.ts';
 import { dateLabel, num, pct, rs, rs2, signedRs } from '../../shared/format.ts';
 import { haptic } from '../lib/gestures.ts';
 import { Icon } from './Icon.tsx';
 import { useToast } from './Toast.tsx';
-import { Button, Card, Empty, ErrorNote, Field, Section, Tag, changeTone, inputCls } from './ui.tsx';
+import { Button, Card, Empty, ErrorNote, Field, Section, Segmented, Tag, changeTone, inputCls } from './ui.tsx';
 
 type SeriesPoint = ReturnType<typeof valueSeries>[number];
 const r2 = (v: number) => Math.round(v * 100) / 100;
@@ -37,7 +37,7 @@ export function PerformanceTab({ data, view, source, reload, onTransactions }: {
   const toast = useToast();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [adding, setAdding] = useState(false);
+  const [adding, setAdding] = useState<false | { prefill: DividendReceipt | null }>(false);
   const [confirm, setConfirm] = useState<string | null>(null); // receipt id waiting for its second tap
 
   const screenMap = useMemo(() => screenSectors(data.screen), [data.screen]);
@@ -55,12 +55,18 @@ export function PerformanceTab({ data, view, source, reload, onTransactions }: {
     const income = expectedYearlyIncome(data.holdings, data.prices);
     const received = [...data.receipts].sort((a, b) => b.paid_on.localeCompare(a.paid_on));
     const gaps = logGaps(data.transactions, data.holdings);
-    return { tr, bm, series, expected, income, received, gaps };
+    const snap = benchmarkFromSnapshot(data.portfolioDaily, data.transactions, data.receipts, view.total_value, data.indexDaily, today, data.settings);
+    return { tr, bm, series, expected, income, received, gaps, snap };
   }, [data, view.total_value, today, screenMap]);
-  const { tr, bm, series, expected, income, received, gaps } = m;
+  const { tr, bm, series, expected, income, received, gaps, snap } = m;
   // Older buys missing from the log would count as free shares: until the log explains every holding, show the
   // price-only figure from your average cost and leave total return, XIRR and the KSE-100 comparison out.
   const partial = gaps.length > 0;
+  // Average-cost view: price profit/loss of what you hold plus every dividend received, net of tax.
+  const divNet = dividendsReceivedNet(data.receipts);
+  const avgTotal = view.total_pnl + divNet;
+  const avgTotalPct = view.total_cost > 0 ? (avgTotal / view.total_cost) * 100 : null;
+  const snapGap = snap && snap.bm.my_return_pct != null && snap.bm.index_return_pct != null ? r1(snap.bm.my_return_pct - snap.bm.index_return_pct) : null;
 
   useEffect(() => {
     if (!confirm) return;
@@ -105,10 +111,11 @@ export function PerformanceTab({ data, view, source, reload, onTransactions }: {
       <Card>
         {noTxns || partial ? (
           <>
-            <p className={`text-xs ${muted}`}>Profit / loss on your average cost</p>
-            <p className={`num text-3xl font-bold tracking-tight ${changeTone(view.total_pnl)}`}>
-              {signedRs(view.total_pnl)} <span className="text-base font-semibold">({pct(view.total_pnl_pct)})</span>
+            <p className={`text-xs ${muted}`}>Total return on your average cost, dividends included</p>
+            <p className={`num text-3xl font-bold tracking-tight ${changeTone(avgTotal)}`}>
+              {signedRs(avgTotal)} <span className="text-base font-semibold">({pct(avgTotalPct)})</span>
             </p>
+            <p className={`num mt-1 text-sm ${muted}`}>Price only {signedRs(view.total_pnl)} ({pct(view.total_pnl_pct)}) · dividends {rs(divNet)} net</p>
             <p className={`mt-1 text-sm ${muted}`}>
               {noTxns ? 'Record your buys and sells to see the full return with charges and dividends.'
                 : `Your buys list is missing older buys of ${gaps.map((g) => g.symbol).slice(0, 4).join(', ')}${gaps.length > 4 ? ` and ${gaps.length - 4} more` : ''}. Add them under Buys and sells to see the full return and the KSE-100 comparison.`}
@@ -129,7 +136,21 @@ export function PerformanceTab({ data, view, source, reload, onTransactions }: {
               : `A yearly rate (XIRR) comes after ${MIN_XIRR_DAYS} days of history; ${historyDays} day${historyDays === 1 ? '' : 's'} so far`}
         </p>}
         {noPrices && <p className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-400">No prices yet for your holdings, so the value side reads Rs 0 until the next market check.</p>}
-        {!partial && <div className="mt-3 border-t border-slate-100 pt-3 dark:border-slate-800">
+        {(partial || gap == null) && (
+          <div className="mt-3 border-t border-slate-100 pt-3 dark:border-slate-800">
+            {snap && snapGap != null ? (
+              <>
+                <p className={`num text-sm font-semibold ${snapGap === 0 ? muted : changeTone(snapGap)}`}>
+                  vs KSE-100 since {dateLabel(snap.start.day)}: {snapGap === 0 ? 'level' : `${pct(snapGap)} ${snapGap > 0 ? 'better' : 'behind'}`}
+                </p>
+                <p className={`num text-xs ${muted}`}>Your holdings on {dateLabel(snap.start.day)} count as the starting point; the same money in the index would be worth {rs(snap.bm.index_value)}.</p>
+              </>
+            ) : (
+              <p className={`text-sm ${muted}`}>KSE-100 comparison starts with tonight's check: your holdings then are the starting point.</p>
+            )}
+          </div>
+        )}
+        {!partial && gap != null && <div className="mt-3 border-t border-slate-100 pt-3 dark:border-slate-800">
           {gap != null ? (
             <>
               <p className={`num text-sm font-semibold ${diffTone}`}>{diffLine}</p>
@@ -194,7 +215,7 @@ export function PerformanceTab({ data, view, source, reload, onTransactions }: {
               <ul className="divide-y divide-slate-100 dark:divide-slate-800">
                 {expected.map((e) => (
                   <ExpectedRow key={e.dividend_id} e={e} busy={busy === e.dividend_id}
-                    onReceived={() => run(e.dividend_id, () => source.saveReceipt(receiptFrom(e)), `${e.symbol} dividend recorded`)} />
+                    onReceived={() => setAdding({ prefill: receiptFrom(e) })} />
                 ))}
               </ul>
               <p className={`mt-1 text-xs ${muted}`}>A declared dividend for shares you held at book closure. Tap Received once it is credited.</p>
@@ -239,11 +260,11 @@ export function PerformanceTab({ data, view, source, reload, onTransactions }: {
           </div>
 
           {adding ? (
-            <ReceiptForm holdings={data.holdings} today={today} filer={data.settings.tax_filer} sectorFor={sectorFor} busy={busy === 'add'}
+            <ReceiptForm key={adding.prefill?.dividend_id ?? 'new'} prefill={adding.prefill} holdings={data.holdings} today={today} filer={data.settings.tax_filer} sectorFor={sectorFor} busy={busy === 'add'}
               onCancel={() => setAdding(false)}
               onSave={(r) => run('add', () => source.saveReceipt(r), `${r.symbol} dividend saved`).then((ok) => { if (ok) setAdding(false); })} />
           ) : (
-            <Button kind="ghost" className="w-full" onClick={() => setAdding(true)}><Icon name="plus" className="h-4 w-4" />Add a dividend</Button>
+            <Button kind="ghost" className="w-full" onClick={() => setAdding({ prefill: null })}><Icon name="plus" className="h-4 w-4" />Add a dividend</Button>
           )}
           <ErrorNote error={error} />
         </Card>
@@ -274,24 +295,28 @@ const SYMBOL_RE = /^[A-Z0-9]{1,12}$/;
 const OTHER = '__other__';
 
 /** Record a dividend by hand: symbol, date, shares, rupees per share and the withholding rate; gross and net update as you type. */
-function ReceiptForm({ holdings, today, filer, sectorFor, busy, onSave, onCancel }: {
-  holdings: Holding[]; today: string; filer: boolean; sectorFor: (symbol: string) => string | null; busy: boolean;
+function ReceiptForm({ prefill, holdings, today, filer, sectorFor, busy, onSave, onCancel }: {
+  prefill: DividendReceipt | null; holdings: Holding[]; today: string; filer: boolean; sectorFor: (symbol: string) => string | null; busy: boolean;
   onSave: (r: DividendReceipt) => void; onCancel: () => void;
 }) {
   const sorted = useMemo(() => [...holdings].sort((a, b) => a.symbol.localeCompare(b.symbol)), [holdings]);
-  const first = sorted[0];
-  const [pick, setPick] = useState(first ? first.symbol : OTHER);
-  const [other, setOther] = useState('');
-  const [paidOn, setPaidOn] = useState(today);
-  const [shares, setShares] = useState(first ? String(first.shares) : '');
-  const [dps, setDps] = useState('');
-  const [wht, setWht] = useState(String(whtPct(first ? sectorFor(first.symbol) : null, filer)));
+  const first = prefill ? sorted.find((h) => h.symbol === prefill.symbol) ?? null : sorted[0];
+  const [pick, setPick] = useState(prefill && !first ? OTHER : first ? first.symbol : OTHER);
+  const [other, setOther] = useState(prefill && !first ? prefill.symbol : '');
+  // No default date: the credit date decides the tax year and the return, so it must be the real one.
+  const [paidOn, setPaidOn] = useState('');
+  const [shares, setShares] = useState(prefill ? String(prefill.shares) : first ? String(first.shares) : '');
+  const [mode, setMode] = useState<'dps' | 'net'>('dps');
+  const [dps, setDps] = useState(prefill ? String(prefill.dps) : '');
+  const [amount, setAmount] = useState('');
+  const [wht, setWht] = useState(String(prefill ? prefill.wht_pct : whtPct(first ? sectorFor(first.symbol) : null, filer)));
   const [err, setErr] = useState<string | null>(null);
 
   const symbol = (pick === OTHER ? other : pick).trim().toUpperCase();
   const sharesN = Number(shares);
-  const dpsN = Number(dps);
   const whtN = Number(wht);
+  // "Amount credited" is what the bank shows: net of tax for all shares, so work back to the gross rupees per share.
+  const dpsN = mode === 'dps' ? Number(dps) : sharesN > 0 && whtN < 100 ? r2(Number(amount) / (sharesN * (1 - whtN / 100)) * 10000) / 10000 : NaN;
   const valid = sharesN > 0 && dpsN > 0 && Number.isFinite(whtN) && whtN >= 0 && whtN <= 100;
   const gross = valid ? r2(sharesN * dpsN) : null;
   const net = gross == null ? null : r2(gross * (1 - whtN / 100));
@@ -310,12 +335,12 @@ function ReceiptForm({ holdings, today, filer, sectorFor, busy, onSave, onCancel
   }
   function save() {
     if (!SYMBOL_RE.test(symbol)) return setErr('Enter a PSX symbol like MARI.');
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(paidOn)) return setErr('Enter the date it was paid.');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(paidOn)) return setErr('Enter the date it was credited (on the credit advice or bank statement).');
     if (!(sharesN > 0)) return setErr('Shares must be more than 0.');
     if (!(dpsN > 0)) return setErr('Rupees per share must be more than 0.');
     if (gross == null || net == null) return setErr('Withholding tax must be between 0 and 100%.');
     setErr(null);
-    onSave({ symbol, paid_on: paidOn, shares: sharesN, dps: dpsN, gross, wht_pct: whtN, net, dividend_id: null, note: null });
+    onSave({ symbol, paid_on: paidOn, shares: sharesN, dps: dpsN, gross, wht_pct: whtN, net, dividend_id: prefill?.dividend_id ?? null, note: null });
   }
 
   return (
@@ -331,23 +356,31 @@ function ReceiptForm({ holdings, today, filer, sectorFor, busy, onSave, onCancel
           <input className={`${inputCls} uppercase`} value={other} autoCapitalize="characters" placeholder="e.g. MARI" onChange={(e) => typeOther(e.target.value)} />
         </Field>
       )}
-      <Field label="Paid on">
+      <Field label="Credited on" hint="The date on the credit advice or bank statement, not today.">
         <input type="date" className={inputCls} value={paidOn} max={today} onChange={(e) => setPaidOn(e.target.value)} />
       </Field>
+      <Segmented label="What you know" value={mode} onChange={setMode}
+        options={[{ value: 'dps', label: 'Rs per share' }, { value: 'net', label: 'Amount credited' }]} />
       <div className="grid grid-cols-2 gap-3">
-        <Field label="Shares">
+        <Field label="Shares held">
           <input type="number" inputMode="numeric" min="1" step="1" className={`${inputCls} num`} value={shares} onChange={(e) => setShares(e.target.value)} />
         </Field>
-        <Field label="Rs per share (gross)">
-          <input type="number" inputMode="decimal" min="0" step="0.01" className={`${inputCls} num`} value={dps} placeholder="e.g. 2.50" onChange={(e) => setDps(e.target.value)} />
-        </Field>
+        {mode === 'dps' ? (
+          <Field label="Rs per share (gross)">
+            <input type="number" inputMode="decimal" min="0" step="0.01" className={`${inputCls} num`} value={dps} placeholder="e.g. 2.50" onChange={(e) => setDps(e.target.value)} />
+          </Field>
+        ) : (
+          <Field label="Credited, after tax (Rs)">
+            <input type="number" inputMode="decimal" min="0" step="0.01" className={`${inputCls} num`} value={amount} placeholder="e.g. 138" onChange={(e) => setAmount(e.target.value)} />
+          </Field>
+        )}
       </div>
       <Field label="Withholding tax %" hint={filer ? 'Your rate as a filer; check the credit advice.' : 'Your rate as a non-filer; check the credit advice.'}>
         <input type="number" inputMode="decimal" min="0" max="100" step="0.5" className={`${inputCls} num`} value={wht} onChange={(e) => setWht(e.target.value)} />
       </Field>
       <p className="num text-sm" aria-live="polite">
         {gross == null ? <span className={muted}>Gross and net appear once shares and rupees per share are in.</span>
-          : <>Gross <span className="font-semibold">{rs2(gross)}</span> · net <span className="font-semibold">{rs2(net)}</span> after {whtN}% tax</>}
+          : <>{sharesN} × {rs2(dpsN)} = gross <span className="font-semibold">{rs2(gross)}</span> · net <span className="font-semibold">{rs2(net)}</span> after {whtN}% tax</>}
       </p>
       <ErrorNote error={err} />
       <div className="flex gap-2">

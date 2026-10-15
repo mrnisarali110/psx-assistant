@@ -536,3 +536,16 @@ describe('logGaps', () => {
     expect(logGaps([], holdings).map((g) => g.symbol)).toEqual(['MEBL', 'SYS', 'UBL']);
   });
 });
+
+describe('benchmarkFromSnapshot', () => {
+  it('uses the first nightly value as the opening position when the buy history is incomplete', async () => {
+    const { benchmarkFromSnapshot } = await import('./performance.ts');
+    const index = [{ day: '2026-10-15', close: 100 }, { day: '2026-10-20', close: 110 }];
+    expect(benchmarkFromSnapshot([], [], [], 1000, index, '2026-10-20', DEFAULT_SETTINGS)).toBeNull();
+    const r = benchmarkFromSnapshot([{ day: '2026-10-15', value: 1000, invested: 900 }], [], [], 1050, index, '2026-10-20', DEFAULT_SETTINGS)!;
+    expect(r.start.day).toBe('2026-10-15');
+    expect(r.bm.index_value).toBe(1100); // 10 units of the index at 100, worth 110 each
+    expect(r.bm.my_return_pct).toBe(5);
+    expect(r.bm.index_return_pct).toBe(10);
+  });
+});

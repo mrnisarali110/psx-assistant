@@ -154,15 +154,19 @@ describe('regular dividend and yield from filings', () => {
 });
 
 describe('payout frequency', () => {
+  it('reads the best-covered of the last 3 years, so a quarterly payer is not called yearly when this year is half-read (MCB)', () => {
+    const mcb = [ev('m0', 'MCB', '2026-08-20', 9), ev('m1', 'MCB', '2025-09-20', 9), ev('m2', 'MCB', '2025-06-20', 9), ev('m3', 'MCB', '2025-03-20', 9), ev('m4', 'MCB', '2024-12-20', 9)];
+    expect(payoutFrequency('MCB', mcb, TODAY).label).toBe('Quarterly');
+  });
   const quarterly = [ev('q1', 'Q', '2026-09-20', 2), ev('q2', 'Q', '2026-06-20', 2), ev('q3', 'Q', '2026-03-20', 2), ev('q4', 'Q', '2025-12-20', 2), ev('q5', 'Q', '2025-09-20', 2)];
   it('four months with a payout in the last year is Quarterly; ABC (Aug, Apr, Dec) is Half-yearly', () => {
-    expect(payoutFrequency('Q', quarterly, TODAY)).toEqual({ label: 'Quarterly', count: 4, enough: true }); // q5 is older than a year
-    expect(payoutFrequency('ABC', ABC, TODAY)).toEqual({ label: 'Half-yearly', count: 3, enough: true }); // the special is left out
+    expect(payoutFrequency('Q', quarterly, TODAY)).toEqual({ label: 'Quarterly', count: 5, enough: true }); // q5 is a year back, still within 3 years
+    expect(payoutFrequency('ABC', ABC, TODAY)).toEqual({ label: 'Half-yearly', count: 4, enough: true }); // the special is left out; an older filing now counts
   });
   it('fewer than 2 filings is not enough: one gives a Yearly guess, none gives null', () => {
     expect(payoutFrequency('ONE', [ev('o', 'ONE', '2026-02-01', 5, 'final')], TODAY)).toEqual({ label: 'Yearly', count: 1, enough: false });
     expect(payoutFrequency('NONE', ABC, TODAY)).toEqual({ label: null, count: 0, enough: false });
-    expect(payoutFrequency('ONE', [ev('o', 'ONE', '2025-02-01', 5, 'final')], TODAY).label).toBeNull(); // stopped paying
+    expect(payoutFrequency('ONE', [ev('o', 'ONE', '2023-02-01', 5, 'final')], TODAY).label).toBeNull(); // nothing in 3 years: stopped paying
   });
   it('looks only at the last rules.dividends.frequency_filings filings, and two in one month count as one month', () => {
     const rules: Rules = { ...DEFAULT_RULES, dividends: { ...DEFAULT_RULES.dividends, frequency_filings: 2 } };
@@ -222,8 +226,8 @@ describe('quality chips', () => {
     expect(chips[1]).toEqual({ key: 'outlier', label: 'P/E 1.46: check figures', tone: 'amber' });
   });
   it('P/E 0 with a price is "loss or no P/E"; a negative P/E is loss-making; no payout or outlier chip from a missing P/E', () => {
-    expect(qualityChips({ pe: 0, price: 100, dividend_yield_pct: 5 }, [], TODAY)).toEqual([{ key: 'loss', label: 'Loss or no P/E', tone: 'red' }]);
-    expect(qualityChips({ pe: null, price: 100, dividend_yield_pct: 5 }, [], TODAY)).toEqual([{ key: 'loss', label: 'Loss or no P/E', tone: 'red' }]);
+    expect(qualityChips({ pe: 0, price: 100, dividend_yield_pct: 5 }, [], TODAY)).toEqual([{ key: 'missing', label: 'No P/E figure', tone: 'slate' }]); // BAFL: missing, not a loss
+    expect(qualityChips({ pe: null, price: 100, dividend_yield_pct: 5 }, [], TODAY)).toEqual([{ key: 'missing', label: 'No P/E figure', tone: 'slate' }]);
     expect(qualityChips({ pe: -3, price: 100, dividend_yield_pct: 0 }, [], TODAY)).toEqual([
       { key: 'loss', label: 'Loss-making', tone: 'red' }, { key: 'missing', label: 'No yield', tone: 'slate' },
     ]);

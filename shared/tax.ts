@@ -9,7 +9,7 @@ import type { Rules, Settings, Txn } from './types.ts';
 import { DEFAULT_RULES, DEFAULT_SETTINGS } from './types.ts';
 import { costRates, tradeCosts, txnCharges } from './costs.ts';
 import { addDays } from './time.ts';
-import { rs, signedRs } from './format.ts';
+import { rs, rs2, signedRs } from './format.ts';
 
 const r2 = (v: number) => {
   const x = Math.round(v * 100) / 100;
@@ -119,6 +119,7 @@ export interface Realized {
   rate_pct: number; // cgtRatePct for this lot's buy date and the sell date
   tax_year: string; // of the sell date
   estimated_costs: boolean; // the gain relies on charges estimated from the rates (never with match_nccpl)
+  from_average_cost?: boolean; // no recorded buy covered these shares: cost is the holding's average cost (an estimate)
 }
 
 export interface LotBook {
@@ -134,13 +135,15 @@ const txnOrder = (a: Txn, b: Txn) =>
   || (a.id ?? '').localeCompare(b.id ?? '');
 
 interface Sale { symbol: string; shares: number; price: number; date: string; charges: number; estimated: boolean }
+/** Cost to use for shares the log does not cover: the holding's average cost (and its last buy date, when known). */
+interface Fallback { cost: number; bought_on: string | null }
 
 /**
  * Sell `sale.shares` out of `open` FIFO (oldest lot of the symbol first). `open` is not mutated: the lots that
  * remain come back in their original order. Shares beyond what is held are matched at the sell price (zero gain)
  * as one extra realized row with bought_on = the sell date; `unmatched` says how many.
  */
-function sellFifo(open: Lot[], sale: Sale, filer: boolean, match: boolean, rules: Rules): { open: Lot[]; realized: Realized[]; unmatched: number } {
+function sellFifo(open: Lot[], sale: Sale, filer: boolean, match: boolean, rules: Rules, fallback?: Fallback): { open: Lot[]; realized: Realized[]; unmatched: number } {
   const pps = match ? sale.price : (sale.shares * sale.price - sale.charges) / sale.shares;
   const tax_year = taxYear(sale.date, rules);
   const realized: Realized[] = [];
@@ -159,7 +162,15 @@ function sellFifo(open: Lot[], sale: Sale, filer: boolean, match: boolean, rules
       estimated_costs: !match && (sale.estimated || lot.estimated_costs === true),
     });
   }
-  if (left > 0) {
+  if (left > 0 && fallback && positive(fallback.cost)) {
+    // Bought before the log starts: the broker's average cost stands in (it already includes the buy charges).
+    const boughtOn = fallback.bought_on && fallback.bought_on <= sale.date ? fallback.bought_on : sale.date;
+    realized.push({
+      symbol: sale.symbol, bought_on: boughtOn, sold_on: sale.date, shares: left, cost_per_share: fallback.cost, proceeds_per_share: pps,
+      gain: r2(left * (pps - fallback.cost)), rate_pct: cgtRatePct(boughtOn, sale.date, filer, rules), tax_year,
+      estimated_costs: true, from_average_cost: true,
+    });
+  } else if (left > 0) {
     realized.push({
       symbol: sale.symbol, bought_on: sale.date, sold_on: sale.date, shares: left, cost_per_share: pps, proceeds_per_share: pps,
       gain: 0, rate_pct: cgtRatePct(sale.date, sale.date, filer, rules), tax_year, estimated_costs: false,
@@ -351,7 +362,11 @@ export const carryForwardFrom = (ledger: TaxYearLedger): number => ledger.loss_t
 // Sell Planner
 // ---------------------------------------------------------------------------
 
-export interface PlannedSale { symbol: string; shares: number; price: number }
+export interface PlannedSale {
+  symbol: string; shares: number; price: number;
+  /** The holding's average cost and last buy date: used for shares no recorded buy covers, so the gain is estimated rather than zero. */
+  avg_cost?: number | null; bought_on?: string | null;
+}
 
 export interface SalePlanLine {
   symbol: string;
@@ -364,6 +379,7 @@ export interface SalePlanLine {
   rate_pct: number; // one rate when all lots share it, else the shares-weighted average (2 dp); each lot carries its own
   costs: number; // sell-side charges estimated from the rates (a plan has no contract note)
   estimated_costs: boolean; // the gain relies on those estimated charges: true unless match_nccpl
+  from_average_cost: number; // shares whose cost came from the holding's average cost (no recorded buy): an estimate
   warning?: string;
 }
 
@@ -396,25 +412,29 @@ export function planSales(book: LotBook, plan: PlannedSale[], today: string, set
     const symbol = sym(p.symbol);
     if (!positive(p.shares) || !positive(p.price)) {
       lines.push({
-        symbol, shares: p.shares, price: p.price, proceeds: 0, cost: 0, gain: 0, lots: [], rate_pct: 0, costs: 0, estimated_costs: false,
+        symbol, shares: p.shares, price: p.price, proceeds: 0, cost: 0, gain: 0, lots: [], rate_pct: 0, costs: 0, estimated_costs: false, from_average_cost: 0,
         warning: `Shares or price missing for ${symbol}.`,
       });
       continue;
     }
     const costs = tradeCosts(p.shares, p.price, rates).total;
     const held = heldIn(open, symbol);
-    const r = sellFifo(open, { symbol, shares: p.shares, price: p.price, date: today, charges: costs, estimated: true }, filer, match, rules);
+    const fallback = p.avg_cost != null && positive(p.avg_cost) ? { cost: p.avg_cost, bought_on: p.bought_on ?? null } : undefined;
+    const r = sellFifo(open, { symbol, shares: p.shares, price: p.price, date: today, charges: costs, estimated: true }, filer, match, rules, fallback);
     open = r.open;
     realized.push(...r.realized);
+    const fromAvg = r.realized.filter((l) => l.from_average_cost).reduce((a, l) => a + l.shares, 0);
     const line: SalePlanLine = {
       symbol, shares: p.shares, price: p.price, proceeds: r2(p.shares * p.price),
       cost: r2(r.realized.reduce((a, l) => a + l.shares * l.cost_per_share, 0)),
       gain: r2(r.realized.reduce((a, l) => a + l.gain, 0)),
       lots: r.realized,
       rate_pct: r2(r.realized.reduce((a, l) => a + l.shares * l.rate_pct, 0) / p.shares),
-      costs, estimated_costs: !match,
+      costs, estimated_costs: !match, from_average_cost: fromAvg,
     };
-    if (r.unmatched > 0) {
+    if (fromAvg > 0) {
+      line.warning = `${held > 0 ? `${fromAvg} of these ${symbol} shares are not` : `No ${symbol} buys are`} in your buys list: the gain uses your average cost of ${rs2(fallback!.cost)} (an estimate).`;
+    } else if (r.unmatched > 0) {
       const where = held > 0 ? `Only ${held} of the ${p.shares} ${symbol} planned are in the transaction log` : `No ${symbol} buys are in the transaction log`;
       line.warning = `${where}: the ${r.unmatched} unmatched shares count at the sell price (zero gain). Add the missing buy.`;
     }
@@ -450,7 +470,7 @@ export interface OffsetSuggestion {
  * are returned, sorted by cgt_saved desc (tie: bigger loss first). Nothing when the CGT after the plan is already 0.
  */
 export function suggestOffsets(
-  book: LotBook, plan: PlannedSale[], candidates: { symbol: string; shares: number; price: number }[], today: string,
+  book: LotBook, plan: PlannedSale[], candidates: { symbol: string; shares: number; price: number; avg_cost?: number | null; bought_on?: string | null }[], today: string,
   settings: Settings, rules: Rules = DEFAULT_RULES,
 ): OffsetSuggestion[] {
   const base = planSales(book, plan, today, settings, rules);
@@ -461,11 +481,11 @@ export function suggestOffsets(
     const symbol = sym(c.symbol);
     if (seen.has(symbol) || !positive(c.shares) || !positive(c.price)) continue;
     seen.add(symbol);
-    const withIt = planSales(book, [...plan, { symbol, shares: c.shares, price: c.price }], today, settings, rules);
+    const withIt = planSales(book, [...plan, { symbol, shares: c.shares, price: c.price, avg_cost: c.avg_cost, bought_on: c.bought_on }], today, settings, rules);
     const line = withIt.lines[withIt.lines.length - 1];
     if (line.gain >= 0) continue;
     const cgt_saved = r2(base.year_after.cgt_estimate - withIt.year_after.cgt_estimate);
-    if (cgt_saved <= 0) continue;
+    if (cgt_saved < rules.tax.min_offset_saving_pkr) continue; // a saving of a few rupees is not worth a sale
     out.push({
       symbol, shares: c.shares, price: c.price, loss: line.gain, cgt_saved,
       text: `Selling ${symbol} (${signedRs(line.gain)}) as well would cut CGT by ${rs(cgt_saved)}.`,
