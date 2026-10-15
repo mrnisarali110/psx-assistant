@@ -5,7 +5,7 @@ import { investedThisMonth } from '../../shared/changes.ts';
 import { todayState } from '../../shared/quality.ts';
 import { headlineReturn } from '../../shared/performance.ts';
 import { dayStance, todayBanner } from '../../shared/signals.ts';
-import { isMarketOpen, isStale, minutesToClose, pktDate, pktParts } from '../../shared/time.ts';
+import { addDays, isMarketOpen, isStale, minutesToClose, pktDate, pktParts } from '../../shared/time.ts';
 import { DEFAULT_RULES } from '../../shared/types.ts';
 import { asOfLabel, num, pct, rs, signedRs } from '../../shared/format.ts';
 import { AiCard } from '../components/AiCard.tsx';
@@ -68,6 +68,9 @@ export function Home(props: ScreenProps) {
     announcements: data.announcements, holdings: data.holdings, cal: tradingCalendar(DEFAULT_RULES, data.indexDaily),
   }), [data, today]);
 
+  // Only blue-chip warnings reach Home: a holding at risk, or one that lost the badge in the last 30 days.
+  const bcAlerts = data.holdings.map((h) => data.bluechip[h.symbol]).filter((b): b is NonNullable<typeof b> =>
+    !!b && (b.status === 'at_risk' || (b.status === 'not_bc' && !!b.lost_on && b.lost_on >= addDays(today, -30))));
   const unpriced = view.missing_prices.length;
   const nonePriced = data.holdings.length > 0 && unpriced === data.holdings.length;
   // Profit / loss on your average cost, as before: the full return with dividends and the KSE-100 comparison live on
@@ -131,15 +134,30 @@ export function Home(props: ScreenProps) {
         </div>
       )}
 
+      {bcAlerts.length > 0 && (
+        <Section title="Needs attention">
+          <Card className="divide-y divide-slate-100 py-1 dark:divide-slate-800">
+            {bcAlerts.slice(0, 3).map((b) => (
+              <button key={b.symbol} type="button" onClick={() => acts.open(b.symbol)} className="flex min-h-12 w-full cursor-pointer items-center gap-3 py-2 text-left active:opacity-70">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-xs font-bold text-amber-900 dark:bg-amber-950 dark:text-amber-200">BC</span>
+                <span className="min-w-0 flex-1 text-sm leading-snug">
+                  <b>{b.symbol}</b> {b.status === 'at_risk' ? 'is a blue chip at risk' : 'lost its blue-chip badge'}{b.reason ? `: ${b.reason}` : ''}
+                </span>
+              </button>
+            ))}
+          </Card>
+        </Section>
+      )}
+
       <Section title="This week" right={<Button kind="ghost" className="-my-2 px-2" onClick={() => { location.hash = '/news?week'; }}>See all</Button>}>
         <Card className={week.events.length ? 'divide-y divide-slate-100 py-1 dark:divide-slate-800' : ''}>
           {week.events.length
-            ? week.events.map((e) => <WeekRow key={`${e.symbol}|${e.kind}|${e.date}`} e={e} onOpen={acts.open} />)
+            ? week.events.map((e) => <WeekRow key={`${e.symbol}|${e.kind}|${e.date}`} e={e} onOpen={acts.open} bc={data.bluechip[e.symbol]} />)
             : <p className="text-sm text-slate-500 dark:text-slate-400">Nothing dated for your stocks in the next 7 days</p>}
         </Card>
       </Section>
 
-      <AiCard insight={ai} aiEnabled={!!data.settings.ai_enabled} demo={source.kind === 'demo'} />
+      <AiCard insight={ai} aiEnabled={!!data.settings.ai_enabled} demo={source.kind === 'demo'} bc={data.bluechip} />
 
       <Card>
         <div className="flex items-start justify-between gap-3">

@@ -11,33 +11,49 @@ export function Sheet({ open, onClose, title, children }: { open: boolean; onClo
   const [drag, setDrag] = useState(0);
   const start = useRef<number | null>(null);
   const panel = useRef<HTMLDivElement>(null);
+  // Stays mounted for a 200ms slide-down after `open` turns false, then unmounts.
+  const [mounted, setMounted] = useState(open);
+  if (open && !mounted) setMounted(true);
+  const closing = !open && mounted;
+  // While sliding away, keep showing what was there (the parent may already have cleared its state).
+  const last = useRef({ title, children });
+  if (open) last.current = { title, children };
+  const shown = open ? { title, children } : last.current;
+  useEffect(() => {
+    if (!closing) return;
+    const t = window.setTimeout(() => { setMounted(false); setDrag(0); }, 320); // backstop if animationend is missed
+    return () => window.clearTimeout(t);
+  }, [closing]);
 
   useEffect(() => {
     if (!open) return;
+    setDrag(0);
     const key = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', key);
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     panel.current?.querySelector<HTMLElement>('input, select, textarea, button:not([data-handle])')?.focus({ preventScroll: true });
-    return () => { window.removeEventListener('keydown', key); document.body.style.overflow = prev; setDrag(0); };
+    return () => { window.removeEventListener('keydown', key); document.body.style.overflow = prev; };
   }, [open, onClose]);
 
-  if (!open) return null;
+  if (!open && !mounted) return null;
   return createPortal(
-    <div className="fixed inset-0 z-40">
-      <button type="button" aria-label="Close" className="absolute inset-0 h-full w-full animate-fade cursor-default bg-black/50" onClick={onClose} />
-      <div ref={panel} role="dialog" aria-modal="true" aria-label={title}
-        className="absolute inset-x-0 bottom-0 mx-auto max-h-[90dvh] max-w-md animate-sheet overflow-y-auto rounded-t-[28px] bg-white pb-[max(16px,env(safe-area-inset-bottom))] dark:bg-slate-900"
-        style={{ transform: drag ? `translateY(${drag}px)` : undefined, transition: drag ? 'none' : undefined }}>
+    <div className={`fixed inset-0 z-40 ${closing ? 'pointer-events-none' : ''}`}>
+      <button type="button" aria-label="Close" tabIndex={closing ? -1 : undefined}
+        className={`absolute inset-0 h-full w-full cursor-default bg-black/50 ${closing ? 'animate-fade-out' : 'animate-fade'}`} onClick={onClose} />
+      <div ref={panel} role="dialog" aria-modal="true" aria-label={shown.title} aria-hidden={closing || undefined}
+        onAnimationEnd={(e) => { if (closing && e.target === e.currentTarget) { setMounted(false); setDrag(0); } }}
+        className={`absolute inset-x-0 bottom-0 mx-auto max-h-[90dvh] max-w-md overflow-y-auto rounded-t-[28px] bg-white pb-[max(16px,env(safe-area-inset-bottom))] dark:bg-slate-900 ${closing ? 'animate-sheet-out' : 'animate-sheet'}`}
+        style={{ transform: drag && !closing ? `translateY(${drag}px)` : undefined, transition: drag ? 'none' : 'transform 200ms var(--ease-out-quint)', ['--from' as string]: `${drag}px` }}>
         <div className="sticky top-0 z-10 bg-white/95 px-5 pt-2 pb-2 backdrop-blur dark:bg-slate-900/95"
           onPointerDown={(e) => { start.current = e.clientY; (e.target as HTMLElement).setPointerCapture?.(e.pointerId); }}
           onPointerMove={(e) => { if (start.current != null) setDrag(Math.max(0, e.clientY - start.current)); }}
-          onPointerUp={() => { if (drag > 110) { haptic(); onClose(); } start.current = null; setDrag(0); }}
+          onPointerUp={() => { start.current = null; if (drag > 110) { haptic(); onClose(); } else setDrag(0); }}
           onPointerCancel={() => { start.current = null; setDrag(0); }}>
           <div data-handle className="mx-auto mb-2 h-1.5 w-10 rounded-full bg-slate-300 dark:bg-slate-700" aria-hidden="true" />
-          {title && <h2 className="text-center text-base font-semibold">{title}</h2>}
+          {shown.title && <h2 className="text-center text-base font-semibold">{shown.title}</h2>}
         </div>
-        <div className="px-5 pt-2">{children}</div>
+        <div className="px-5 pt-2">{shown.children}</div>
       </div>
     </div>,
     document.body,

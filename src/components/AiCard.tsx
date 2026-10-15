@@ -1,5 +1,6 @@
 import type { AiInsight, AiSuggestion } from '../../shared/types.ts';
 import { ago } from '../../shared/format.ts';
+import type { BcState } from '../../shared/bluechip.ts';
 import { Icon } from './Icon.tsx';
 import { Card, Tag, type Tone } from './ui.tsx';
 
@@ -14,7 +15,7 @@ export function AiBadge() {
 }
 
 /** "AI Assistant suggests": suggestions plus the monthly cash note. */
-export function AiCard({ insight, aiEnabled, demo }: { insight: AiInsight | null; aiEnabled: boolean; demo: boolean }) {
+export function AiCard({ insight, aiEnabled, demo, bc = {} }: { insight: AiInsight | null; aiEnabled: boolean; demo: boolean; bc?: Record<string, BcState> }) {
   return (
     <Card className="space-y-3">
       <div className="flex items-center justify-between">
@@ -37,6 +38,9 @@ export function AiCard({ insight, aiEnabled, demo }: { insight: AiInsight | null
                 <div className="min-w-0">
                   <p className="text-sm font-medium">{s.symbol && <span className="font-bold">{s.symbol} · </span>}{s.text}</p>
                   <p className="text-xs text-slate-500 dark:text-slate-400">{s.why}</p>
+                  {s.symbol && (s.action === 'buy' || s.action === 'add' || s.action === 'watch') && bc[s.symbol]?.status === 'not_bc' && (
+                    <p className="mt-0.5 text-xs font-medium text-rose-700 dark:text-rose-300">Not a blue chip — higher risk</p>
+                  )}
                 </div>
               </li>
             ))}

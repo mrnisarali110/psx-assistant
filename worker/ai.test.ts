@@ -234,3 +234,17 @@ describe('screenshot import endpoint', () => {
     expect(whenPkt('2026-10-15T00:01:00Z', new Date('2026-10-14T03:00:00Z'))).toBe('tomorrow 5:01 AM');
   });
 });
+
+describe('blue chips in AI text', () => {
+  it('the AI may not call a stock a blue chip unless the app\'s own checks say so', () => {
+    const { facts, guard } = seedFacts();
+    const raw = { headline: 'x', stance: 'hold', holding_calls: [], suggestions: [
+      { action: 'watch', symbol: 'MARI', text: 'MARI is a blue chip worth watching', why: 'steady', confidence: 'low' },
+      { action: 'watch', symbol: 'HUBC', text: 'Watch HUBC', why: 'yield', confidence: 'low' },
+    ] };
+    const notBc = guardInsight(raw, facts, { ...guard, blueChipOf: () => 'not_enough_data' });
+    expect(notBc.insight.suggestions.map((s) => s.symbol)).toEqual(['HUBC']);
+    const bc = guardInsight(raw, facts, { ...guard, blueChipOf: (s) => (s === 'MARI' ? 'bc' : 'not_bc') });
+    expect(bc.insight.suggestions.map((s) => s.symbol)).toEqual(['MARI', 'HUBC']);
+  });
+});

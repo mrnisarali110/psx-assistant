@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import type { ScreenProps } from '../App.tsx';
 import { investedThisMonth } from '../../shared/changes.ts';
 import { headlineReturn } from '../../shared/performance.ts';
+import type { BcState } from '../../shared/bluechip.ts';
+import { BcBadge } from '../components/BcBadge.tsx';
 import { pktDate } from '../../shared/time.ts';
 import { pct, rs, rs2, signedRs } from '../../shared/format.ts';
 import { missingNum, peOutlier } from '../../shared/quality.ts';
@@ -96,7 +98,7 @@ export function Portfolio(props: ScreenProps) {
             ) : (
               <ul className="space-y-2">
                 {view.rows.map((r) => (
-                  <HoldingRow key={r.holding.id ?? r.holding.symbol} row={r} call={acts.callFor(r)} actions={{
+                  <HoldingRow key={r.holding.id ?? r.holding.symbol} row={r} call={acts.callFor(r)} bc={data.bluechip[r.holding.symbol]} actions={{
                     onOpen: () => acts.open(r.holding.symbol), onMenu: () => acts.menu(r.holding.symbol),
                     onEdit: () => acts.edit(r.holding), onBuy: () => acts.buy(r.holding.symbol), onRemove: () => acts.remove(r.holding),
                   }} />
@@ -113,7 +115,7 @@ export function Portfolio(props: ScreenProps) {
             <Watchlist {...props} onOpen={acts.open} onMenu={acts.menu} />
           </>
         )}
-        {tab === 'allocation' && <AllocationTab view={view} maxPositionPct={data.settings.max_position_pct} onOpenStock={acts.open} />}
+        {tab === 'allocation' && <AllocationTab view={view} maxPositionPct={data.settings.max_position_pct} onOpenStock={acts.open} bc={data.bluechip} />}
         {tab === 'performance' && <PerformanceTab data={data} view={view} source={source} reload={reload} onTransactions={() => setTxns(true)} />}
         {tab === 'tax' && <TaxTab data={data} onPlanSale={() => acts.planSale()} onTransactions={() => setTxns(true)} />}
       </div>
@@ -144,7 +146,7 @@ function Watchlist({ data, source, reload, onOpen, onMenu }: ScreenProps & { onO
   return (
     <Section title="Watchlist">
       <ul className="space-y-2">
-        {data.watchlist.map((w) => <WatchRow key={w.id ?? w.symbol} symbol={w.symbol} p={data.prices[w.symbol]} onOpen={() => onOpen(w.symbol)} onMenu={() => onMenu(w.symbol)} />)}
+        {data.watchlist.map((w) => <WatchRow key={w.id ?? w.symbol} symbol={w.symbol} p={data.prices[w.symbol]} bc={data.bluechip[w.symbol]} onOpen={() => onOpen(w.symbol)} onMenu={() => onMenu(w.symbol)} />)}
       </ul>
       <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); add(); }}>
         <input className={`${inputCls} uppercase`} placeholder="Add symbol, e.g. MARI" value={symbol} autoCapitalize="characters" onChange={(e) => setSymbol(e.target.value)} aria-label="Symbol to watch" />
@@ -155,7 +157,7 @@ function Watchlist({ data, source, reload, onOpen, onMenu }: ScreenProps & { onO
   );
 }
 
-function WatchRow({ symbol, p, onOpen, onMenu }: { symbol: string; p: ScreenProps['data']['prices'][string] | undefined; onOpen: () => void; onMenu: () => void }) {
+function WatchRow({ symbol, p, bc, onOpen, onMenu }: { symbol: string; p: ScreenProps['data']['prices'][string] | undefined; bc?: BcState; onOpen: () => void; onMenu: () => void }) {
   const press = useLongPress(onMenu);
   return (
     <li>
@@ -163,7 +165,7 @@ function WatchRow({ symbol, p, onOpen, onMenu }: { symbol: string; p: ScreenProp
         className="no-callout flex w-full cursor-pointer items-center gap-3 rounded-3xl bg-white px-4 py-3 text-left ring-1 ring-slate-200/80 active:scale-[0.99] dark:bg-slate-900 dark:ring-slate-800">
         <SymbolAvatar symbol={symbol} change={p?.change_pct} size="h-10 w-10" />
         <span className="min-w-0 flex-1">
-          <span className="flex items-center gap-1.5 font-semibold">{symbol}{p?.ex && <Tag tone="violet">{exLabel(p.ex)}</Tag>}</span>
+          <span className="flex items-center gap-1.5 font-semibold">{symbol}<BcBadge state={bc} symbol={symbol} />{p?.ex && <Tag tone="violet">{exLabel(p.ex)}</Tag>}</span>
           <span className="block truncate text-xs text-slate-500 dark:text-slate-400">
             {p ? `Yield ${missingNum(p.dividend_yield_pct) ? 'n/a' : `${p.dividend_yield_pct!.toFixed(1)}%`} · P/E ${missingNum(p.pe) ? 'n/a' : `${p.pe!.toFixed(1)}${peOutlier(p.pe).outlier ? ' (check figures)' : ''}`}` : 'Price after the next market check'}
           </span>

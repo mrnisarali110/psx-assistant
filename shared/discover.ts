@@ -12,6 +12,9 @@ import { buyByDate, tradingCalendar, type TradingCalendar } from './calendar.ts'
 export interface ScreenRow {
   symbol: string;
   ex?: string | null; // PSX marker stripped from the symbol (XD ex-dividend, XB ex-bonus, XR ex-right)
+  listed_in?: string[] | null; // PSX index codes (blue-chip size check)
+  avg_volume_30d?: number | null; // PSX's 30-day average volume (blue-chip liquidity check)
+  mcap_rank?: number | null; // 1 = largest market cap among all listed stocks
   sector: string | null;
   price: number | null;
   change_pct: number | null;

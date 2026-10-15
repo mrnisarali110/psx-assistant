@@ -1,10 +1,10 @@
-import type { ReactNode } from 'react';
+import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { haptic } from '../lib/gestures.ts';
 
 export function Card({ children, className = '', onClick }: { children: ReactNode; className?: string; onClick?: () => void }) {
   const base = `rounded-3xl bg-white p-4 ring-1 ring-slate-200/80 dark:bg-slate-900 dark:ring-slate-800 ${className}`;
   return onClick
-    ? <button type="button" onClick={() => { haptic(); onClick(); }} className={`block w-full text-left transition-transform active:scale-[0.98] ${base}`}>{children}</button>
+    ? <button type="button" onClick={() => { haptic(); onClick(); }} className={`press block w-full cursor-pointer text-left ${base}`}>{children}</button>
     : <div className={base}>{children}</div>;
 }
 
@@ -51,7 +51,7 @@ export function Button({ children, onClick, kind = 'primary', disabled, type = '
   }[kind];
   return (
     <button type={type} disabled={disabled} aria-label={label} onClick={() => { haptic(); onClick?.(); }}
-      className={`inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-2xl px-4 py-2 text-sm font-semibold transition active:scale-[0.97] disabled:cursor-not-allowed ${styles} ${className}`}>
+      className={`inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-2xl px-4 py-2 text-sm font-semibold press disabled:cursor-not-allowed ${styles} ${className}`}>
       {children}
     </button>
   );
@@ -75,11 +75,33 @@ export const inputCls =
 export function Segmented<T extends string>({ options, value, onChange, label }: {
   options: { value: T; label: string }[]; value: T; onChange: (v: T) => void; label: string;
 }) {
+  const index = options.findIndex((o) => o.value === value);
+  const box = useRef<HTMLDivElement>(null);
+  const [pill, setPill] = useState<{ x: number; w: number } | null>(null);
+  // Segments size to their labels, so measure the selected one. The pill is absolutely positioned:
+  // moving or resizing it never shifts anything else.
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const measure = () => {
+      const b = el.querySelectorAll<HTMLElement>('[role=tab]')[index];
+      setPill(b ? { x: b.offsetLeft, w: b.offsetWidth } : null);
+    };
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [index, options.length]);
   return (
-    <div role="tablist" aria-label={label} className="flex rounded-2xl bg-slate-200/70 p-1 dark:bg-slate-800">
+    <div ref={box} role="tablist" aria-label={label} className="relative flex rounded-2xl bg-slate-200/70 p-1 dark:bg-slate-800">
+      {pill && (
+        <span aria-hidden="true" className="slide-indicator pointer-events-none absolute top-1 bottom-1 left-0 rounded-xl bg-white shadow-sm dark:bg-slate-950"
+          style={{ width: pill.w, transform: `translateX(${pill.x}px)` }} />
+      )}
       {options.map((o) => (
         <button key={o.value} type="button" role="tab" aria-selected={value === o.value} onClick={() => { haptic(); onChange(o.value); }}
-          className={`min-h-9 flex-1 rounded-xl px-2 text-sm font-semibold transition ${value === o.value ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-950 dark:text-white' : 'text-slate-500 dark:text-slate-400'}`}>
+          className={`press relative min-h-9 flex-1 cursor-pointer rounded-xl px-2 text-sm font-semibold ${value === o.value ? 'text-slate-900 dark:text-white' : 'text-slate-500 dark:text-slate-400'}`}>
           {o.label}
         </button>
       ))}
@@ -95,7 +117,7 @@ export function Chips<T extends string>({ options, value, onChange, label }: {
     <div role="radiogroup" aria-label={label} className="-mx-4 flex gap-1.5 overflow-x-auto px-4 py-0.5 scrollbar-none">
       {options.map((o) => (
         <button key={o.value} type="button" role="radio" aria-checked={value === o.value} onClick={() => { haptic(); onChange(o.value); }}
-          className={`min-h-9 shrink-0 cursor-pointer rounded-full px-3 text-xs font-semibold whitespace-nowrap transition ${value === o.value ? 'bg-teal-700 text-white' : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'}`}>
+          className={`press min-h-9 shrink-0 cursor-pointer rounded-full px-3 text-xs font-semibold whitespace-nowrap ${value === o.value ? 'bg-teal-700 text-white' : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'}`}>
           {o.label}
         </button>
       ))}

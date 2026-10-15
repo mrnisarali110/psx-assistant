@@ -179,5 +179,23 @@
       "2027-11-09",
       "2027-12-25"
     ]
+  },
+  "bluechip": {
+    "source": "Blue-chip (BC) badge, owner spec 2026-10-16. Every threshold lives here; the code holds no ticker list.",
+    "index_code": "KSE30",
+    "top_by_market_cap": 30,
+    "min_traded_value_pkr": 50000000,
+    "liquidity_basis": "PSX screener 30-day average volume x price (PSX publishes no 60-day daily series on a page we read honestly)",
+    "profit_years": 5,
+    "dividend_years_needed": 4,
+    "dividend_years_window": 5,
+    "require_audit_check": true,
+    "lose_after_fails": 2,
+    "recheck_days": 7,
+    "annual_full_run_months": [
+      9,
+      10
+    ],
+    "pages_per_night": 35
   }
 }

@@ -28,6 +28,8 @@ export interface AnnouncementDigest {
   dividend: { dps: number; type: 'interim' | 'final' | 'special' | null; book_closure_from: string | null; book_closure_to: string | null; verified: boolean } | null;
   /** Profit after tax of the latest quarter, when the filing reports one (results only). */
   earnings: { period_end: string; profit_after_tax: number; verified: boolean } | null;
+  /** Full-year profit after tax, consolidated when the filing gives both (blue-chip profit check). */
+  annual: { year: number; profit_after_tax: number; consolidated: boolean | null; verified: boolean } | null;
   /** The dates the AI wrote do not fit the filing date: a re-upload of an old notice, or a date that cannot be right (ISSUE-06). */
   date_note: 'older_document' | 'date_unclear' | null;
   model: string;
@@ -47,6 +49,9 @@ const ANN_SCHEMA = {
     book_closure_from: { type: 'STRING', nullable: true, description: 'YYYY-MM-DD start of share transfer book closure for that dividend, or null.' },
     book_closure_to: { type: 'STRING', nullable: true, description: 'YYYY-MM-DD end of book closure, or null.' },
     quarter_end: { type: 'STRING', nullable: true, description: 'Financial results only: YYYY-MM-DD last day of the latest THREE-MONTH quarter reported, else null.' },
+    annual_year_end: { type: 'STRING', nullable: true, description: 'Annual (full-year) results only: YYYY-MM-DD last day of the financial year, else null.' },
+    annual_profit_after_tax: { type: 'NUMBER', nullable: true, description: 'Full-year profit after tax in RUPEES (convert "thousand"/"million"), negative for a loss. CONSOLIDATED figure when the document gives both. null if not a full-year result.' },
+    annual_consolidated: { type: 'BOOLEAN', nullable: true, description: 'true if annual_profit_after_tax is the consolidated figure, false if unconsolidated/standalone, null if not stated.' },
     quarter_profit_after_tax: { type: 'NUMBER', nullable: true, description: 'Profit after tax for that single three-month quarter in RUPEES (convert "thousand"/"million"), negative for a loss. Not the half-year or nine-month total. null if not printed.' },
   },
   required: ['summary', 'figures'],
@@ -95,9 +100,17 @@ export async function readAnnouncement(ai: LlmRouter, pdf: Uint8Array, meta: { s
   // Printed in rupees, thousands or millions: verified when one of those forms is in the PDF text.
   const qVerified = !!qOk && !!text && [1, 1e3, 1e6].some((u) => numbersGrounded(String(Math.round(Math.abs(qProfit) / u)), known).ok);
   const earnings = qOk ? { period_end: qEnd as string, profit_after_tax: Math.round(qProfit), verified: qVerified } : null;
+  const aEnd = isoDate(data.annual_year_end);
+  const aProfit = Number(data.annual_profit_after_tax);
+  const aOk = aEnd && Number.isFinite(aProfit) && aProfit !== 0 && (!meta.published_at || (aEnd <= meta.published_at && Date.parse(meta.published_at) - Date.parse(aEnd) <= 200 * 86400000));
+  const annual = aOk ? {
+    year: Number((aEnd as string).slice(0, 4)), profit_after_tax: Math.round(aProfit),
+    consolidated: typeof data.annual_consolidated === 'boolean' ? data.annual_consolidated : null,
+    verified: !!text && [1, 1e3, 1e6].some((u) => numbersGrounded(String(Math.round(Math.abs(aProfit) / u)), known).ok),
+  } : null;
   const verdict = meta.published_at ? dateVerdict([summary, ...figures.map((f: { value: string }) => f.value)], meta.published_at) : 'ok';
   return {
-    summary, figures, dividend, earnings, model,
+    summary, figures, dividend, earnings, annual, model,
     verified: checks(summary || '0') && figures.every((f: { value: string; verified: boolean }) => f.verified || numbersIn(f.value).length === 0),
     date_note: verdict === 'ok' ? null : verdict,
   };
@@ -181,6 +194,8 @@ Never "average_down"/"opportunity"/"buy"/"add" for status hold_no_add or review,
 When rules_say is "Wait" the stance must not be "buy". Use recent_news (AI summaries of company filings) when relevant.
 Suggestions: at most 4, actions to DO or WATCH (skip plain holds). Mention screen_candidates only as "watch".
 Plain short English for a non-expert ("profit/loss", not "PnL"). No guarantees, no hype.
+Each holding and candidate has blue_chip, set only by the app's own checks ('bc' or 'at_risk' = blue chip; anything
+else is not). You may mention it; never call a stock a blue chip unless blue_chip says so, and never change it.
 Never compare numbers from different periods: portfolio.pnl_since_bought_pct is the profit/loss since the investor bought
 (all time); market.change_pct and portfolio.day_change_pct are today only. Compare today with today, or say each on its own.`;
 
@@ -191,6 +206,8 @@ export interface GuardContext {
   maxPositionPct: number;
   shariahOnly: boolean;
   rulesSay: 'Buy' | 'Hold' | 'Wait';
+  /** Blue-chip status from the app's own checks ('bc', 'at_risk', 'not_bc', 'not_enough_data', 'not_checked'). */
+  blueChipOf?: (sym: string) => string;
 }
 
 function buyBlocked(sym: string | null, g: GuardContext): string | null {
@@ -222,7 +239,9 @@ export function guardInsight(raw: any, facts: unknown, g: GuardContext): { insig
     const buying = action === 'buy' || action === 'add';
     const cutting = action === 'trim' || action === 'sell';
     const ruleCall = g.holdings.find((h) => h.symbol === sym)?.rules_call;
+    const calledBlueChip = /blue[- ]?chip/i.test(`${text} ${why}`) && sym && !['bc', 'at_risk'].includes(g.blueChipOf?.(sym) ?? 'not_checked');
     const reject = !ACTIONS.includes(action) ? `unknown action ${action}`
+      : calledBlueChip ? `${sym} is not a blue chip under the app's checks`
       : sym && !g.universe.has(sym) ? `${sym} is not in your portfolio, watchlist or screen`
       : !text ? 'empty'
       : buying ? buyBlocked(sym, g) ?? grounded(`${text} ${why}`)

@@ -1,4 +1,6 @@
 import { useMemo, useState } from 'react';
+import type { BcState } from '../../shared/bluechip.ts';
+import { BcBadge } from '../components/BcBadge.tsx';
 import type { ScreenProps } from '../App.tsx';
 import { dedupeFilings, groupByDay, tidyTitle } from '../../shared/news.ts';
 import { dateSane, dateVerdict, datesIn, tradingCalendar, weekAhead, type WeekEvent } from '../../shared/calendar.ts';
@@ -55,7 +57,7 @@ export function News({ data }: ScreenProps) {
             {filter === 'week' ? (
               week.events.length ? (
                 <Card className="divide-y divide-slate-100 py-1 dark:divide-slate-800">
-                  {week.events.map((e) => <WeekRow key={`${e.symbol}|${e.kind}|${e.date}`} e={e} />)}
+                  {week.events.map((e) => <WeekRow key={`${e.symbol}|${e.kind}|${e.date}`} e={e} bc={data.bluechip[e.symbol]} />)}
                 </Card>
               ) : <Empty title="Nothing dated in the next 7 days">Book closures, last days to buy, results and board meetings for your stocks appear here as PSX announces them.</Empty>
             ) : news.length ? news.map((g) => (
@@ -81,7 +83,7 @@ export function News({ data }: ScreenProps) {
 const WEEK_ICON: Record<WeekEvent['kind'], IconName> = { buy_by: 'bag', book_closure: 'calendar', payout: 'coins', results: 'news', board_meeting: 'user', review_due: 'flag' };
 
 /** One dated item on the "My week" list. */
-export function WeekRow({ e, onOpen }: { e: WeekEvent; onOpen?: (symbol: string) => void }) {
+export function WeekRow({ e, onOpen, bc }: { e: WeekEvent; onOpen?: (symbol: string) => void; bc?: BcState }) {
   const when = e.days === 0 ? 'Today' : e.days === 1 ? 'Tomorrow' : dateLabel(e.date);
   const body = (
     <>
@@ -89,7 +91,7 @@ export function WeekRow({ e, onOpen }: { e: WeekEvent; onOpen?: (symbol: string)
         <Icon name={WEEK_ICON[e.kind]} className="h-[18px] w-[18px]" />
       </span>
       <span className="min-w-0 flex-1">
-        <span className="flex flex-wrap items-center gap-1.5 text-sm font-medium"><span>{e.symbol}</span><span className="font-normal text-slate-600 dark:text-slate-300">{e.title}</span>{e.mine && <Tag tone="teal">Yours</Tag>}</span>
+        <span className="flex flex-wrap items-center gap-1.5 text-sm font-medium"><span>{e.symbol}</span><BcBadge state={bc} symbol={e.symbol} /><span className="font-normal text-slate-600 dark:text-slate-300">{e.title}</span>{e.mine && <Tag tone="teal">Yours</Tag>}</span>
         {e.detail && <span className="block truncate text-xs text-slate-500 dark:text-slate-400">{e.detail}</span>}
       </span>
       <span className={`num shrink-0 text-right text-xs font-semibold ${e.days <= 1 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-500 dark:text-slate-400'}`}>{when}</span>

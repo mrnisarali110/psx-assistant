@@ -7,6 +7,8 @@ import {
 import { tradingCalendar } from '../../shared/calendar.ts';
 import { aiTextMatches, qualityChips, type QualityChip } from '../../shared/quality.ts';
 import { exLabel } from '../../shared/symbols.ts';
+import type { BcState } from '../../shared/bluechip.ts';
+import { BcBadge } from '../components/BcBadge.tsx';
 import { pktDate } from '../../shared/time.ts';
 import { DEFAULT_RULES, type AiPicks, type DividendEvent } from '../../shared/types.ts';
 import { ago, dateLabel, rs2, titleCase } from '../../shared/format.ts';
@@ -26,11 +28,11 @@ function withAi<T extends { symbol: string }>(rows: T[], picks: AiPicks | null) 
 }
 
 type Sorts = { uv: UvSort; dv: DvSort; up: UpSort };
-type Filters = { loss: boolean; special: boolean; shariah: boolean };
+type Filters = { loss: boolean; special: boolean; shariah: boolean; bc: boolean };
 const SORT_KEY = 'psx-discover-sort';
 const FILTER_KEY = 'psx-discover-filters';
 const DEFAULT_SORTS: Sorts = { uv: 'discount', dv: 'yield', up: 'soonest' };
-const DEFAULT_FILTERS: Filters = { loss: false, special: false, shariah: false };
+const DEFAULT_FILTERS: Filters = { loss: false, special: false, shariah: false, bc: false };
 function loadSorts(): Sorts {
   try {
     const s = JSON.parse(localStorage.getItem(SORT_KEY) ?? '{}');
@@ -92,12 +94,12 @@ export function Discover({ data, source, reload }: ScreenProps) {
 
   const uv = useMemo(() => {
     const rows = sortUndervalued(withAi(undervalued(data.screen, { shariahOnly }), data.picks.undervalued), sorts.uv).map((r) => ({ r, chips: chipsFor(r) }));
-    return filters.loss ? rows.filter((x) => !isLossLike(x.chips)) : rows;
+    return rows.filter((x) => !(filters.loss && isLossLike(x.chips)) && (!filters.bc || !!data.bluechip[x.r.symbol]?.badge));
   }, [data, shariahOnly, sorts.uv, filters.loss]); // eslint-disable-line react-hooks/exhaustive-deps
   const dv = useMemo(() => {
     const rows = sortDividends(withAi(dividendLeaders(data.screen, data.dividends, today, { shariahOnly }), data.picks.dividend), sorts.dv)
       .map((d) => ({ d, chips: chipsFor({ symbol: d.symbol, pe: d.pe, price: d.price, dividend_yield_pct: d.psx_yield_pct }).filter((c) => c.key !== 'special') }));
-    return rows.filter((x) => !(filters.loss && isLossLike(x.chips)) && !(filters.special && (x.d.special || x.d.high_yield_hint)));
+    return rows.filter((x) => !(filters.loss && isLossLike(x.chips)) && !(filters.special && (x.d.special || x.d.high_yield_hint)) && (!filters.bc || !!data.bluechip[x.d.symbol]?.badge));
   }, [data, today, shariahOnly, sorts.dv, filters.loss, filters.special]); // eslint-disable-line react-hooks/exhaustive-deps
   const up = useMemo(() => sortUpcoming(upcomingDividends(data.dividends, today, DEFAULT_RULES, cal), sorts.up), [data.dividends, today, sorts.up, cal]);
   const swipe = useSwipeTabs(TABS.length, TABS.findIndex((t) => t.value === tab), (i) => setTab(TABS[i].value));
@@ -132,6 +134,7 @@ export function Discover({ data, source, reload }: ScreenProps) {
           <div role="group" aria-label="Filters" className="-mx-4 flex gap-1.5 overflow-x-auto px-4 py-0.5 scrollbar-none">
             <FilterChip on={filters.loss} onChange={(loss) => setFilters((f) => ({ ...f, loss }))}>Hide loss-making</FilterChip>
             {tab === 'dividends' && <FilterChip on={filters.special} onChange={(special) => setFilters((f) => ({ ...f, special }))}>Hide special dividends</FilterChip>}
+            <FilterChip on={filters.bc} onChange={(bc) => setFilters((f) => ({ ...f, bc }))}>Blue chips only</FilterChip>
             {!data.settings.shariah_only && <FilterChip on={filters.shariah} onChange={(shariah) => setFilters((f) => ({ ...f, shariah }))}>Shariah only</FilterChip>}
           </div>
         )}
@@ -141,13 +144,13 @@ export function Discover({ data, source, reload }: ScreenProps) {
       </header>
 
       <div {...swipe} className="touch-pan-y space-y-3">
-        {tab === 'undervalued' && (uv.length ? uv.map(({ r, chips }, i) => <UndervaluedCard key={r.symbol} r={r} i={i} chips={chips} by={sorts.uv} watch={<WatchBtn symbol={r.symbol} />}
+        {tab === 'undervalued' && (uv.length ? uv.map(({ r, chips }, i) => <UndervaluedCard key={r.symbol} r={r} i={i} chips={chips} by={sorts.uv} bc={data.bluechip[r.symbol]} watch={<WatchBtn symbol={r.symbol} />}
           ai={<AiWhy why={r.ai?.why} shown={{ pe: r.pe, sector_pe: r.sector_pe, discount: r.discount_pct, yield: r.dividend_yield_pct, price: r.price, change_1y: r.change_1y_pct }} />} />)
-          : <Empty title={filters.loss || shariahOnly ? 'Nothing passes these filters' : 'No screen data yet'}>{filters.loss || shariahOnly ? 'Turn a filter off to see more.' : 'It fills after the next market check.'}</Empty>)}
+          : <Empty title={filters.loss || filters.bc || shariahOnly ? 'Nothing passes these filters' : 'No screen data yet'}>{filters.loss || filters.bc || shariahOnly ? 'Turn a filter off to see more.' : 'It fills after the next market check.'}</Empty>)}
 
-        {tab === 'dividends' && (dv.length ? dv.map(({ d, chips }, i) => <DividendCard key={d.symbol} d={d} i={i} chips={chips} watch={<WatchBtn symbol={d.symbol} />}
+        {tab === 'dividends' && (dv.length ? dv.map(({ d, chips }, i) => <DividendCard key={d.symbol} d={d} i={i} chips={chips} bc={data.bluechip[d.symbol]} watch={<WatchBtn symbol={d.symbol} />}
           ai={<AiWhy why={d.ai?.why} shown={{ yield: d.dividend_yield_pct, psx_yield: d.psx_yield_pct, dps: d.annual_dps, last: d.last?.dps, price: d.price, pe: d.pe }} />} />)
-          : <Empty title={filters.loss || filters.special || shariahOnly ? 'Nothing passes these filters' : 'No dividend data yet'}>{filters.loss || filters.special || shariahOnly ? 'Turn a filter off to see more.' : 'It fills after the next market check.'}</Empty>)}
+          : <Empty title={filters.loss || filters.special || filters.bc || shariahOnly ? 'Nothing passes these filters' : 'No dividend data yet'}>{filters.loss || filters.special || filters.bc || shariahOnly ? 'Turn a filter off to see more.' : 'It fills after the next market check.'}</Empty>)}
 
         {tab === 'upcoming' && (up.length ? up.map((u) => (
           <Card key={u.id}>
@@ -173,14 +176,14 @@ export function Discover({ data, source, reload }: ScreenProps) {
   );
 }
 
-function UndervaluedCard({ r, i, chips, by, watch, ai }: { r: Undervalued & { ai: { n: number; why: string } | null }; i: number; chips: QualityChip[]; by: UvSort; watch: React.ReactNode; ai: React.ReactNode }) {
+function UndervaluedCard({ r, i, chips, by, watch, ai, bc }: { r: Undervalued & { ai: { n: number; why: string } | null }; i: number; chips: QualityChip[]; by: UvSort; watch: React.ReactNode; ai: React.ReactNode; bc?: BcState }) {
   const m = uvMetric(r, by);
   return (
     <Card>
       <div className="flex items-center gap-3">
         <SymbolAvatar symbol={r.symbol} change={r.change_pct} />
         <div className="min-w-0 flex-1">
-          <p className="flex flex-wrap items-center gap-1.5 font-semibold"><span className="num text-xs text-slate-400">{i + 1}</span>{r.symbol}{r.ai && <AiBadge />}{r.is_shariah && <Tag tone="green">Shariah</Tag>}<ExTag ex={r.ex} /></p>
+          <p className="flex flex-wrap items-center gap-1.5 font-semibold"><span className="num text-xs text-slate-400">{i + 1}</span>{r.symbol}<BcBadge state={bc} symbol={r.symbol} mode="status" />{r.ai && <AiBadge />}{r.is_shariah && <Tag tone="green">Shariah</Tag>}<ExTag ex={r.ex} /></p>
           <p className="truncate text-xs text-slate-500 dark:text-slate-400">{r.sector ? titleCase(r.sector) : ''} · {rs2(r.price)}</p>
         </div>
         <div className="shrink-0 text-right">
@@ -195,12 +198,13 @@ function UndervaluedCard({ r, i, chips, by, watch, ai }: { r: Undervalued & { ai
         {r.change_1y_pct != null && <Tag tone={r.change_1y_pct < 0 ? 'red' : 'green'}>1y {r.change_1y_pct > 0 ? '+' : ''}{r.change_1y_pct.toFixed(0)}%</Tag>}
         <QualityTags chips={chips} />
       </div>
+      <NotBlueChip bc={bc} />
       <div className="mt-2 flex items-center justify-between gap-2">{ai}{watch}</div>
     </Card>
   );
 }
 
-function DividendCard({ d, i, chips, watch, ai }: { d: DividendLeader & { ai: { n: number; why: string; frequency?: string | null } | null }; i: number; chips: QualityChip[]; watch: React.ReactNode; ai: React.ReactNode }) {
+function DividendCard({ d, i, chips, watch, ai, bc }: { d: DividendLeader & { ai: { n: number; why: string; frequency?: string | null } | null }; i: number; chips: QualityChip[]; watch: React.ReactNode; ai: React.ReactNode; bc?: BcState }) {
   const freq = effectiveFrequency(d);
   const freqNote = d.frequency ? 'from filings' : freq ? 'AI estimate' : d.frequency_enough ? 'how often' : 'not enough history';
   return (
@@ -208,7 +212,7 @@ function DividendCard({ d, i, chips, watch, ai }: { d: DividendLeader & { ai: { 
       <div className="flex items-center gap-3">
         <SymbolAvatar symbol={d.symbol} />
         <div className="min-w-0 flex-1">
-          <p className="flex flex-wrap items-center gap-1.5 font-semibold"><span className="num text-xs text-slate-400">{i + 1}</span>{d.symbol}{d.ai && <AiBadge />}{d.is_shariah && <Tag tone="green">Shariah</Tag>}<ExTag ex={d.ex} /></p>
+          <p className="flex flex-wrap items-center gap-1.5 font-semibold"><span className="num text-xs text-slate-400">{i + 1}</span>{d.symbol}<BcBadge state={bc} symbol={d.symbol} mode="status" />{d.ai && <AiBadge />}{d.is_shariah && <Tag tone="green">Shariah</Tag>}<ExTag ex={d.ex} /></p>
           <p className="truncate text-xs text-slate-500 dark:text-slate-400">{d.sector ? titleCase(d.sector) : ''} · {rs2(d.price)}</p>
         </div>
         <div className="text-right">
@@ -229,7 +233,14 @@ function DividendCard({ d, i, chips, watch, ai }: { d: DividendLeader & { ai: { 
           <QualityTags chips={chips} />
         </div>
       )}
+      <NotBlueChip bc={bc} />
       <div className="mt-2 flex items-center justify-between gap-2">{ai}{watch}</div>
     </Card>
   );
+}
+
+/** A Discover suggestion that is not a blue chip says so (the badge's own checks decide; the AI never does). */
+function NotBlueChip({ bc }: { bc?: BcState }) {
+  if (bc?.status !== 'not_bc') return null;
+  return <p className="mt-2 flex items-start gap-1.5 text-xs font-medium text-rose-700 dark:text-rose-300"><Icon name="alert" className="mt-px h-3.5 w-3.5 shrink-0" />Not a blue chip — higher risk</p>;
 }

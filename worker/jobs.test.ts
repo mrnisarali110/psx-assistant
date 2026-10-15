@@ -195,7 +195,11 @@ describe('night job', () => {
       ai: fakeAi(), fetchPdf: async () => new Uint8Array([1]),
       fetchSnapshot: async (s: string[]) => { fetched.push(s); return snap(-1.36, AS_OF, s.length ? s : undefined); },
     }));
-    expect(fetched).toHaveLength(2); // user symbols, then extra dividend payers
+    expect(fetched).toHaveLength(3); // user symbols, extra dividend payers, then company pages for the blue-chip recheck
+    // Blue chips: each due company is checked once, with a history row; with no annual reports read yet none passes.
+    expect(store.bc.length).toBeGreaterThan(0);
+    expect(store.bc.every((b) => !b.badge && b.status !== 'bc')).toBe(true);
+    expect(store.bcHistory.every((h) => h.trigger === 'first')).toBe(true);
     expect(r.ai.picks).toBe(2);
     expect(store.picks.map((p) => p.kind).sort()).toEqual(['dividend', 'undervalued']);
     expect(n.sent).toHaveLength(1);

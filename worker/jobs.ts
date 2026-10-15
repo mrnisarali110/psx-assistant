@@ -17,7 +17,8 @@ import { buildPortfolio, screenSectors, sectorPeMap, type PortfolioView } from '
 import { holdingAlerts, marketAlerts, planDelivery, todayBanner, type AlertCandidate, type AlertLevel } from '../shared/signals.ts';
 import { addDays, daysBetween, isMarketOpen, isoWeek, minutesToClose, pktDate } from '../shared/time.ts';
 import { DEFAULT_RULES, type Announcement, type DividendEvent, type IndexSnapshot, type PriceMap, type QuarterEarnings } from '../shared/types.ts';
-import { discoverPicks, portfolioInsight, readAnnouncement, type GuardContext, type Insight, type InsightFacts } from './ai.ts';
+import { annualsFromPage, auditOpinion, reportYear, runBluechip } from './bluechip.ts';
+import { discoverPicks, pdfText, portfolioInsight, readAnnouncement, type GuardContext, type Insight, type InsightFacts } from './ai.ts';
 import { FetchError, isUsable, toPrice, toScreenRows, type Snapshot } from './feed.ts';
 import type { Notifier } from './notify.ts';
 import type { Store, UserCtx } from './store.ts';
@@ -54,7 +55,7 @@ const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 interface RunCtx {
   job: JobName; deps: JobDeps; now: Date; today: string; prices: PriceMap; idx: IndexSnapshot | null;
   usable: boolean; tradedToday: boolean; preclose: boolean; news: Announcement[]; dividends: DividendEvent[];
-  screen: ScreenRow[]; report: RunReport; aiBudget: { left: number }; earnings: QuarterEarnings[];
+  screen: ScreenRow[]; report: RunReport; aiBudget: { left: number }; earnings: QuarterEarnings[]; bc: Record<string, string>;
 }
 
 export async function runJob(job: JobName, deps: JobDeps): Promise<RunReport> {
@@ -98,6 +99,7 @@ export async function runJob(job: JobName, deps: JobDeps): Promise<RunReport> {
     report.errors.push(...publicErrors(snap.errors, [...userSymbols, ...readSymbols]));
     const usable = isUsable(snap);
     let prices: PriceMap;
+    let previousScreen: ScreenRow[] = [];
     let idx: IndexSnapshot | null;
     if (usable) {
       const fresh = Object.values(snap.quotes).filter((q) => q.price != null).map((q) => toPrice(q, snap.screener[q.symbol]));
@@ -111,7 +113,10 @@ export async function runJob(job: JobName, deps: JobDeps): Promise<RunReport> {
       await store.saveNewAnnouncements(Object.values(snap.quotes).flatMap((q) => q.announcements));
       // Symbols that failed this run keep their last good price, never a made-up one.
       prices = { ...(await store.latestPrices(userSymbols)), ...Object.fromEntries(fresh.map((p) => [p.symbol, p])) };
+      previousScreen = await store.screenRows().catch(() => [] as ScreenRow[]); // last reading, to detect index changes
       if (screen.length) await store.saveScreen(screen).catch((e) => report.errors.push(`screen: ${errMsg(e)}`));
+      // PSX's annual profit table from the company pages fetched anyway (blue-chip profit check).
+      await store.saveAnnuals(Object.values(snap.quotes).flatMap((q) => annualsFromPage(q.symbol, q.annual_profits))).catch((e) => report.errors.push(`annuals: ${errMsg(e)}`));
     } else {
       report.ok = false;
       prices = await store.latestPrices(userSymbols);
@@ -132,9 +137,10 @@ export async function runJob(job: JobName, deps: JobDeps): Promise<RunReport> {
     const toClose = minutesToClose(now, rules.market_hours_pkt);
     const preclose = job === 'market' && tradedToday && toClose != null && toClose <= 40;
 
+    let newFilings = new Set<string>();
     // ---- AI reads filings (summaries + dividends) ---------------------
     if (deps.ai?.available && deps.fetchPdf) {
-      await readFilings(readSymbols, today, job === 'night' ? rules.ai.announcements_per_night_run : rules.ai.announcements_per_market_run, deps, report);
+      newFilings = await readFilings(readSymbols, today, job === 'night' ? rules.ai.announcements_per_night_run : rules.ai.announcements_per_market_run, deps, report);
     }
     const news = await store.recentAnnouncements(userSymbols, addDays(today, -14)).catch(() => [] as Announcement[]);
     const dividends = await store.dividends(null, addDays(today, -1100)).catch(() => [] as DividendEvent[]);
@@ -143,8 +149,20 @@ export async function runJob(job: JobName, deps: JobDeps): Promise<RunReport> {
     // ---- Discover picks (nightly, market-wide) ------------------------
     if (job === 'night' && deps.ai?.available && screen.length) await refreshPicks(screen, dividends, today, deps, report);
 
+    // ---- Blue-chip recheck (nightly; each company only when due) ------
+    if (job === 'night' && usable && screen.length) {
+      try {
+        const bcDivs = await store.dividends(null, addDays(today, -365 * (rules.bluechip.dividend_years_window + 1))).catch(() => dividends);
+        const bc = await runBluechip({ today, screen, previousScreen, userSymbols, newFilingSymbols: newFilings, dividends: bcDivs }, { store, fetchSnapshot: deps.fetchSnapshot, log });
+        log(`bluechip: checked ${bc.checked}, pages ${bc.pages}`);
+      } catch (e) {
+        report.errors.push(`bluechip: ${errMsg(e)}`);
+      }
+    }
+
+    const bcMap = Object.fromEntries((await store.bluechipStates().catch(() => [])).map((b) => [b.symbol, b.status]));
     log(`job=${job} users=${users.length} symbols=${userSymbols.length}+${readSymbols.length - userSymbols.length} usable=${usable} tradedToday=${tradedToday} preclose=${preclose} aiRead=${report.ai.announcements_read}`);
-    const ctx: RunCtx = { job, deps, now, today, prices, idx, usable, tradedToday, preclose, news, dividends, screen, report, aiBudget: { left: rules.ai.max_users_per_run }, earnings };
+    const ctx: RunCtx = { job, deps, now, today, prices, idx, usable, tradedToday, preclose, news, dividends, screen, report, aiBudget: { left: rules.ai.max_users_per_run }, earnings, bc: bcMap };
     for (const u of users) {
       try {
         await processUser(u, ctx);
@@ -171,13 +189,15 @@ export function publicErrors(errors: string[], symbols: string[]): string[] {
   return perStock.length ? [...rest, `${perStock.length} company page(s) failed (${reasons.join(', ')})`] : rest;
 }
 
-async function readFilings(symbols: string[], today: string, limit: number, deps: JobDeps, report: RunReport) {
+/** Reads new filings; returns the companies with a results or dividend filing read (their blue-chip check is due). */
+async function readFilings(symbols: string[], today: string, limit: number, deps: JobDeps, report: RunReport): Promise<Set<string>> {
+  const read = new Set<string>();
   let toRead: Announcement[] = [];
   try {
     toRead = await deps.store.announcementsToRead(symbols, addDays(today, -rules.ai.announcement_max_age_days), limit);
   } catch (e) {
     report.errors.push(`ai: cannot list announcements (${errMsg(e)})`);
-    return;
+    return read;
   }
   for (const a of toRead) {
     let pdf: Uint8Array;
@@ -189,8 +209,21 @@ async function readFilings(symbols: string[], today: string, limit: number, deps
       report.errors.push(`ai: filing ${a.id} pdf: ${errMsg(e)}`);
       continue;
     }
+    // An annual report is long: no AI, just the auditor's opinion from its text (blue-chip red-flag check).
+    if (/annual report/i.test(a.title)) {
+      const opinion = auditOpinion(await pdfText(pdf));
+      if (opinion) await deps.store.saveAudit({ symbol: a.symbol, year: reportYear(a.title, a.published_at), qualified: opinion.qualified, filing_id: a.id }).catch((e) => report.errors.push(`audit: ${errMsg(e)}`));
+      await deps.store.saveAnnouncementDigest(a.id, { summary: null, figures: null, verified: null }).catch(() => {});
+      read.add(a.symbol);
+      continue;
+    }
     try {
       const d = await readAnnouncement(deps.ai!, pdf, { symbol: a.symbol, title: a.title, published_at: a.published_at });
+      if (a.kind === 'results' || a.kind === 'dividend') read.add(a.symbol);
+      if (d.annual) {
+        await deps.store.saveAnnuals([{ symbol: a.symbol, year: d.annual.year, profit_after_tax: d.annual.profit_after_tax, consolidated: d.annual.consolidated, source: 'filing', filing_id: a.id }])
+          .catch((e) => report.errors.push(`annuals: ${errMsg(e)}`));
+      }
       await deps.store.saveAnnouncementDigest(a.id, { summary: d.summary, figures: d.figures, verified: d.verified, date_note: d.date_note });
       report.ai.announcements_read++;
       if (d.dividend) {
@@ -208,6 +241,7 @@ async function readFilings(symbols: string[], today: string, limit: number, deps
       if (/AI unavailable/.test(errMsg(e))) break; // both providers down or rate limited: try next run
     }
   }
+  return read;
 }
 
 async function refreshPicks(screen: ScreenRow[], dividends: DividendEvent[], today: string, deps: JobDeps, report: RunReport) {
@@ -339,7 +373,7 @@ function nightItems(view: PortfolioView, mine: Set<string>, c: RunCtx, insight: 
 // AI facts: everything the model may use, rounded the way it will be quoted
 // ---------------------------------------------------------------------------
 export function buildFacts(u: UserCtx, view: PortfolioView, mine: Set<string>,
-  c: Pick<RunCtx, 'today' | 'idx' | 'prices' | 'screen' | 'news' | 'dividends' | 'now'>, investedPkr: number) {
+  c: Pick<RunCtx, 'today' | 'idx' | 'prices' | 'screen' | 'news' | 'dividends' | 'now'> & { bc?: Record<string, string> }, investedPkr: number) {
   const s = u.settings;
   const banner = todayBanner(c.idx, s);
   const metrics = (sym: string) => {
@@ -347,7 +381,7 @@ export function buildFacts(u: UserCtx, view: PortfolioView, mine: Set<string>,
     return {
       price: r2(p?.price), day_change_pct: r2(p?.change_pct), high_52w: r2(p?.high_52w), low_52w: r2(p?.low_52w),
       below_52w_high_pct: p?.price && p?.high_52w ? r1(((p.high_52w - p.price) / p.high_52w) * 100) : null,
-      dividend_yield_pct: r2(p?.dividend_yield_pct), pe: r2(p?.pe), sector: p?.sector ?? null, is_shariah: p?.is_shariah ?? null,
+      dividend_yield_pct: r2(p?.dividend_yield_pct), pe: r2(p?.pe), sector: p?.sector ?? null, is_shariah: p?.is_shariah ?? null, blue_chip: c.bc?.[sym] ?? 'not_checked',
     };
   };
   const candidates = undervalued(c.screen, { shariahOnly: s.shariah_only, exclude: mine }).slice(0, 5);
@@ -367,7 +401,7 @@ export function buildFacts(u: UserCtx, view: PortfolioView, mine: Set<string>,
       pnl_pct: r1(r.pnl_pct), weight_pct: r1(r.weight_pct), rules_call: r.call.call, ...metrics(r.holding.symbol), is_shariah: r.holding.is_shariah, note: r.holding.note ?? null,
     })),
     watchlist: u.watchlist.map((w) => ({ symbol: w.symbol, ...metrics(w.symbol) })),
-    screen_candidates: candidates.map((o) => ({ symbol: o.symbol, sector: o.sector, price: o.price, pe: o.pe, sector_pe: o.sector_pe, dividend_yield_pct: o.dividend_yield_pct, is_shariah: o.is_shariah })),
+    screen_candidates: candidates.map((o) => ({ symbol: o.symbol, sector: o.sector, price: o.price, pe: o.pe, sector_pe: o.sector_pe, dividend_yield_pct: o.dividend_yield_pct, is_shariah: o.is_shariah, blue_chip: c.bc?.[o.symbol] ?? 'not_checked' })),
     upcoming_dividends: upcomingDividends(c.dividends.filter((d) => mine.has(d.symbol)), c.today).slice(0, 5).map((d) => ({ symbol: d.symbol, dps: d.dps, buy_by: d.buy_by, book_closure_from: d.book_closure_from })),
     recent_news: dedupeFilings(c.news.filter((a) => mine.has(a.symbol) && a.ai_summary)).slice(0, 8).map((a) => ({ symbol: a.symbol, date: a.published_at, summary: a.ai_summary as string })),
   };
@@ -378,6 +412,7 @@ export function buildFacts(u: UserCtx, view: PortfolioView, mine: Set<string>,
     maxPositionPct: s.max_position_pct,
     shariahOnly: s.shariah_only,
     rulesSay: banner.action,
+    blueChipOf: (sym: string) => c.bc?.[sym] ?? 'not_checked',
   };
   return { facts, guard };
 }

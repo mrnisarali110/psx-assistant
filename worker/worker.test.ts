@@ -35,6 +35,17 @@ describe('feed parsers (saved PSX pages, 2026-10-05 close)', () => {
     expect(i.KSE100).toEqual({ name: 'KSE100', value: 165867.31, change: -2288.18, change_pct: -1.36 });
   });
 
+  it('reads the annual profit table (thousands) and the 30-day average volume for the blue-chip checks', () => {
+    const q = parseCompany(fx('company_SYS.html'), 'SYS');
+    expect(q.annual_profits).toEqual([
+      { year: 2025, profit_after_tax: 8_019_014_000 }, { year: 2024, profit_after_tax: 6_115_297_000 },
+      { year: 2023, profit_after_tax: 8_559_160_000 }, { year: 2022, profit_after_tax: 6_299_837_000 },
+    ]);
+    const s = parseScreener(fx('screener_trimmed.html'));
+    expect(s.SYS.avg_volume_30d).toBeGreaterThan(0);
+    expect(s.SYS.listed_in).toContain('KSE100');
+  });
+
   it('reads a company page', () => {
     const q = parseCompany(fx('company_SYS.html'), 'sys');
     expect(q).toMatchObject({
@@ -122,5 +133,16 @@ describe('telegram linking', () => {
     expect(store.telegram['owner-1']).toBe(555);
     expect(calls.find((c) => c.method === 'getUpdates' && c.body.offset === 12)).toBeTruthy();
     expect(calls.filter((c) => c.method === 'sendMessage').map((c) => c.body.chat_id)).toEqual([555, 777]);
+  });
+});
+
+describe('audit opinion from an annual report (no AI)', () => {
+  it('reads a qualified, adverse or disclaimed opinion as a red flag and an unqualified one as clean', async () => {
+    const { auditOpinion, reportYear } = await import('./bluechip.ts');
+    expect(auditOpinion("INDEPENDENT AUDITOR'S REPORT ... Basis for Qualified Opinion ... except for the effects")).toEqual({ qualified: true });
+    expect(auditOpinion("Independent Auditor's Report. Opinion: We have audited ... In our opinion the financial statements give a true and fair view")).toEqual({ qualified: false });
+    expect(auditOpinion('Independent auditor report: we express an unqualified opinion')).toEqual({ qualified: false });
+    expect(auditOpinion('Chairman review and directors report only')).toBeNull(); // no auditor's report in the text: unknown
+    expect(reportYear('Transmission of Annual Report for the year ended June 30, 2026', '2026-10-01')).toBe(2026);
   });
 });

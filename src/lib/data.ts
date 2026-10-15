@@ -11,6 +11,7 @@ import type { ScreenRow } from '../../shared/discover.ts';
 import type { ImportedRow } from '../../shared/changes.ts';
 import { addDays, pktDate } from '../../shared/time.ts';
 import { dedupeBySymbol, normalisePriceMap } from '../../shared/symbols.ts';
+import { evaluateBc, marketCapRanks, nextBcState, type BcState } from '../../shared/bluechip.ts';
 import {
   SEED_ANNOUNCEMENTS, SEED_CAPTURED_AT, SEED_HOLDINGS, SEED_INDEX, SEED_PRICES, SEED_SCREEN, SEED_TXNS, SEED_WATCHLIST,
 } from '../../shared/fixtures/seed.ts';
@@ -39,6 +40,7 @@ export interface AppData {
   indexDaily: IndexDay[]; // KSE-100 close per trading day, oldest first (benchmark)
   portfolioDaily: PortfolioDay[]; // your value per trading day, oldest first (Performance chart)
   earnings: QuarterEarnings[]; // quarterly profit after tax read from results filings (loss-quarter rules)
+  bluechip: Record<string, BcState>; // blue-chip state per company, from the worker's checks (empty until the first night run)
   picks: { undervalued: AiPicks | null; dividend: AiPicks | null };
 }
 
@@ -151,7 +153,7 @@ export class LiveSource implements DataSource {
     const H = (ok(holdings) as any[]).map(normHolding);
     const W = ok(watchlist) as WatchItem[];
     const symbols = [...new Set([...H.map((h) => h.symbol), ...W.map((w) => w.symbol)])];
-    const [prices, anns, insights, screen, txns, divs, uv, dv, receipts, indexDaily, portfolioDaily, earnings] = await Promise.all([
+    const [prices, anns, insights, screen, txns, divs, uv, dv, receipts, indexDaily, portfolioDaily, earnings, bluechip] = await Promise.all([
       symbols.length ? optional(sb.from('prices').select('*').in('symbol', symbols), [] as any[]) : Promise.resolve([] as any[]),
       symbols.length ? optional(sb.from('announcements').select('*').in('symbol', symbols).gte('published_at', addDays(today, -60)).order('published_at', { ascending: false }).limit(150), [] as any[]) : Promise.resolve([] as any[]),
       optional(sb.from('ai_insights').select('created_at, job, headline, stance, suggestions, holding_calls, rebalance, cash_note, risks, model').order('created_at', { ascending: false }).limit(1), [] as any[]),
@@ -164,6 +166,7 @@ export class LiveSource implements DataSource {
       allRows((a, b) => sb.from('index_daily').select('day, close').order('day').range(a, b)),
       allRows((a, b) => sb.from('portfolio_daily').select('day, value, invested').order('day').range(a, b)),
       symbols.length ? optional(sb.from('earnings').select('*').in('symbol', symbols).gte('period_end', addDays(today, -1100)).order('period_end', { ascending: false }).limit(1000), [] as any[]) : Promise.resolve([] as any[]),
+      optional(sb.from('bluechip').select('*').limit(2000), [] as any[]),
     ]);
     const s = ok(settings) as any;
     const history = (ok(idx) as any[]).map(normIdx);
@@ -190,6 +193,7 @@ export class LiveSource implements DataSource {
       indexDaily: indexDaily.map((r: any) => ({ day: r.day, close: Number(r.close) })),
       portfolioDaily: portfolioDaily.map((r: any) => ({ day: r.day, value: Number(r.value), invested: Number(r.invested) })),
       earnings: earnings.map((r: any) => ({ ...r, profit_after_tax: Number(r.profit_after_tax) })),
+      bluechip: Object.fromEntries(bluechip.map((b: any) => [b.symbol, { ...b, fails: Number(b.fails) } as BcState])),
       picks: { undervalued: (uv[0] ?? null) as AiPicks | null, dividend: (dv[0] ?? null) as AiPicks | null },
     };
   }
@@ -239,6 +243,18 @@ export class LiveSource implements DataSource {
   }
 }
 
+/** Blue-chip states worked out from the demo's own seed data (no annual results or filings in it: not enough data). */
+function demoBluechip(): Record<string, BcState> {
+  const today = pktDate(new Date());
+  const ranks = marketCapRanks(SEED_SCREEN);
+  const symbols = [...new Set([...SEED_HOLDINGS.map((h) => h.symbol), ...SEED_SCREEN.map((r) => r.symbol)])];
+  return Object.fromEntries(symbols.map((symbol) => [symbol, nextBcState(null, evaluateBc({
+    symbol, today, index_members: null, market_cap_rank: ranks[symbol] ?? null, avg_volume_30d: null,
+    price: SEED_PRICES[symbol]?.price ?? SEED_SCREEN.find((r) => r.symbol === symbol)?.price ?? null,
+    annual: [], dividends: [], filings_since: null, audit: null,
+  }), today)]));
+}
+
 /** The demo's buys of the seed holdings are dated the last day of the month before the seed capture. */
 const DEMO_BASELINE_DAY = addDays(`${SEED_CAPTURED_AT.slice(0, 7)}-01`, -1);
 const r2 = (v: number) => Math.round(v * 100) / 100;
@@ -279,7 +295,7 @@ export class DemoSource implements DataSource {
       lastRun: { job: 'market', started_at: SEED_CAPTURED_AT, finished_at: SEED_CAPTURED_AT, ok: true },
       aiInsight: null, // never show made-up AI text; real suggestions appear after the first signed-in run
       screen: SEED_SCREEN, transactions: [...this.txns], dividends: [], picks: { undervalued: null, dividend: null },
-      receipts: [...this.receipts], indexDaily: [{ day: SEED_INDEX.ts.slice(0, 10), close: SEED_INDEX.kse100 }], portfolioDaily: [], earnings: [],
+      receipts: [...this.receipts], indexDaily: [{ day: SEED_INDEX.ts.slice(0, 10), close: SEED_INDEX.kse100 }], portfolioDaily: [], earnings: [], bluechip: demoBluechip(),
     };
   }
   async saveTxns(txns: Txn[]) { this.txns.push(...txns.map((t, i) => ({ ...t, id: t.id ?? `demo-t${Date.now()}-${i}` }))); }

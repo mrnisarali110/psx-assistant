@@ -3,6 +3,8 @@
  * detail sheet, and the add / edit / record-buy form as a bottom sheet.
  */
 import { useEffect, useState } from 'react';
+import type { BcState } from '../../shared/bluechip.ts';
+import { BcBadge } from './BcBadge.tsx';
 import type { HoldingCall, HoldingView, SectorMap } from '../../shared/portfolio.ts';
 import { applyBuy, txnFromChange, withLastBuy } from '../../shared/changes.ts';
 import type { DividendEvent, Holding, HoldingCallKind, HoldingStatus, Price, Settings, Txn } from '../../shared/types.ts';
@@ -40,7 +42,7 @@ export const STATUS_LABEL: Record<HoldingStatus, string> = { core: 'Core', hold_
 
 export interface RowActions { onOpen: () => void; onMenu: () => void; onEdit: () => void; onBuy: () => void; onRemove: () => void }
 
-export function HoldingRow({ row, call, actions }: { row: HoldingView; call: HoldingCall; actions: RowActions }) {
+export function HoldingRow({ row, call, actions, bc }: { row: HoldingView; call: HoldingCall; actions: RowActions; bc?: BcState }) {
   const swipe = useSwipeRow({ maxLeft: 144, maxRight: 80 });
   const press = useLongPress(actions.onMenu);
   const h = row.holding;
@@ -68,6 +70,7 @@ export function HoldingRow({ row, call, actions }: { row: HoldingView; call: Hol
           <span className="min-w-0 flex-1">
             <span className="flex items-center gap-1.5">
               <span className="font-semibold">{h.symbol}</span>
+              <BcBadge state={bc} symbol={h.symbol} />
               <CallChip call={call} />
             </span>
             <span className="block truncate text-xs text-slate-500 dark:text-slate-400">{call.text}</span>

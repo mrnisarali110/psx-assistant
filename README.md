@@ -137,6 +137,25 @@ day it moved (daily closes in `index_daily`, written by the worker and backfille
 flows before the index history begins are left out of both sides and counted in the coverage note. The night job
 also stores one portfolio value per trading day (`portfolio_daily`) for the chart.
 
+## Blue-chip (BC) badge
+
+Worked out by the night job from PSX data only (`shared/bluechip.ts`, `worker/bluechip.ts`; thresholds in
+`rules.json` → `bluechip`; no ticker list anywhere, a test enforces it). All five must pass:
+
+| Check | Data used |
+| --- | --- |
+| Big company | KSE-30 membership from the screener's "listed in", or top 30 by market cap |
+| Easy to trade | PSX's 30-day average volume × price ≥ Rs 50M/day (PSX publishes no 60-day daily series on a page we can read) |
+| Profitable for years | Profit after tax > 0 in each of the last 5 years: PSX's Financials table (4 years) plus results filings (consolidated preferred) |
+| Pays dividends regularly | A cash dividend in 4 of the last 5 years, from dividend filings; years before the first filing we stored are unknown |
+| No red flags | Traded in the last 30 days; not a defaulter (implied by KSE-30 membership); no qualified audit opinion in the latest annual report (PDF text, no AI) |
+
+Anything that cannot be worked out is "not enough data": no badge, no guess. Badges are gained on the first full pass
+and lost only after two failed rechecks in a row ("BC at risk" in between). Rechecks: weekly, after a results or
+dividend filing, when KSE-30 members change, when the config changes, once in Sept–Oct. Every recheck is stored in
+`bluechip_history`. PSX's payouts history, listing status and 5-year report pages load behind a captcha, so they are not
+used; dividend and profit history therefore fill in from filings over time.
+
 ## Data source (read this if prices stop updating)
 
 No official free PSX API. The worker reads ordinary public pages with an honest User-Agent: the homepage

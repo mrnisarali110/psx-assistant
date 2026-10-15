@@ -8,6 +8,7 @@ import type {
 } from '../shared/types.ts';
 import { DEFAULT_SETTINGS } from '../shared/types.ts';
 import type { ScreenRow } from '../shared/discover.ts';
+import type { AnnualProfit, AuditFinding, BcState } from '../shared/bluechip.ts';
 
 export interface PushSub { id: string; endpoint: string; p256dh: string; auth: string }
 
@@ -55,6 +56,16 @@ export interface Store {
   transactionsSince(userId: string, sinceDate: string): Promise<Txn[]>;
   saveDividend(d: DividendEvent): Promise<void>;
   saveEarnings(e: QuarterEarnings): Promise<void>;
+  /** Blue-chip inputs and results. */
+  saveAnnuals(rows: AnnualProfit[]): Promise<void>;
+  annuals(symbols: string[]): Promise<AnnualProfit[]>;
+  saveAudit(a: AuditFinding): Promise<void>;
+  audits(symbols: string[]): Promise<AuditFinding[]>;
+  /** The earliest filing date stored per company: dividend years before it are unknown, not "no dividend". */
+  filingsSince(symbols: string[]): Promise<Record<string, string>>;
+  screenRows(): Promise<ScreenRow[]>;
+  bluechipStates(): Promise<BcState[]>;
+  saveBluechip(state: BcState, trigger: string): Promise<void>;
   earnings(symbols: string[], sinceDate: string): Promise<QuarterEarnings[]>;
   dividends(symbols: string[] | null, sinceDate: string): Promise<DividendEvent[]>;
   savePicks(kind: AiPicks['kind'], items: AiPicks['items'], model: string | null): Promise<void>;
@@ -248,6 +259,44 @@ export class SupabaseStore implements Store {
     return rows.map((t) => ({ ...t, shares: Number(t.shares), price: Number(t.price), amount: Number(t.amount) }));
   }
 
+  async saveAnnuals(rows: AnnualProfit[]) {
+    if (!rows.length) return;
+    const now = new Date().toISOString();
+    check(await this.sb.from('company_annuals').upsert(rows.map((r) => ({ ...r, filing_id: r.filing_id ?? null, updated_at: now })), { onConflict: 'symbol,year,source' }), 'save annuals');
+  }
+  async annuals(symbols: string[]) {
+    if (!symbols.length) return [];
+    const out: AnnualProfit[] = [];
+    for (let i = 0; i < symbols.length; i += 150) {
+      const rows = check(await this.sb.from('company_annuals').select('*').in('symbol', symbols.slice(i, i + 150)).limit(5000), 'annuals') as any[];
+      out.push(...rows.map((r) => ({ ...r, profit_after_tax: Number(r.profit_after_tax) })));
+    }
+    return out;
+  }
+  async saveAudit(a: AuditFinding) { check(await this.sb.from('company_audits').upsert(a, { onConflict: 'symbol,year' }), 'save audit'); }
+  async audits(symbols: string[]) {
+    if (!symbols.length) return [];
+    return check(await this.sb.from('company_audits').select('symbol, year, qualified, filing_id').in('symbol', symbols).limit(5000), 'audits') as AuditFinding[];
+  }
+  async filingsSince(symbols: string[]) {
+    const out: Record<string, string> = {};
+    for (let i = 0; i < symbols.length; i += 150) {
+      const rows = check(await this.sb.from('announcements').select('symbol, published_at').in('symbol', symbols.slice(i, i + 150)).order('published_at').limit(10000), 'filings since') as any[];
+      for (const r of rows) if (!out[r.symbol] || r.published_at < out[r.symbol]) out[r.symbol] = r.published_at;
+    }
+    return out;
+  }
+  async screenRows() {
+    return (check(await this.sb.from('market_screen').select('*').limit(2000), 'screen rows') as any[]).map((r) => ({
+      ...r, price: num(r.price), pe: num(r.pe), dividend_yield_pct: num(r.dividend_yield_pct), market_cap: num(r.market_cap), avg_volume_30d: num(r.avg_volume_30d),
+    }));
+  }
+  async bluechipStates() { return check(await this.sb.from('bluechip').select('*').limit(2000), 'bluechip') as BcState[]; }
+  async saveBluechip(st: BcState, trigger: string) {
+    check(await this.sb.from('bluechip').upsert(st, { onConflict: 'symbol' }), 'save bluechip');
+    check(await this.sb.from('bluechip_history').insert({ symbol: st.symbol, checked_on: st.checked_on, status: st.status, checks: st.checks, trigger }), 'bluechip history');
+  }
+
   async saveEarnings(e: QuarterEarnings) {
     check(await this.sb.from('earnings').upsert(e, { onConflict: 'id' }), 'save earnings');
   }
@@ -347,6 +396,24 @@ export class MemoryStore implements Store {
   async transactionsSince(userId: string, since: string) { return this.txns.filter((t) => t.user_id === userId && t.executed_on >= since); }
   async saveDividend(d: DividendEvent) { this.divs = [...this.divs.filter((x) => x.id !== d.id), d]; }
   earningsRows: QuarterEarnings[] = [];
+  annualRows: AnnualProfit[] = [];
+  auditRows: AuditFinding[] = [];
+  bc: BcState[] = [];
+  bcHistory: (BcState & { trigger: string })[] = [];
+  async saveAnnuals(rows: AnnualProfit[]) {
+    for (const r of rows) this.annualRows = [...this.annualRows.filter((x) => !(x.symbol === r.symbol && x.year === r.year && x.source === r.source)), r];
+  }
+  async annuals(symbols: string[]) { return this.annualRows.filter((r) => symbols.includes(r.symbol)); }
+  async saveAudit(a: AuditFinding) { this.auditRows = [...this.auditRows.filter((x) => !(x.symbol === a.symbol && x.year === a.year)), a]; }
+  async audits(symbols: string[]) { return this.auditRows.filter((a) => symbols.includes(a.symbol)); }
+  async filingsSince(symbols: string[]) {
+    const out: Record<string, string> = {};
+    for (const a of this.announcements) if (symbols.includes(a.symbol) && (!out[a.symbol] || a.published_at < out[a.symbol])) out[a.symbol] = a.published_at;
+    return out;
+  }
+  async screenRows() { return this.screen; }
+  async bluechipStates() { return this.bc; }
+  async saveBluechip(st: BcState, trigger: string) { this.bc = [...this.bc.filter((x) => x.symbol !== st.symbol), st]; this.bcHistory.push({ ...st, trigger }); }
   async saveEarnings(e: QuarterEarnings) { this.earningsRows = [...this.earningsRows.filter((x) => x.id !== e.id), e]; }
   async earnings(symbols: string[], since: string) { return this.earningsRows.filter((e) => symbols.includes(e.symbol) && e.period_end >= since); }
   async saveHoldingSectors(rows: { id: string; sector: string }[]) {

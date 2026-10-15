@@ -8,12 +8,15 @@ import { useMemo, useState } from 'react';
 import { sectorSlices, type PortfolioView } from '../../shared/portfolio.ts';
 import { rs, sectorLabel } from '../../shared/format.ts';
 import { haptic } from '../lib/gestures.ts';
+import type { BcState } from '../../shared/bluechip.ts';
+import { blueChipShare } from './BcBadge.tsx';
 import { BreakdownSheet } from './Breakdown.tsx';
 import { Donut } from './Donut.tsx';
 import { Icon } from './Icon.tsx';
 import { Button, Card, Empty, Section, SymbolAvatar, Tag } from './ui.tsx';
 
-export function AllocationTab({ view, maxPositionPct, onOpenStock }: { view: PortfolioView; maxPositionPct: number; onOpenStock: (symbol: string) => void }) {
+export function AllocationTab({ view, maxPositionPct, onOpenStock, bc = {} }: { view: PortfolioView; maxPositionPct: number; onOpenStock: (symbol: string) => void; bc?: Record<string, BcState> }) {
+  const blue = blueChipShare(view.rows, bc, view.total_value);
   const [more, setMore] = useState(false);
   const slices = useMemo(() => sectorSlices(view), [view]);
   const limit = view.sector_limit_pct;
@@ -106,6 +109,10 @@ export function AllocationTab({ view, maxPositionPct, onOpenStock }: { view: Por
         </div>
       </Section>
 
+      <p className="num px-1 text-sm font-medium">
+        Blue chips: {blue.pct == null ? 'n/a' : `${blue.pct.toFixed(0)}% of my portfolio`}
+        {blue.unchecked > 0 && <span className="block text-xs font-normal text-slate-500 dark:text-slate-400">{blue.unchecked} holding{blue.unchecked === 1 ? '' : 's'} not checked yet or without enough data</span>}
+      </p>
       <p className="px-1 text-xs text-slate-500 dark:text-slate-400">
         New money goes where it keeps every stock under {maxPositionPct}% and every sector under {limit}%.
       </p>

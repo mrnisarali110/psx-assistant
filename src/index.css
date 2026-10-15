@@ -9,7 +9,7 @@
   --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
   --animate-rise: rise 280ms var(--ease-out-quint) both;
   --animate-fade: fade 200ms ease-out both;
-  --animate-sheet: sheet 320ms var(--ease-out-quint) both;
+  --animate-sheet: sheet 320ms var(--ease-out-quint) backwards;
   --animate-pop: pop 360ms var(--ease-spring) both;
   --animate-shimmer: shimmer 1.4s linear infinite;
 }
@@ -19,6 +19,13 @@
 @keyframes sheet { from { transform: translateY(100%); } to { transform: none; } }
 @keyframes pop { from { opacity: 0; transform: scale(0.9); } to { opacity: 1; transform: none; } }
 @keyframes shimmer { from { background-position: -200% 0; } to { background-position: 200% 0; } }
+@keyframes sheet-out { from { transform: translateY(var(--from, 0px)); } to { transform: translateY(100%); } }
+@keyframes fade-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes toast-in { from { opacity: 0; transform: translateY(16px) scale(0.96); } to { opacity: 1; transform: none; } }
+@keyframes toast-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(8px) scale(0.98); } }
+@keyframes enter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes breathe { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(0.94); opacity: 0.82; } }
+@keyframes indeterminate { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
 
 :root { color-scheme: light; -webkit-tap-highlight-color: transparent; }
 :root[data-theme="dark"] { color-scheme: dark; }
@@ -46,10 +53,56 @@ html, body {
 }
 :root[data-theme="dark"] .skeleton { background-image: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.06), transparent); }
 
+/* ---------- Motion (150-320ms, ease-out, transform/opacity only; off under reduced motion) ---------- */
+
+/* Screen entry: top-level blocks of a screen, then list rows, fade up in a short cascade.
+   Fill mode is "backwards" so nothing keeps a transform after it lands (fixed children stay fixed). */
+.stagger > *, .stagger ul > li {
+  animation: enter 220ms var(--ease-out-quint) backwards;
+}
+.stagger > :nth-child(2) { animation-delay: 30ms; }
+.stagger > :nth-child(3) { animation-delay: 60ms; }
+.stagger > :nth-child(4) { animation-delay: 90ms; }
+.stagger > :nth-child(n+5) { animation-delay: 120ms; }
+.stagger ul > li:nth-child(2) { animation-delay: 30ms; }
+.stagger ul > li:nth-child(3) { animation-delay: 60ms; }
+.stagger ul > li:nth-child(4) { animation-delay: 90ms; }
+.stagger ul > li:nth-child(5) { animation-delay: 120ms; }
+.stagger ul > li:nth-child(n+6) { animation-delay: 140ms; }
+
+/* Loading placeholders appear only if loading takes a moment, so fast loads never flash grey. */
+.skeleton-in { animation: fade 200ms ease-out 120ms backwards; }
+
+/* One consistent pressed state for anything tappable. */
+.press { transition: transform 150ms var(--ease-out-quint), opacity 150ms ease-out, background-color 150ms ease-out, color 150ms ease-out; }
+.press:active:not(:disabled) { transform: scale(0.97); }
+
+/* Sliding selection pill (Segmented) and tab indicator: moved with transform only. */
+.slide-indicator { transition: transform 260ms var(--ease-out-quint), width 260ms var(--ease-out-quint); }
+
+.animate-sheet-out { animation: sheet-out 200ms cubic-bezier(0.4, 0, 1, 1) forwards; }
+.animate-fade-out { animation: fade-out 200ms ease-out forwards; }
+.animate-toast-in { animation: toast-in 240ms var(--ease-out-quint) backwards; }
+.animate-toast-out { animation: toast-out 160ms ease-in forwards; }
+
+/* Branded splash: shown only while really loading. Mirrors the inline splash in index.html. */
+.splash { position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  background: #f8fafc; color: #0f172a; }
+:root[data-theme="dark"] .splash { background: #000; color: #f1f5f9; }
+.splash-mark { width: 64px; height: 64px; border-radius: 16px; animation: breathe 1.8s ease-in-out infinite; }
+.splash-name { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+.splash-bar { position: relative; width: 120px; height: 3px; overflow: hidden; border-radius: 3px; background: rgb(15 118 110 / 0.15); }
+.splash-bar::after { content: ""; position: absolute; inset: 0; width: 40%; border-radius: 3px; background: #0f766e; animation: indeterminate 1.1s cubic-bezier(0.65, 0, 0.35, 1) infinite; }
+:root[data-theme="dark"] .splash-bar { background: rgb(45 212 191 / 0.18); }
+:root[data-theme="dark"] .splash-bar::after { background: #2dd4bf; }
+.splash-leave { animation: fade-out 200ms ease-out forwards; pointer-events: none; }
+
 input, select, button, textarea { font: inherit; }
 input[type="number"] { -moz-appearance: textfield; }
 :focus-visible { outline: 2px solid rgb(13 148 136); outline-offset: 2px; border-radius: 6px; }
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation-duration: 1ms !important; animation-iteration-count: 1 !important; transition-duration: 1ms !important; }
+  *, *::before, *::after { animation-duration: 1ms !important; animation-delay: 0ms !important; animation-iteration-count: 1 !important; transition-duration: 1ms !important; }
+  .press:active:not(:disabled) { transform: none; }
 }

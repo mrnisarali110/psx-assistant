@@ -25,12 +25,15 @@ export interface IndexQuote { name: string; value: number | null; change: number
 export interface ScreenerRow {
   symbol: string; ex: string | null; sector_code: string; sector: string | null; listed_in: string[]; price: number | null;
   change_pct: number | null; change_1y_pct: number | null; pe: number | null; dividend_yield_pct: number | null; market_cap: number | null;
+  avg_volume_30d?: number | null; // PSX's own 30-day average volume
 }
 export interface Quote {
   symbol: string; name: string | null; sector: string | null; price: number | null; change: number | null;
   change_pct: number | null; open: number | null; high: number | null; low: number | null; volume: number | null;
   ldcp: number | null; high_52w: number | null; low_52w: number | null; as_of: string | null;
   announcements: Announcement[];
+  /** Profit after tax per financial year from the page's Financials table (Annual tab), in rupees. Basis not stated by PSX. */
+  annual_profits?: { year: number; profit_after_tax: number }[];
 }
 export interface Snapshot {
   fetched_at: string;
@@ -148,6 +151,7 @@ export function parseScreener(html: string): Record<string, ScreenerRow> {
         pe: parseNum(at('PE RATIO (TTM)')),
         dividend_yield_pct: parseNum(at('DIVIDEND YIELD (%)')),
         market_cap: parseNum(at('MARKET CAP.')),
+        avg_volume_30d: parseNum(at('30D VOLUME AVG.')),
       };
       // The same company under two spellings (APL and APLXD): keep the fuller row, remember the marker.
       out[symbol] = out[symbol] ? dedupeBySymbol([out[symbol], row])[0] : row;
@@ -194,7 +198,31 @@ export function parseCompany(html: string, symbol: string): Quote {
     low_52w: low52,
     as_of: parseAsOf($('.quote__date').first().text()),
     announcements: parseCompanyAnnouncements($, sym),
+    annual_profits: parseAnnualProfits($),
   };
+}
+
+/** "All numbers in thousands": the Annual panel's "Profit after Taxation" row, one value per year column. */
+export function parseAnnualProfits($: cheerio.CheerioAPI): { year: number; profit_after_tax: number }[] {
+  const panel = $('#financials .tabs__panel[data-name="Annual"] table').first();
+  if (!panel.length) return [];
+  const thousands = /thousand/i.test($('#financials').first().text());
+  const years = panel.find('thead th').map((_, th) => Number(txt($(th).text()))).get();
+  const out: { year: number; profit_after_tax: number }[] = [];
+  panel.find('tbody tr').each((_, tr) => {
+    const cells = $(tr).find('td');
+    if (!/profit after tax/i.test(txt($(cells[0]).text()) ?? '')) return;
+    cells.each((i, td) => {
+      if (i === 0) return;
+      const raw = txt($(td).text());
+      const neg = !!raw && /^\(.*\)$/.test(raw); // (1,234) is a loss
+      const v = parseNum(raw);
+      const year = years[i];
+      if (v == null || !Number.isInteger(year) || year < 1990) return;
+      out.push({ year, profit_after_tax: (neg ? -Math.abs(v) : v) * (thousands ? 1000 : 1) });
+    });
+  });
+  return out;
 }
 
 function parseCompanyAnnouncements($: cheerio.CheerioAPI, symbol: string): Announcement[] {
@@ -359,8 +387,11 @@ export function isUsable(s: Snapshot): boolean {
 
 /** KSE-100 members from the screener, in the shape Discover and the AI use. */
 export function toScreenRows(screener: Record<string, ScreenerRow>): ScreenRow[] {
+  // Market cap rank among every listed stock (not just the KSE-100), for the blue-chip size check.
+  const ranks = new Map(Object.values(screener).filter((s) => s.market_cap != null && s.market_cap > 0)
+    .sort((a, b) => (b.market_cap as number) - (a.market_cap as number)).map((s, i) => [s.symbol, i + 1]));
   return dedupeBySymbol(Object.values(screener).filter((s) => s.listed_in.includes('KSE100')).map((s) => ({
-    symbol: s.symbol, ex: s.ex, sector: s.sector, price: s.price, change_pct: s.change_pct, change_1y_pct: s.change_1y_pct,
+    symbol: s.symbol, ex: s.ex, listed_in: s.listed_in, avg_volume_30d: s.avg_volume_30d ?? null, mcap_rank: ranks.get(s.symbol) ?? null, sector: s.sector, price: s.price, change_pct: s.change_pct, change_1y_pct: s.change_1y_pct,
     pe: s.pe, dividend_yield_pct: s.dividend_yield_pct, market_cap: s.market_cap, is_shariah: s.listed_in.includes('KMIALLSHR'),
   })));
 }

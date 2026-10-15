@@ -10,6 +10,8 @@ import { DEFAULT_RULES } from '../shared/types.ts';
 import { ToastProvider } from './components/Toast.tsx';
 import { Icon, type IconName } from './components/Icon.tsx';
 import { Skeleton } from './components/ui.tsx';
+import { Splash } from './components/Splash.tsx';
+import { useNumberFade } from './components/motion.ts';
 import { Login, NewPassword } from './screens/Login.tsx';
 import { Onboarding } from './screens/Onboarding.tsx';
 import { Home } from './screens/Home.tsx';
@@ -105,6 +107,10 @@ export default function App() {
   }, [source, reload]);
 
   const { pull, busy } = usePullToRefresh(reload);
+  // The branded splash covers only the very first data load, then fades out as the screen renders under it.
+  const [splash, setSplash] = useState(true);
+  const hideSplash = useCallback(() => setSplash(false), []);
+  const numberFade = useNumberFade();
   const go = (r: Route) => { location.hash = `/${r}`; };
   const startDemo = () => { store.set('psx-demo', '1'); setDemo(true); };
   const exitDemo = () => {
@@ -117,13 +123,13 @@ export default function App() {
     return <Onboarding onSkip={() => { store.set('psx-ios-onboarded', '1'); setOnboarded(true); }} />;
   }
   if (recovering) return <NewPassword onDone={() => setRecovering(false)} />;
-  if (!authReady) return <Loading />;
+  if (!authReady) return <Splash />;
   if (!source) return <Login onDemo={startDemo} />;
 
   const props = data ? { data, source, reload, go } : null;
   return (
     <ToastProvider>
-      <div className="mx-auto flex min-h-dvh max-w-md flex-col">
+      <div ref={numberFade} className="mx-auto flex min-h-dvh max-w-md flex-col">
         {demo && (
           <div className="safe-top bg-amber-100 px-4 py-2 text-center text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200">
             Demo with your seed portfolio and PSX prices from Oct 5. <button className="cursor-pointer font-semibold underline" onClick={exitDemo}>Sign in</button>
@@ -134,14 +140,14 @@ export default function App() {
             <Icon name="refresh" className="h-4 w-4 text-teal-600" />
           </span>
         </div>
-        <main key={route} className={`flex-1 animate-rise space-y-4 px-4 pb-24 ${demo ? 'pt-3' : 'safe-top pt-3'}`}>
+        <main key={route} className={`stagger flex-1 space-y-4 px-4 pb-24 ${demo ? 'pt-3' : 'safe-top pt-3'}`}>
           {error && !data && (
             <div className="space-y-3 pt-10 text-center">
               <p className="text-sm text-rose-700 dark:text-rose-400">Couldn't load your data: {error}</p>
               <button className="cursor-pointer text-sm font-semibold text-teal-700 underline" onClick={reload}>Try again</button>
             </div>
           )}
-          {!props && !error && <ScreenSkeleton />}
+          {!props && !error && !splash && <ScreenSkeleton />}
           {props && route === 'home' && <Home {...props} />}
           {props && route === 'portfolio' && <Portfolio {...props} />}
           {props && route === 'discover' && <Discover {...props} />}
@@ -149,6 +155,7 @@ export default function App() {
           {props && route === 'profile' && <Profile {...props} onExitDemo={exitDemo} />}
         </main>
         <TabBar route={route} go={go} unread={data ? countNew(data) : 0} />
+        {splash && <Splash leaving={!!data || !!error} onGone={hideSplash} />}
       </div>
     </ToastProvider>
   );
@@ -160,13 +167,9 @@ function countNew(d: AppData) {
   return d.alerts.filter((a) => Date.parse(a.sent_at) > since && a.channel !== 'none').length;
 }
 
-function Loading() {
-  return <div className="flex min-h-dvh items-center justify-center"><div className="h-8 w-8 animate-spin rounded-full border-2 border-teal-700 border-t-transparent" aria-label="Loading" /></div>;
-}
-
 function ScreenSkeleton() {
   return (
-    <div className="space-y-4 pt-2" aria-label="Loading">
+    <div className="skeleton-in space-y-4 pt-2" aria-label="Loading">
       <Skeleton className="h-8 w-40" />
       <Skeleton className="h-32 w-full rounded-3xl" />
       <div className="flex gap-3">{[0, 1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-12 w-12 rounded-full" />)}</div>
@@ -186,13 +189,17 @@ const TABS: { route: Route; label: string; icon: IconName }[] = [
 function TabBar({ route, go, unread }: { route: Route; go: (r: Route) => void; unread: number }) {
   return (
     <nav className="safe-bottom fixed inset-x-0 bottom-0 z-30 border-t border-slate-200/80 bg-white/90 backdrop-blur-xl dark:border-slate-800 dark:bg-black/85">
-      <ul className="mx-auto flex max-w-md">
+      <ul className="relative mx-auto flex max-w-md">
+        <li aria-hidden="true" className="slide-indicator pointer-events-none absolute top-0 left-0 flex w-1/5 justify-center"
+          style={{ transform: `translateX(${Math.max(0, TABS.findIndex((t) => t.route === route)) * 100}%)` }}>
+          <span className="h-0.5 w-8 rounded-full bg-teal-600 dark:bg-teal-400" />
+        </li>
         {TABS.map((t) => {
           const active = route === t.route;
           return (
             <li key={t.route} className="flex-1">
               <button type="button" onClick={() => { haptic(); go(t.route); }} aria-current={active ? 'page' : undefined}
-                className={`relative flex min-h-14 w-full cursor-pointer flex-col items-center justify-center gap-0.5 text-[11px] font-medium transition active:scale-90 ${active ? 'text-slate-900 dark:text-white' : 'text-slate-400 dark:text-slate-500'}`}>
+                className={`press relative flex min-h-14 w-full cursor-pointer flex-col items-center justify-center gap-0.5 text-[11px] font-medium ${active ? 'text-slate-900 dark:text-white' : 'text-slate-400 dark:text-slate-500'}`}>
                 <Icon name={t.icon} className={`h-6 w-6 ${active ? 'stroke-[2.4]' : ''}`} />
                 {t.label}
                 {t.route === 'news' && unread > 0 && !active && <span className="absolute top-2 left-1/2 ml-2 h-2 w-2 rounded-full bg-rose-500" aria-label={`${unread} new`} />}
