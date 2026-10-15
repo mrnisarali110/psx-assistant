@@ -33,6 +33,13 @@ const PATHS = {
   shield: 'M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z',
   info: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 11v5M12 8v.5',
   logout: 'M15 4h3a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-3M10 16l-4-4 4-4M6 12h10',
+  receipt: 'M6 3h12v18l-3-2-3 2-3-2-3 2zM9 8h6M9 12h6M9 16h4',
+  target: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM12 12h.01',
+  chart: 'M4 19V5M4 19h16M8 15l3-4 3 2 5-6',
+  tag: 'M3 12l9 9 9-9-9-9H3zM8 8h.01',
+  flag: 'M5 21V4M5 4h11l-2 4 2 4H5',
+  list: 'M4 6h16M4 12h16M4 18h16',
+  upload: 'M12 16V4M7 9l5-5 5 5M4 20h16',
 } as const;
 
 export type IconName = keyof typeof PATHS;

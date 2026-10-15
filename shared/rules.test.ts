@@ -78,11 +78,22 @@ describe('portfolio', () => {
     expect(mergeCall(row('EFERT', v), ai, SEED_SETTINGS).source).toBe('rules');
   });
 
-  it('suggests rebalancing over-cap stocks and heavy sectors', () => {
+  it('suggests rebalancing over-cap stocks and heavy sectors, with the sector cap from your settings', () => {
     const holdings = SEED_HOLDINGS.map((h) => (h.symbol === 'MEBL' ? { ...h, shares: 60 } : h));
     const v = buildPortfolio(holdings, SEED_PRICES, SEED_SETTINGS);
     expect(v.rebalance.map((t) => `${t.kind}:${t.name}`)).toEqual(expect.arrayContaining(['position:MEBL', 'sector:COMMERCIAL BANKS']));
-    expect(view().rebalance).toEqual([]);
+    expect(view().rebalance).toEqual([]); // 35% sector limit: banks at 31% are fine
+    // The default 30% cap flags the banks and blocks new money into them (the AI cannot override it either).
+    const tight = buildPortfolio(SEED_HOLDINGS, SEED_PRICES, DEFAULT_SETTINGS);
+    expect(tight.sector_limit_pct).toBe(30);
+    expect(tight.rebalance.map((t) => t.kind)).toEqual(['sector']);
+    expect(tight.rebalance[0].text).toMatch(/Commercial Banks is 31% of your money \(your sector cap is 30%\)/);
+    const mebl = tight.rows.find((r) => r.holding.symbol === 'MEBL')!;
+    expect(mebl.flags.over_sector).toBe(true);
+    expect(mebl.sector_pct!).toBeGreaterThan(30);
+    expect(mebl.call).toMatchObject({ call: 'hold' });
+    expect(mebl.call.text).toMatch(/sector at cap/);
+    expect(mergeCall(mebl, { holding_calls: [{ symbol: 'MEBL', call: 'opportunity', text: 'cheap' }] } as AiInsight, DEFAULT_SETTINGS).source).toBe('rules');
   });
 
   it('builds at most 6 donut slices, biggest first, rest as Other', () => {
@@ -91,6 +102,42 @@ describe('portfolio', () => {
     expect(s[0].label).toBe('SYS');
     expect(s[5].label).toBe('Other (3)');
     expect(s.reduce((a, x) => a + x.pct, 0)).toBeCloseTo(100, 6);
+  });
+});
+
+describe('sell, trim and review rules', () => {
+  const screen = SEED_PRICES; // sector P/Es come from the KSE-100 screen; here a hand-made map
+  it('marks Trim at the target price, when the P/E runs far ahead of the sector, and on a dividend cut; Review when the review date arrives', () => {
+    const sectorPe = { 'TECHNOLOGY & COMMUNICATION': 15, 'COMMERCIAL BANKS': 10 }; // MEBL's 10.8 is only 8% above 10: no P/E trim
+    const holdings: Holding[] = SEED_HOLDINGS.map((h) =>
+      h.symbol === 'DCR' ? { ...h, target_price: 38 } // price 38.76 >= 38
+        : h.symbol === 'UBL' ? { ...h, review_on: '2026-10-01' }
+          : h);
+    const divs: DividendEvent[] = [
+      { id: 'm2', symbol: 'MEBL', announced_on: '2026-09-01', dps: 3, dividend_type: 'interim', book_closure_from: null, book_closure_to: null, verified: true, pdf_url: null },
+      { id: 'm1', symbol: 'MEBL', announced_on: '2026-06-01', dps: 4, dividend_type: 'interim', book_closure_from: null, book_closure_to: null, verified: true, pdf_url: null },
+    ];
+    const v = buildPortfolio(holdings, screen, SEED_SETTINGS, DEFAULT_RULES, {}, { today: TODAY, sectorPe, dividends: divs });
+    const call = (s: string) => v.rows.find((r) => r.holding.symbol === s)!.call;
+    expect(call('DCR')).toMatchObject({ call: 'trim' });
+    expect(call('DCR').text).toMatch(/target price of Rs 38\.00/);
+    expect(call('SYS')).toMatchObject({ call: 'trim' }); // P/E 22.7 is 52% above the sector's 15 (rule: 30%)
+    expect(call('SYS').text).toMatch(/P\/E 22\.7 is 52% above its sector's 15\.0/); // rule: 50%
+    expect(call('MEBL')).toMatchObject({ call: 'trim' });
+    expect(call('MEBL').text).toBe('Dividend cut: Rs 3 vs Rs 4 before');
+    expect(call('UBL')).toMatchObject({ call: 'review' });
+    expect(call('UBL').text).toMatch(/Review date reached/);
+    // Each trigger is a setting: off, and the calls fall back to the price rules.
+    const off = buildPortfolio(holdings, screen, { ...SEED_SETTINGS, trim_pe_over_sector_pct: 0, trim_on_dividend_cut: false }, DEFAULT_RULES, {}, { today: TODAY, sectorPe, dividends: divs });
+    expect(off.rows.find((r) => r.holding.symbol === 'SYS')!.call.call).toBe('opportunity');
+    expect(off.rows.find((r) => r.holding.symbol === 'MEBL')!.call.call).toBe('average_down');
+    // The AI cannot talk a Trim or Review back into a buy.
+    const ai = { holding_calls: [{ symbol: 'DCR', call: 'opportunity', text: 'cheap' }] } as AiInsight;
+    expect(mergeCall(v.rows.find((r) => r.holding.symbol === 'DCR')!, ai, SEED_SETTINGS).call).toBe('trim');
+    // Alerts: a trim is a market alert once a week; a review date a digest item.
+    const alerts = holdingAlerts(v, SEED_SETTINGS, TODAY, null, () => null);
+    expect(alerts.find((a) => a.kind === 'trim' && a.symbol === 'DCR')?.message).toMatch(/Plan the sale/);
+    expect(alerts.find((a) => a.kind === 'review_due' && a.symbol === 'UBL')?.level).toBe('digest');
   });
 });
 
@@ -204,12 +251,13 @@ describe('discover', () => {
     expect(dividendLeaders(screen, events, TODAY, { shariahOnly: true }).map((x) => x.symbol)).not.toContain('BANKD');
   });
 
-  it('lists upcoming dividends with the last day to buy (book closure minus 3 working days)', () => {
+  it('lists upcoming dividends with the last day to buy (book closure minus 2 working days under T+1)', () => {
     expect(workingDaysBefore('2026-10-20', 3)).toBe('2026-10-15'); // Tue -> previous Thu
     expect(workingDaysBefore('2026-10-12', 3)).toBe('2026-10-07'); // Mon -> previous Wed
+    expect(DEFAULT_RULES.dividends.buy_by_working_days).toBe(2); // T+1 settlement since 2026-02-09
     const up = upcomingDividends(events, TODAY);
-    expect(up.map((x) => `${x.symbol}:${x.buy_by}`)).toEqual(['BANKB:2026-10-06', 'BANKA:2026-10-15']);
-    expect(up[0].days_left).toBe(0);
+    expect(up.map((x) => `${x.symbol}:${x.buy_by}`)).toEqual(['BANKB:2026-10-07', 'BANKA:2026-10-16']); // Fri 9 Oct -> Wed; Tue 20 Oct -> Fri
+    expect(up[0].days_left).toBe(1);
   });
 });
 

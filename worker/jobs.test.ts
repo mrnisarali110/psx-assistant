@@ -5,8 +5,8 @@ import { ConsoleNotifier } from './notify.ts';
 import { MemoryStore, type UserCtx } from './store.ts';
 import type { Snapshot } from './feed.ts';
 import type { LlmRouter } from '../shared/llm.ts';
-import { DEFAULT_SETTINGS, type Announcement } from '../shared/types.ts';
-import { SEED_HOLDINGS, SEED_INDEX, SEED_PRICES, SEED_SCREEN, SEED_WATCHLIST } from '../shared/fixtures/seed.ts';
+import type { Announcement } from '../shared/types.ts';
+import { SEED_HOLDINGS, SEED_INDEX, SEED_PRICES, SEED_SCREEN, SEED_SETTINGS, SEED_WATCHLIST } from '../shared/fixtures/seed.ts';
 
 const quiet = () => {};
 const MON_1230 = new Date('2026-10-05T07:30:00Z'); // market hours
@@ -15,7 +15,7 @@ const MON_2100 = new Date('2026-10-05T16:00:00Z'); // night digest
 const AS_OF = '2026-10-05T10:49:00.000Z';
 
 const owner = (ai = true): UserCtx => ({
-  id: 'owner-1', settings: { ...DEFAULT_SETTINGS, ai_enabled: ai }, holdings: SEED_HOLDINGS, watchlist: SEED_WATCHLIST,
+  id: 'owner-1', settings: { ...SEED_SETTINGS, ai_enabled: ai, trim_pe_over_sector_pct: 0 }, holdings: SEED_HOLDINGS, watchlist: SEED_WATCHLIST, // P/E trim off: these tests are about the price rules
   telegram_chat_id: null, subs: [{ id: 's1', endpoint: 'https://push.example/1', p256dh: 'k', auth: 'a' }],
 });
 
@@ -23,7 +23,7 @@ const filing: Announcement = { id: 'psx-doc-1', symbol: 'MEBL', title: 'Financia
 
 function snap(changePct = -1.36, asOf = AS_OF, symbols?: string[]): Snapshot {
   const screener = Object.fromEntries(SEED_SCREEN.map((r) => [r.symbol, {
-    symbol: r.symbol, sector_code: '', sector: r.sector, listed_in: ['KSE100', ...(r.is_shariah ? ['KMIALLSHR'] : [])], price: r.price,
+    symbol: r.symbol, ex: null, sector_code: '', sector: r.sector, listed_in: ['KSE100', ...(r.is_shariah ? ['KMIALLSHR'] : [])], price: r.price,
     change_pct: r.change_pct, change_1y_pct: r.change_1y_pct ?? null, pe: r.pe, dividend_yield_pct: r.dividend_yield_pct, market_cap: r.market_cap,
   }]));
   const quotes = Object.fromEntries(Object.values(SEED_PRICES).filter((p) => !symbols || symbols.includes(p.symbol)).map((p) => [p.symbol, {
@@ -33,15 +33,16 @@ function snap(changePct = -1.36, asOf = AS_OF, symbols?: string[]): Snapshot {
 }
 const broken = async (): Promise<Snapshot> => ({ fetched_at: '', indices: {}, quotes: {}, screener: {}, errors: ['GET / failed: HTTP 503'] });
 
-/** Canned AI: dividend from the filing, an insight, and picks. `fail` makes every call throw. */
-function fakeAi(fail = false): LlmRouter & { calls: string[] } {
+/** Canned AI: dividend from the filing, an insight, and picks. `fail` makes every call throw; `oldNotice` makes the filing read like a 2020 re-upload. */
+function fakeAi(fail = false, oldNotice = false): LlmRouter & { calls: string[] } {
   const calls: string[] = [];
   return {
     available: true, calls,
     async json(task: string, system: string, parts: any[]) {
       calls.push(task);
       if (fail) throw new Error('AI unavailable: 429');
-      if (task === 'pdf') return { model: 'fake', data: { summary: 'MEBL profit up; interim dividend Rs 7.', figures: [], cash_dividend_per_share: 7, dividend_type: 'interim', book_closure_from: '2026-10-20', book_closure_to: '2026-10-22' } };
+      if (task === 'pdf' && oldNotice) return { model: 'fake', data: { summary: 'Board meeting held on September 30, 2020 approved an interim dividend.', figures: [{ label: 'Meeting date', value: 'September 30, 2020' }], cash_dividend_per_share: 7, dividend_type: 'interim', book_closure_from: '2020-10-20', book_closure_to: '2020-10-22' } };
+      if (task === 'pdf') return { model: 'fake', data: { summary: 'MEBL profit up; interim dividend Rs 7.', figures: [], cash_dividend_per_share: 7, dividend_type: 'interim', book_closure_from: '2026-10-19', book_closure_to: '2026-10-21' } };
       if (system.includes('cautious assistant')) return { model: 'fake', data: {
         headline: 'Banks are cheap versus your last buys.', stance: 'buy',
         holding_calls: [{ symbol: 'UBL', call: 'opportunity', text: 'UBL 6.5% below your last buy' }],
@@ -144,10 +145,17 @@ describe('AI in the market job', () => {
     const r = await runJob('market', deps(store, n, MON_1230, { ai, fetchPdf: async () => new Uint8Array([1]) }));
     expect(r.ai).toMatchObject({ announcements_read: 1, dividends: 1, insights: 1 });
     expect(store.insights[0]).toMatchObject({ stance: 'buy', job: 'market' });
-    expect(store.divs[0]).toMatchObject({ symbol: 'MEBL', dps: 7, book_closure_from: '2026-10-20' });
+    expect(store.divs[0]).toMatchObject({ symbol: 'MEBL', dps: 7, book_closure_from: '2026-10-19' });
     const alerts = n.sent.flatMap((s) => s.n.alerts);
     expect(alerts.find((a) => a.kind === 'ai_suggestion')?.message).toMatch(/^AI Assistant suggests: Add MEBL/);
     expect(alerts.find((a) => a.kind === 'buy_chance' && a.symbol === 'UBL')?.title).toBe('Opportunity: UBL'); // AI upgraded it
+  });
+
+  it('drops book closure dates that cannot belong to the filing and flags an old notice (ISSUE-06)', async () => {
+    const store = new MemoryStore([owner()], () => MON_1230);
+    await runJob('market', deps(store, new ConsoleNotifier(quiet), MON_1230, { ai: fakeAi(false, true), fetchPdf: async () => new Uint8Array([1]) }));
+    expect(store.divs[0]).toMatchObject({ symbol: 'MEBL', dps: 7, book_closure_from: null, book_closure_to: null }); // 2020 dates on a 2026-10-05 filing
+    expect(store.announcements[0].ai_date_note).toBe('older_document');
   });
 
   it('refreshes the insight every few hours, not every run, and always before the close', async () => {
@@ -190,7 +198,10 @@ describe('night job', () => {
     expect(d.title).toMatch(/^Tonight: KSE-100 -1\.4%/);
     expect(d.alerts.map((a) => a.kind)).toEqual(expect.arrayContaining(['night_digest', 'announcement_results', 'dividend_upcoming']));
     expect(d.alerts.find((a) => a.kind === 'announcement_results')?.message).toBe('MEBL: MEBL profit up; interim dividend Rs 7.');
-    expect(d.alerts.find((a) => a.kind === 'dividend_upcoming')?.message).toMatch(/buy by 2026-10-15/);
+    expect(d.alerts.find((a) => a.kind === 'dividend_upcoming')?.message).toMatch(/buy by 2026-10-15/); // Mon 19 Oct book closure, T+1: Thu 15 Oct
+    expect(store.portfolioDays).toHaveLength(1); // one value per trading day for the Performance chart
+    expect(store.portfolioDays[0]).toMatchObject({ user_id: 'owner-1', day: '2026-10-05' });
+    expect(store.indexDays).toEqual([{ day: '2026-10-05', close: SEED_INDEX.kse100 }]);
     expect(store.alerts.some((a) => a.kind === 'buy_chance')).toBe(false); // buying chances are for market hours
     await runJob('night', deps(store, n, new Date('2026-10-05T16:30:00Z'), { fetchSnapshot: async () => snap() }));
     expect(n.sent).toHaveLength(1); // nothing repeats

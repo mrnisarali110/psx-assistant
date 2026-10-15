@@ -71,8 +71,8 @@ async function aiCheck(): Promise<number> {
     .sort((a, b) => (b.title.match(/dividend|result/i) ? 1 : 0) - (a.title.match(/dividend|result/i) ? 1 : 0) || b.published_at.localeCompare(a.published_at))[0];
   if (ann) {
     try {
-      const d = await readAnnouncement(ai, await fetcher.getBytes(ann.pdf_url!), { symbol: ann.symbol, title: ann.title });
-      console.log(`\n== Filing: ${ann.symbol} ${ann.published_at} "${ann.title}"\nmodel=${d.model} verified=${d.verified}\n${d.summary}`);
+      const d = await readAnnouncement(ai, await fetcher.getBytes(ann.pdf_url!), { symbol: ann.symbol, title: ann.title, published_at: ann.published_at });
+      console.log(`\n== Filing: ${ann.symbol} ${ann.published_at} "${ann.title}"\nmodel=${d.model} verified=${d.verified}${d.date_note ? ` dates=${d.date_note}` : ''}\n${d.summary}`);
       for (const f of d.figures) console.log(`  ${f.verified ? '✓' : '?'} ${f.label}: ${f.value}`);
       if (d.dividend) console.log(`  dividend: Rs ${d.dividend.dps} ${d.dividend.type ?? ''} book closure ${d.dividend.book_closure_from ?? '?'} verified=${d.dividend.verified}`);
     } catch (e) { ok = false; console.error('filing read failed:', (e as Error).message); }

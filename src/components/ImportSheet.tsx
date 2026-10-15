@@ -9,6 +9,8 @@ import type { Holding, PriceMap } from '../../shared/types.ts';
 import type { SectorMap } from '../../shared/portfolio.ts';
 import { asOfLabel, rs } from '../../shared/format.ts';
 import { pktDate } from '../../shared/time.ts';
+import { screenShariah } from '../../shared/portfolio.ts';
+import type { ScreenRow } from '../../shared/discover.ts';
 import type { DataSource } from '../lib/data.ts';
 import type { AiStatus } from '../lib/importer.ts';
 import { Icon } from './Icon.tsx';
@@ -46,14 +48,16 @@ export function aiStatusLine(st: AiStatus): { tone: 'ok' | 'warn'; text: string 
   return null;
 }
 
-export function ImportSheet({ open, onClose, source, holdings, prices, sectors = {}, onApplied }: {
-  open: boolean; onClose: () => void; source: DataSource; holdings: Holding[]; prices: PriceMap; sectors?: SectorMap; onApplied: (summary: string) => void;
+export function ImportSheet({ open, onClose, source, holdings, prices, sectors = {}, screen = [], onApplied }: {
+  open: boolean; onClose: () => void; source: DataSource; holdings: Holding[]; prices: PriceMap; sectors?: SectorMap; screen?: ScreenRow[]; onApplied: (summary: string) => void;
 }) {
   const [step, setStep] = useState<'pick' | 'reading' | 'review' | 'saving'>('pick');
   const [rows, setRows] = useState<ImportedRow[]>([]);
   const [dropped, setDropped] = useState<string[]>([]);
   const [ticked, setTicked] = useState<Set<string>>(new Set());
   const [recordTxns, setRecordTxns] = useState(holdings.length > 0); // first import = baseline, not new buys
+  const [tradeDate, setTradeDate] = useState(() => pktDate(new Date())); // screenshots carry no dates: the day of the trades, if not today
+  const shariah = useMemo(() => screenShariah(screen), [screen]);
   const [error, setError] = useState<string | null>(null);
   const [detail, setDetail] = useState<string | null>(null); // which provider failed how, from the server
   const [status, setStatus] = useState<AiStatus | null>(null);
@@ -67,7 +71,7 @@ export function ImportSheet({ open, onClose, source, holdings, prices, sectors =
     return () => { on = false; };
   }, [open, source]);
 
-  const changes = useMemo(() => diffImport(holdings, rows, pktDate(new Date()), prices, { removeMissing: true, recordTxns, sectors }), [holdings, rows, prices, recordTxns, sectors]);
+  const changes = useMemo(() => diffImport(holdings, rows, tradeDate || pktDate(new Date()), prices, { removeMissing: true, recordTxns, sectors, shariah }), [holdings, rows, prices, recordTxns, sectors, shariah, tradeDate]);
   const shown = changes.filter((c) => c.kind !== 'same');
   const actionable = shown.filter((c) => ticked.has(c.symbol));
   const unchanged = changes.length - shown.length;
@@ -86,7 +90,7 @@ export function ImportSheet({ open, onClose, source, holdings, prices, sectors =
       setRows(r.holdings);
       setDropped(r.dropped);
       // New and changed rows start ticked; a holding missing from the pictures is kept unless you say it was sold.
-      const first = diffImport(holdings, r.holdings, pktDate(new Date()), prices, { removeMissing: true, recordTxns, sectors });
+      const first = diffImport(holdings, r.holdings, tradeDate, prices, { removeMissing: true, recordTxns, sectors, shariah });
       setTicked(new Set(first.filter((c) => c.kind === 'new' || c.kind === 'changed').map((c) => c.symbol)));
       setStep('review');
     } catch (e) {
@@ -179,9 +183,15 @@ export function ImportSheet({ open, onClose, source, holdings, prices, sectors =
             </p>
             {dropped.length > 0 && <p className="text-xs text-amber-700 dark:text-amber-400">Couldn’t read {dropped.length} row{dropped.length > 1 ? 's' : ''}; add {dropped.length > 1 ? 'them' : 'it'} by hand if needed.</p>}
             <div className="flex items-center justify-between gap-3">
-              <span className="text-sm">Count changes as buys/sells this month<span className="block text-xs text-slate-500 dark:text-slate-400">Turn off for a first import of what you already own.</span></span>
+              <span className="text-sm">Count changes as buys/sells<span className="block text-xs text-slate-500 dark:text-slate-400">Turn off for a first import of what you already own.</span></span>
               <Toggle checked={recordTxns} onChange={setRecordTxns} label="Record transactions" />
             </div>
+            {recordTxns && actionable.some((c) => c.txn) && (
+              <label className="flex items-center justify-between gap-3 text-sm">
+                <span>Trade date<span className="block text-xs text-slate-500 dark:text-slate-400">Screenshots carry no dates; set the day you traded for returns and tax.</span></span>
+                <input type="date" aria-label="Trade date" value={tradeDate} max={pktDate(new Date())} onChange={(e) => setTradeDate(e.target.value)} className="min-h-11 w-40 rounded-2xl border border-slate-300 bg-white px-2 text-base dark:border-slate-700 dark:bg-slate-950" />
+              </label>
+            )}
             <ErrorNote error={error} />
             <div className="flex gap-2">
               <Button kind="secondary" className="flex-1" onClick={reset}>Start over</Button>

@@ -6,7 +6,7 @@
     "crash_fund_deploy_fraction": 0.5
   },
   "holding": {
-    "sector_limit_pct": 35,
+    "sector_limit_pct": 30,
     "big_move_pct": 5,
     "average_down_pct": 5,
     "repeat_days": 7
@@ -18,12 +18,18 @@
     "max_pe": 10,
     "sector_discount": 0.8,
     "min_dividend_yield_pct": 2,
-    "candidates": 10
+    "candidates": 10,
+    "pe_outlier_min": 2,
+    "pe_outlier_max": 100
   },
   "dividends": {
     "min_yield_pct": 6,
     "candidates": 12,
-    "buy_by_working_days": 3
+    "buy_by_working_days": 2,
+    "settlement_note": "T+1 since 2026-02-09: shares must settle before book closure starts, so the last day to buy is 2 working days before it. Confirm once with the broker.",
+    "special_yield_hint_pct": 12,
+    "special_multiple_of_median": 2,
+    "frequency_filings": 8
   },
   "ai": {
     "announcements_per_market_run": 3,
@@ -31,16 +37,138 @@
     "announcement_max_age_days": 400,
     "insight_every_minutes": 150,
     "fresh_hours": 20,
-    "max_users_per_run": 25
+    "max_users_per_run": 25,
+    "date_sanity": {
+      "max_days_before_filing": 90,
+      "max_days_after_filing": 365
+    }
   },
   "data": {
     "stale_minutes": 30
   },
   "market_hours_pkt": {
     "source": "https://www.psx.com.pk/psx/exchange/general/trading-hours (checked 2026-10-06; Ramadan hours differ)",
-    "mon_thu": [["09:15", "15:50"]],
-    "fri": [["09:00", "12:00"], ["14:15", "16:50"]],
+    "mon_thu": [
+      [
+        "09:15",
+        "15:50"
+      ]
+    ],
+    "fri": [
+      [
+        "09:00",
+        "12:00"
+      ],
+      [
+        "14:15",
+        "16:50"
+      ]
+    ],
     "close_mon_thu": "15:30",
     "close_fri": "16:30"
+  },
+  "costs": {
+    "source": "PSX notice N-1026 (brokerage minimum, trading fee, SECP levy), researched 2026-10-15. Every rate is a setting; VERIFY against a JS InvestPro contract note.",
+    "commission_pct": 0.15,
+    "min_commission_per_share": 0.03,
+    "sales_tax_pct": 15,
+    "psx_fee_pct": 0.0035,
+    "secp_levy_pct": 0.00065,
+    "cdc_per_share": 0.005,
+    "round_trip_warn_pct": 0.6
+  },
+  "tax": {
+    "source": "Section 37A (CGT, collected monthly by NCCPL, FIFO, netted across stocks per tax year 1 Jul-30 Jun) and Section 150 (dividend WHT), researched 2026-10-15. VERIFY the non-filer CGT rate from 1 Jul 2026 and the WHT rate for power companies.",
+    "tax_year_start_month": 7,
+    "loss_carry_forward_years": 3,
+    "cgt": [
+      {
+        "bought_from": "0001-01-01",
+        "bought_to": "2013-06-30",
+        "filer_pct": 0,
+        "non_filer_pct": 0
+      },
+      {
+        "bought_from": "2013-07-01",
+        "bought_to": "2022-06-30",
+        "filer_pct": 12.5,
+        "non_filer_pct": 25
+      },
+      {
+        "bought_from": "2022-07-01",
+        "bought_to": "2024-06-30",
+        "by_holding_years": true,
+        "filer_slab_pct": [
+          15,
+          12.5,
+          10,
+          7.5,
+          5,
+          2.5,
+          0
+        ],
+        "non_filer_slab_pct": [
+          15,
+          12.5,
+          10,
+          7.5,
+          5,
+          2.5,
+          0
+        ],
+        "note": "slab index = full years held (0 = under a year); non-filer slab not confirmed, VERIFY"
+      },
+      {
+        "bought_from": "2024-07-01",
+        "bought_to": "2025-06-30",
+        "filer_pct": 15,
+        "non_filer_pct": 30
+      },
+      {
+        "bought_from": "2025-07-01",
+        "bought_to": "9999-12-31",
+        "filer_pct": 15,
+        "non_filer_pct": 15,
+        "note": "non-filer may have doubled from 1 Jul 2026: VERIFY on nccpl.com.pk/cgt"
+      }
+    ],
+    "dividend_wht": {
+      "default": {
+        "filer_pct": 15,
+        "non_filer_pct": 30
+      },
+      "power": {
+        "filer_pct": 7.5,
+        "non_filer_pct": 15,
+        "sectors": [
+          "POWER GENERATION & DISTRIBUTION"
+        ],
+        "note": "per company, VERIFY on a dividend credit advice"
+      },
+      "reit": {
+        "filer_pct": 15,
+        "non_filer_pct": 30,
+        "sectors": [
+          "REAL ESTATE INVESTMENT TRUST"
+        ]
+      }
+    }
+  },
+  "psx_holidays": {
+    "source": "Fixed national holidays only. Eid, Ashura and other lunar holidays must be added when PSX announces them; days with a KSE-100 close in index_daily count as traded regardless.",
+    "dates": [
+      "2026-02-05",
+      "2026-03-23",
+      "2026-05-01",
+      "2026-08-14",
+      "2026-11-09",
+      "2026-12-25",
+      "2027-02-05",
+      "2027-03-23",
+      "2027-05-01",
+      "2027-08-14",
+      "2027-11-09",
+      "2027-12-25"
+    ]
   }
 }

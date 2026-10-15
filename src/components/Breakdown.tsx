@@ -6,7 +6,6 @@
 import { useMemo, useState } from 'react';
 import { sectorBreakdown, type PortfolioView } from '../../shared/portfolio.ts';
 import { pct, rs } from '../../shared/format.ts';
-import { DEFAULT_RULES } from '../../shared/types.ts';
 import { haptic } from '../lib/gestures.ts';
 import { SLICE_COLORS } from './Donut.tsx';
 import { Icon } from './Icon.tsx';
@@ -18,7 +17,7 @@ export function BreakdownSheet({ open, onClose, view, onOpenStock }: {
 }) {
   const groups = useMemo(() => sectorBreakdown(view), [view]);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const limit = DEFAULT_RULES.holding.sector_limit_pct;
+  const limit = view.sector_limit_pct;
   const toggle = (sector: string) => {
     haptic();
     setCollapsed((c) => { const n = new Set(c); if (n.has(sector)) n.delete(sector); else n.add(sector); return n; });

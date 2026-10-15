@@ -23,6 +23,8 @@ begin
   insert into public.holdings (symbol, shares, avg_cost, status) values ('SYS', 10, 100, 'core');
   insert into public.watchlist (symbol) values ('MARI');
   insert into public.recommendations (amount_pkr, payload) values (50000, '[]');
+  insert into public.transactions (symbol, side, shares, price, amount) values ('SYS', 'buy', 10, 100, 1000);
+  insert into public.dividend_receipts (symbol, paid_on, shares, dps, gross, wht_pct, net) values ('SYS', current_date, 10, 2, 20, 15, 17);
   reset role;
 
   -- ---- user B tries to see / change A's data ---------------------------
@@ -32,6 +34,11 @@ begin
   select count(*) into n from public.holdings;        if n <> 0 then fails := fails || format('B sees %s holdings of A', n); end if;
   select count(*) into n from public.watchlist;       if n <> 0 then fails := fails || 'B sees A''s watchlist'; end if;
   select count(*) into n from public.recommendations; if n <> 0 then fails := fails || 'B sees A''s recommendations'; end if;
+  select count(*) into n from public.transactions;    if n <> 0 then fails := fails || 'B sees A''s transactions'; end if;
+  select count(*) into n from public.dividend_receipts; if n <> 0 then fails := fails || 'B sees A''s dividends'; end if;
+  select count(*) into n from public.portfolio_daily; if n <> 0 then fails := fails || 'B sees A''s daily values'; end if;
+  update public.transactions set shares = 999 where user_id = a;
+  get diagnostics n = row_count; if n <> 0 then fails := fails || 'B updated A''s transaction'; end if;
   select count(*) into n from public.settings;        if n <> 1 then fails := fails || format('B sees %s settings rows', n); end if;
   select count(*) into n from public.profiles;        if n <> 1 then fails := fails || format('B sees %s profiles', n); end if;
 
@@ -55,6 +62,16 @@ begin
   begin
     insert into public.prices (symbol, price) values ('FAKE', 1);
     fails := fails || 'signed-in user can write prices';
+  exception when insufficient_privilege then null; end;
+
+  begin
+    insert into public.index_daily (day, close) values (current_date, 1);
+    fails := fails || 'signed-in user can write index_daily';
+  exception when insufficient_privilege then null; end;
+
+  begin
+    insert into public.portfolio_daily (user_id, day, value, invested) values (b, current_date, 1, 1);
+    fails := fails || 'signed-in user can write portfolio_daily';
   exception when insufficient_privilege then null; end;
 
   begin
@@ -92,4 +109,4 @@ begin
   end if;
 end $$;
 
-select 'RLS test passed: user B cannot read or change user A''s data, users cannot write market data, anonymous visitors see nothing' as result;
+select 'RLS test passed: user B cannot read or change user A''s data (holdings, transactions, dividends, daily values), users cannot write market data, anonymous visitors see nothing' as result;

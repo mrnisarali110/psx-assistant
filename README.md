@@ -21,7 +21,7 @@ Running cost: Rs 0 (free tiers of Supabase, GitHub Actions, Cloudflare Workers, 
 
 | Folder | What |
 | --- | --- |
-| `shared/` | Pure logic used by app and worker: portfolio + per-holding calls (`portfolio.ts`), transactions + screenshot diff (`changes.ts`), Discover screens and dividends (`discover.ts`), alerts and delivery (`signals.ts`), wealth projection (`growth.ts`), AI router (`llm.ts`), `rules.json`. Tested. |
+| `shared/` | Pure logic used by app and worker: portfolio, caps and sell/trim/review rules (`portfolio.ts`), transactions + screenshot diff (`changes.ts`), Discover screens and dividends (`discover.ts`), data trust (`quality.ts`), PSX symbol markers (`symbols.ts`), trading costs (`costs.ts`), FIFO lots, CGT ledger and Sell Planner (`tax.ts`), total return, XIRR, KSE-100 benchmark and dividends (`performance.ts`), trading days, buy-by dates, "this week" and filing-date sanity (`calendar.ts`), CSV import (`transactions-csv.ts`), alerts and delivery (`signals.ts`), wealth projection (`growth.ts`), AI router (`llm.ts`), `rules.json` (every rate and threshold). Tested. |
 | `worker/` | PSX feed (HTML parsing), jobs, AI tasks with guardrails (`ai.ts`), Supabase store, Web Push + Telegram. |
 | `edge/` | Cloudflare Worker: serves the app, plus `POST /api/import` (reads broker screenshots with AI; never stores them) and `GET /api/ai-status` (which AI keys are ready; free checks). |
 | `src/` | The app: Home, Portfolio, Discover, News, Profile. Hash routes like `/#/discover`. |
@@ -30,29 +30,46 @@ Running cost: Rs 0 (free tiers of Supabase, GitHub Actions, Cloudflare Workers, 
 
 ## The app
 
-- **Home:** Buy / Hold / Wait for today (the AI's stance when fresh, never "Buy" on a rally day), portfolio
-  value, invested this month vs your monthly SIP, story-style circles per holding (ring = today's move),
-  sector donut (biggest slice red) with **Show more** → the full breakdown: every sector with its share of your money,
-  flagged over the sector limit, and the stocks inside it (value, share of the sector, profit/loss; tap for details).
-  Sectors are PSX's own classification, filed automatically for every holding (price row, else the market screen; the
-  worker fills in any that are missing), so you are never asked to pick one. Also rebalance tips, AI Assistant
-  suggestions, KSE-100, wealth growth (your monthly investment and its yearly increase from Profile, compounded at a
-  chosen return).
-- **Portfolio:** each holding shows a call: *Hold*, *Buy more* (average down) or *Opportunity*, from how far
-  the price is below **your last buy**, or *Trim* / *Review*. The AI can refine calls but never against your
-  own rules (hold-no-add, review, cap, Shariah). Swipe left: edit / remove (with Undo). Swipe right: record a
-  buy. Long-press: menu. Tap: details. Camera button: **update from JS InvestPro screenshots**: the AI reads
-  symbol, quantity and average cost (your current symbols go along as hints), the app compares them with what is
-  saved (more shares = bought, fewer = sold, new stock, stock gone = sold all) and you tick each change before it is
-  applied; a stock that was just off-screen stays unticked and untouched. Screenshots are never stored.
-- **Discover:** *Undervalued* (P/E well below sector, still paying dividends), *Dividends* (yield, yearly
-  dividend per share, last declared amount, how often they pay), *Upcoming* (declared dividends with the last
-  day to buy = book closure minus 3 working days, an estimate; confirm with your broker). Every list is ranked
-  strongest first and has sort chips (most undervalued / cheapest vs sector / lowest P/E / highest yield;
-  highest yield / most per share / pays most often / cheapest share; soonest / biggest dividend). "AI picks first"
-  is one option, not the default; the choice is remembered on the phone.
-- **News:** company filings grouped by day, AI summaries with figures checked against the PDF, and your alert history.
-- **Profile:** System / Light / Dark, monthly investment and its yearly increase, crash fund, your rules, notifications, Telegram, AI on/off.
+Home = what to do today. Portfolio = what I own and how it is doing. Discover = what to look at. News = what
+happened. Profile = settings, rules, broker and tax. Anything you look at once a month is one tap deep.
+
+- **Home:** one of three clear states for today: **Add** (with how much is left this month and what may take it),
+  **Hold** (nothing to do) or **Review** (one of your rules is broken), never "Hold" with a buy suggestion. The
+  portfolio card shows value, **total return with dividends**, today's move and **vs KSE-100** (what the same money in
+  the index would have done, from the daily closes the worker keeps); tap it for Performance. Story-style circles per
+  holding (ring = today's move). **Needs attention** appears only when a rule is broken: a stock over its cap, a sector
+  over its cap, a Trim trigger, a thesis review due. **This week**: results dates, board meetings, book closures and
+  last days to buy for your holdings and watchlist in the next 7 days. Then AI Assistant suggestions and KSE-100.
+- **Portfolio:** four views. *Holdings*: each holding shows a call: *Hold*, *Buy more* (average down) or
+  *Opportunity*, from how far the price is below **your last buy**, or *Trim* (over the per-stock cap, target price
+  reached, P/E running far ahead of its sector, a dividend cut: each a setting) or *Review* (status, or the review date
+  of your thesis arrived). The AI can refine calls but never against your own rules (hold-no-add, review, stock and
+  sector caps, Shariah, trim). Swipe left: edit / remove (with Undo). Swipe right: record a buy, with an **order ticket**
+  (commission, sales tax, exchange fees, all-in cost per share, round-trip cost and a cheap-share warning). Long-press:
+  menu. Tap: details, with "Why I own it", the review date and the target price. Camera button: **update from JS
+  InvestPro screenshots** (tick every change; set the trade date; screenshots are never stored). "Buys and sells": the
+  full transaction log, editable, with **CSV import** (template provided) and export. *Allocation*: sector donut and
+  per-stock bars against your caps. *Performance*: total return with dividends, XIRR, your money against the KSE-100
+  over time, dividends expected (declared for shares you held at book closure) and received (net of withholding tax).
+  *Tax*: the tax-year ledger (realized gains, losses, net, carry-forward, estimated capital gains tax, what NCCPL has
+  deducted, what is still due or refundable) and the **Sell Planner** (also under "Sell" and in each holding's menu):
+  tick what you would sell and see the FIFO gain per stock, this year's tax after it, the cash NCCPL takes next month,
+  and which losing holdings already marked Review or Trim would cut it. Estimates from your own log; not tax advice.
+- **Discover:** *Undervalued* (P/E well below sector, still paying dividends; a P/E under 2 or over 100 is a quirk
+  of the figures, not a bargain, and is left out), *Dividends* (yield, yearly dividend per share, last declared amount,
+  how often they pay; a yield built on a one-off special payout is ranked on the regular payout, with the special shown),
+  *Upcoming* (declared dividends with the last day to buy = book closure minus 2 working days under T+1 settlement,
+  skipping weekends and PSX holidays, an estimate; confirm with your broker). Filters: hide loss-making, hide special
+  dividends, Shariah only. Quality chips: payout above 100% of profit, loss-making, special dividend, "check figures".
+  One row per company (PSX's XD/XB/XR spellings are merged and shown as a badge). "0" from PSX is shown as n/a, never
+  as a value. An AI sentence is shown only while every number in it matches the card beside it. Every list is ranked
+  strongest first with sort chips; "AI picks first" is one option, not the default.
+- **News:** company filings grouped by day, AI summaries with figures checked against the PDF (and flagged when the
+  dates inside do not fit the filing date), a **My week** list, and your alert history.
+- **Profile:** appearance; money (monthly investment, yearly increase, crash fund, crash level, **Goals & projection**);
+  your rules (max per stock, **max per sector**, opportunity alert, Shariah only, **trim rules**); **Broker & tax**
+  (broker, commission %, minimum per share, sales tax on commission, filer / non-filer, match NCCPL statement, CGT
+  deducted this tax year, losses carried forward); notifications; Telegram; AI on/off.
 
 Gestures always have a button alternative (detail sheet buttons, `…` menu). Respects reduced motion.
 
@@ -96,6 +113,30 @@ providers' products; portfolio suggestions send symbols, share counts and costs 
 
 Live check: Actions → PSX worker → Run workflow → `aicheck` (prints every AI task; writes nothing).
 
+## Costs, tax and performance (every rate is a setting)
+
+Defaults live in `shared/rules.json` and are editable under Profile → Broker & tax; nothing is a constant in code.
+Researched 2026-10-15; items marked VERIFY need one real document to confirm.
+
+| What | Default | Source / note |
+| --- | --- | --- |
+| Broker commission | max(0.15% of value, Rs 0.03 per share) per side | PSX notice N-1026 minimum; JS slab matches. VERIFY on a contract note |
+| Sales tax on commission | 15% | Sindh; some brokers show 13%. VERIFY |
+| PSX trading fee, SECP levy, CDC | 0.0035%, 0.00065%, Rs 0.005/share | PSX notice N-1026 |
+| Capital gains tax (Section 37A) | 15% filer / 15% non-filer for shares bought from 1 Jul 2025; older bands by buy date | NCCPL; non-filer rate from 1 Jul 2026 VERIFY |
+| Dividend withholding (Section 150) | 15% filer / 30% non-filer; power companies 7.5% / 15%; REITs 15% / 30% | VERIFY power rate per company |
+| Settlement | T+1 since 9 Feb 2026 → last day to buy = book closure − 2 working days | VERIFY once with the broker |
+
+How the tax figure is built: FIFO lots per stock from your transaction log; gains and losses netted across every stock
+within the tax year (1 July–30 June); each lot taxed at the rate of its buy-date band; losses of the year and the
+carry-forward (filers, 3 years) offset the highest-rate gains first; minus what NCCPL already deducted (you enter it
+from the monthly statement). "Match NCCPL statement" drops broker charges from the cost basis for reconciliation.
+Performance: total return = value now + sales (net of charges) + dividends (net of withholding) − buys (including
+charges); XIRR is money-weighted over the same flows; the KSE-100 benchmark puts every rupee into the index on the
+day it moved (daily closes in `index_daily`, written by the worker and backfilled from the 30-minute snapshots), and
+flows before the index history begins are left out of both sides and counted in the coverage note. The night job
+also stores one portfolio value per trading day (`portfolio_daily`) for the chart.
+
 ## Data source (read this if prices stop updating)
 
 No official free PSX API. The worker reads ordinary public pages with an honest User-Agent: the homepage
@@ -129,7 +170,7 @@ Supabase → Authentication → URL Configuration → Site URL = the app URL (fo
 ## Commands
 
 ```
-npm test                       # rules, AI guardrails, jobs, parsers, import endpoint
+npm test                       # rules, costs, tax, performance, calendar, quality, symbols, CSV, AI guardrails, jobs, parsers
 npm run dev                    # app at http://localhost:5173/?demo=1 (demo data, no account)
 npm run worker -- market --dry-run --now 2026-10-13T07:30:00Z   # live PSX data, prints instead of sending
 npm run worker -- aistatus     # which AI keys are ready / cooling down (free checks, no tokens)

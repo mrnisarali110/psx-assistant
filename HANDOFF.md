@@ -1,6 +1,6 @@
 # PSX Assistant — Work Handoff
 
-_Last updated: 2026-10-15, 02:10 PKT. Read this first in a new chat; `README.md` describes the product and the
+_Last updated: 2026-10-15 (evening PKT). Read this first in a new chat; `README.md` describes the product and the
 architecture in full. This file is about state, open issues and what to build next._
 
 ## Where everything is
@@ -9,126 +9,125 @@ architecture in full. This file is about state, open issues and what to build ne
   Deploy with `npm run deploy` (wrangler is logged in on this PC). Logs: `npx wrangler tail app --format json`.
 - **Repo:** https://github.com/mrnisarali110/psx-assistant (public; Actions logs are public → never print symbols or messages).
 - **Database:** Supabase project `tqggelxnrymytxmxftqn`; Site URL points at the app. Migrations apply on push
-  (`migrate.yml`); latest is `0005_sip_step_up.sql`.
+  (`migrate.yml`); latest is `0006_costs_tax_performance.sql` (new tables `dividend_receipts`, `index_daily`,
+  `portfolio_daily`; new columns on `settings`, `holdings`, `transactions`, `announcements`, `prices`, `market_screen`).
 - **Scheduled work:** GitHub Actions `worker.yml` (jobs: market, night, test, telegram, aicheck, aistatus, diag),
   `telegram.yml`, `migrate.yml`, `ci.yml`. The Cloudflare Worker carries the real schedule (see issue 1).
 - **Secrets (names only; values are never pasted in chat — the owner runs the commands himself):**
   - GitHub: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DB_URL`, `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`,
     `GROQ_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `TELEGRAM_BOT_TOKEN`; variables `APP_URL`, `TELEGRAM_BOT`.
   - Worker: `GEMINI_API_KEY`, `OPENROUTER_API_KEY`. **Missing: `GITHUB_DISPATCH_TOKEN`** (issue 1).
-- **Owner:** Nisar. iPhone, app installed as a PWA, broker JS InvestPro, quiet hours 02:00–12:00 (mutes morning alerts).
+- **Owner:** Nisar. iPhone, app installed as a PWA, broker JS InvestPro (JS Global), quiet hours 02:00–12:00.
+- **The brief this build came from:** `psx-assistant-issues-and-features.md` (owner's Downloads, 2026-10-15):
+  10 issues (ISSUE-01..10) and 11 features (FEATURE-01..11) with acceptance criteria. All of it is implemented
+  except where noted under "Known gaps".
 
 ## State right now
 
-Commit `9c87797`, Worker version `5437aa72`, 88 tests green, CI green. Everything below is deployed and was
-checked on the phone or in the browser at phone width on 2026-10-14:
+Build of 2026-10-15 (see git log for the commit): tests green, typecheck clean, CI green. What changed:
 
-- Three free AI providers (Groq, Gemini, OpenRouter) behind one router (`shared/llm.ts`): screenshots go to
-  OpenRouter's free vision models first, Gemini second; text to Groq first. Models that answer 429/503 rest until
-  their limit resets; free key checks (`aistatus`, `GET /api/ai-status`) cost no tokens.
-- Screenshot import compares the pictures with saved holdings: more shares = bought, fewer = sold, stock gone =
-  "sold all" (unticked by default); every change has its own tick; errors name the provider that failed.
-  Confirmed working with 3 screenshots on the phone.
-- Profile → "Yearly increase (%)" feeds the Home wealth projection.
-- Home shows money by PSX sector (donut + "Show more" breakdown with the stocks inside each sector). Sectors come
-  from PSX (price row → market screen → worker backfill); nobody is asked.
-- Discover lists are ranked strongest first with sort chips per tab; the AI's order is an option.
-- Schedule: Worker cron triggers `15,45 4-11 * * 1-5` and `0 16 * * 1-5` (UTC) start the GitHub job through
-  `workflow_dispatch`; a job that finished fine within 20 min (night: 6 h) skips a duplicate tick. The app reloads
-  every 5 min while open in market hours.
+- **Data trust (ISSUE-01/02/03/04/05/06/07/10):** PSX's XD/XB/XR spellings are merged into one row per company
+  (`shared/symbols.ts`, applied in the worker feed and the app data layer; the marker shows as a badge). A P/E
+  under 2 or over 100 is an outlier: out of Undervalued and the sector medians, flagged "check figures" elsewhere.
+  0 / blank is "n/a", never a value. Dividend lists rank on the regular payout when a special is in the trailing
+  yield; frequency says "not enough history" under 2 filings. An AI sentence is shown only while its numbers match
+  the card (`quality.aiTextMatches`). Filing dates far from the publish date drop the book closure and flag the
+  summary "Older document" / "Date unclear" (`calendar.dateVerdict`, stored in `announcements.ai_date_note`).
+  Buy-by = book closure − 2 trading days (T+1), skipping weekends and `rules.psx_holidays` plus the index's
+  own trading days.
+- **Costs and tax (FEATURE-08/10):** `shared/costs.ts` (per-side charges, order ticket, cheap-share warning),
+  `shared/tax.ts` (FIFO lots, tax-year ledger, CGT bands by buy date, carry-forward, Sell Planner, offset
+  suggestions). Settings: Profile → Broker & tax. UI: Portfolio → Tax tab, Sell Planner (header "Sell", holding menu
+  "Plan a sale"), order ticket in "Record a buy" with an optional charges field from the contract note.
+- **Performance (FEATURE-01/02, ISSUE-08):** `shared/performance.ts` (total return with dividends, XIRR, KSE-100
+  benchmark from `index_daily`, expected and received dividends, value series). Portfolio → Performance tab; Home
+  portfolio card shows total return and "vs KSE-100". The worker writes `index_daily` every tick (last tick after
+  the close wins) and `portfolio_daily` per user in the night job; the migration backfilled `index_daily` from
+  `index_snapshots` (history starts early Oct 2026, so older buys are "uncovered" in the benchmark).
+- **Rules (FEATURE-03/04/05):** `settings.max_sector_pct` (default 30%) blocks new money and shows under Needs
+  attention; thesis / review date / target price per holding; Trim triggers (over cap, target reached, P/E
+  `trim_pe_over_sector_pct` (default 50%) above the sector median, dividend cut) and Review (date reached). Alerts:
+  `trim` (market, weekly per stock) and `review_due` (digest). The AI cannot override Trim/Review.
+- **Home / IA (FEATURE-07/11, ISSUE-09, §3):** Today card with three states (Add / Hold / Review), Needs
+  attention, This week (`calendar.weekAhead`), Wealth growth moved to Profile → Goals & projection, sector donut
+  moved to Portfolio → Allocation. News has "My week". Discover has filters and quality chips (FEATURE-06, with ROE
+  and net debt left out: PSX's screener has no such fields, so they are not invented).
+- **Transactions (FEATURE-09, HANDOFF issue 4):** Portfolio → Holdings → "Buys and sells": the full log, edit /
+  delete / add, CSV import with a template (`shared/transactions-csv.ts`) and export. Screenshot import now asks for
+  the trade date. Adding a holding defaults the Shariah toggle from PSX (KMI All Share) and the import does too.
 
 ## Issues to fix (priority order)
 
-1. **Set `GITHUB_DISPATCH_TOKEN` on the Worker.** Without it the Cloudflare ticks only log "token not set" and the
-   30-minute checks still depend on GitHub's cron, which ran 5 times on 2026-10-14 (14:43, 15:12, 19:40, 20:11,
-   01:03 PKT) instead of 15. Owner: GitHub → Settings → Developer settings → Fine-grained tokens → repo
-   `psx-assistant` only, permission Actions: Read and write, expiry up to a year → `npx wrangler secret put
-   GITHUB_DISPATCH_TOKEN`. Verify: Actions shows runs with event `workflow_dispatch` at :15/:45 PKT during trading;
-   `wrangler tail` shows `cron: market → GitHub HTTP 204`. Add a reminder before the token expires.
-2. **Gemini key hygiene.** The previous Gemini key value was exposed (it had been stored as a secret *name* on
-   Cloudflare; deleted 2026-10-14). The Worker has a new key; GitHub may still hold the old one (it works). If the
-   old key is revoked, run `gh secret set GEMINI_API_KEY`.
-3. **CPU time of `/api/import` on the Free plan.** One image cost ~16 ms CPU (nominal limit 10 ms; outcome still
-   "ok"). If 3–4-image imports start failing with no provider error in the grey detail line, shrink harder in
-   `src/lib/importer.ts` (`MAX_SIDE` 1600 → 1280, JPEG quality) or send images one request at a time.
-4. **Import transactions are dated the import day**, not the real purchase day (screenshots carry no dates).
-   Options: a date picker in the review sheet, or reading the broker's order/trade history screen.
-5. **Stored sector text.** Older holdings keep the owner's hand-typed sector (e.g. `Technology`); views prefer PSX's
-   name and the worker only fills NULLs. Optional one-off: normalise stored sectors to PSX's taxonomy.
-6. **OpenRouter free models drift.** Preference lists in `shared/llm.ts` are dated 2026-10-14 (Nemotron Omni read
-   the sample 8/8; Gemma 4 was rate-limited upstream). Discovery copes with disappearances; re-check quality
-   monthly with Actions → PSX worker → `aicheck`.
-7. **Telegram linking** still runs on GitHub's unreliable `*/20` cron (`telegram.yml`), so linking can take hours.
-   A third Cloudflare cron could dispatch it (Free plan: 5 triggers per account).
-8. **GitHub cron fallback + keep-alive step** in `worker.yml`: keep for a week after the token is set, then decide
-   whether to remove the schedule block and the keep-alive commit step.
-9. **Ramadan hours** differ from `shared/rules.json` `market_hours_pkt`; manual update when they apply.
-10. **Phone reinstall after the rename**: confirm the owner reinstalled the PWA at the new address and turned push
-    on again (stale subscriptions 404/410 are deleted automatically by `worker/notify.ts`).
+1. **Set `GITHUB_DISPATCH_TOKEN` on the Worker** (unchanged from before; nothing of the Cloudflare schedule has been
+   seen live yet). Owner: GitHub → Settings → Developer settings → Fine-grained tokens → repo `psx-assistant` only,
+   permission Actions: Read and write → `npx wrangler secret put GITHUB_DISPATCH_TOKEN`. Verify with `wrangler tail`.
+2. **VERIFY the researched rates against one real document each** and change the setting if different: JS
+   commission and any flat minimum (one buy + one sell contract note), sales tax 13% vs 15%, non-filer CGT from
+   1 Jul 2026 (NCCPL), whether NCCPL's cost basis includes commission (toggle "Match NCCPL statement" if not), HUBC/
+   KAPCO dividend WHT 7.5%, the T+1 last-day-to-buy rule (one book closure with JS). See README's table.
+3. **Enter the real trade dates.** Holdings imported from screenshots are dated the import day; fix them under
+   Portfolio → Holdings → Buys and sells (or import a CSV), otherwise XIRR, lots and the benchmark use wrong dates.
+4. **Enter CGT deducted so far** (Profile → Broker & tax) from the NCCPL monthly statement, and any carry-forward
+   losses, so Tax shows what is still due or refundable.
+5. **Gemini key hygiene**, **CPU time of `/api/import`**, **stored sector text**, **OpenRouter model drift**,
+   **Telegram cron**, **GitHub cron fallback**, **Ramadan hours**, **phone reinstall after the rename**: unchanged
+   from the previous handoff (see git history of this file for the detail); none is blocking.
 
-## Pending on Claude's side (not done, or done but not yet verified)
+## Pending on Claude's side (not done, or done but not yet verified on the phone)
 
-Owner actions above are numbered; these are the assistant's own loose ends, in the order to take them up.
+- **Phone check** of every new screen at real size: Home (Today card states, Needs attention, This week, vs KSE-100
+  line), Portfolio tabs (Allocation bars, Performance chart, Tax ledger), Sell Planner, Buys and sells + CSV import,
+  Profile → Broker & tax and Goals sheet, Discover filters and chips. Checked only in the desktop browser at 375 px
+  on demo data and signed in.
+- **First real `portfolio_daily` rows** appear after the first night job following the deploy; the Performance chart
+  draws your value line only from then on (the index-equivalent and invested lines work from day one).
+- **Verify the Cloudflare schedule end to end** once the token is set (issue 1).
+- **Normalise stored sectors / Shariah backfill in the worker** (the app now defaults both from PSX; the worker
+  backfills sectors only).
+- **Measure a 4-screenshot import** CPU time; **Telegram linking on the Cloudflare schedule**; **token expiry
+  reminder**; **retire the GitHub cron fallback**; **monthly `aicheck`** (next mid-November 2026): as before.
 
-- **Verify the Cloudflare schedule end to end** once the token is set (issue 1): watch `wrangler tail app` for
-  `cron: market → GitHub HTTP 204` at a :15/:45 slot, confirm the Actions run appears within a minute and that the
-  duplicate guard logs "duplicate tick" when GitHub's own cron lands next to it. Nothing of this has been seen live yet;
-  only the local workerd probe (HTTP 401 with a dummy token) and unit tests.
-- **Shariah flag should be automatic too.** Sectors are now filled from PSX without asking, but the "Shariah compliant"
-  toggle in the add/edit form still defaults to off and is set by hand. PSX's KMI All Share membership is already in the
-  market screen and price rows (`is_shariah`): default the toggle from it when adding, use it in screenshot import for
-  new symbols (today `diffImport` only looks at the price row), and backfill holdings in the worker like sectors.
-- **Normalise stored sectors** (issue 5): one-off update of `holdings.sector` to PSX's name where it differs, so the
-  stored value and the displayed value stop diverging.
-- **Measure a 4-screenshot import** (issue 3): read `cpuTime` in the tail log for a 3–4 image import; if it exceeds
-  ~40 ms, shrink images client-side or send them one by one. Not measured yet; only a 1-image import (16 ms) was seen.
-- **Telegram linking on the Cloudflare schedule** (issue 7): third cron trigger dispatching `telegram.yml`.
-- **Token expiry reminder** for `GITHUB_DISPATCH_TOKEN`: a `diag`/night-digest line when the token is within 30 days
-  of expiry (store the expiry date as a Worker var, e.g. `GITHUB_TOKEN_EXPIRES=2027-10-14`).
-- **Retire the GitHub cron fallback and keep-alive step** (issue 8) after a week of clean Cloudflare-driven runs.
-- **Check the `aistatus` wording** "$100.00 credit left": OpenRouter's `limit_remaining` is the key's spending cap,
-  not purchased credit; reword to "spend cap" or drop it.
-- **Monthly `aicheck`** to catch OpenRouter model drift (issue 6); the next one is due mid-November 2026.
-- **Not verified on the phone:** the sector breakdown sheet, Discover sort chips and the yearly-increase row were
-  checked only in the desktop browser at 375 px; the import sheet's "AI ready" line and key-shape warnings were seen on
-  the phone. Push after the rename (issue 10) is unconfirmed.
+## Known gaps (deliberate)
+
+- Quality chips show payout ratio, loss-making, 1-year trend, specials and P/E outliers; **ROE and net debt are not
+  shown** because PSX's screener does not publish them and nothing is invented.
+- "2 consecutive quarters of falling profit" is not a Trim trigger: there is no structured EPS history. Results
+  filings do show in This week / News with AI summaries, and a review date covers the thesis check.
+- Dividend receipts are confirmed by the user (one tap on an expected dividend) rather than read from credit
+  advices; "Paste contract note / upload PDF" to auto-fill charges is not built (the charges field is manual).
+- The benchmark cannot cover flows before the first `index_daily` row (early Oct 2026); it says so.
 
 ## Feature backlog
 
-- Portfolio value over time (needs a daily per-user snapshot written by the night job, then a chart on Home).
-- Transactions screen: all buys and sells, edit/delete, so "invested this month" can be corrected by hand.
-- Dividend income: expected yearly income from holdings (yield × value) and a log of dividends received.
-- Per-stock price targets set by the user, delivered through the existing alert pipeline (dedupe keys).
-- Per-sector limits in Settings (today one global 35%).
+- Contract-note / NCCPL-statement PDF reading to fill charges, CGT deducted and dividend credits.
+- Per-stock price targets delivered as alerts (the target price is a Trim trigger today; a push on reaching it is
+  the `trim` alert).
 - Discover: symbol search and "add to watchlist" from search; a "yours" filter.
-- Night digest: one line on sector concentration.
+- Night digest: one line on sector concentration (the rebalance tip already goes to the digest).
 - Token/key expiry reminders in the `diag` job or the night digest.
 - Dynamic Island / Live Activities need a native app (impossible as a PWA; owner was told).
 
 ## How to work on this (lessons that cost a day)
 
-1. **Edge code runs in Cloudflare Workers, not Node.** Node tests passed while every AI request in the deployed
-   Worker died with "Illegal invocation" (global `fetch` called as a method) for a week. Before deploying edge
-   changes, run them under workerd: a throwaway probe with `npx wrangler dev --local`, and for cron handlers
-   `npx wrangler dev --test-scheduled` then `curl "http://127.0.0.1:8799/__scheduled?cron=15,45+4-11+*+*+1-5"`.
-   `shared/llm.test.ts` has a strict-`this` fetch stand-in; keep it.
-2. **Never write third-party model or API names from memory.** Query the live list (OpenRouter
-   `GET /api/v1/models`, no key needed) and read the limits (e.g. `models` fallback array max 3). Only claim
-   success with the real check: Actions → PSX worker → `aicheck` (reads the sample screenshot; expect 8/8) and
-   `aistatus` (free key checks).
-3. **Keys never go through chat.** The owner runs `npx wrangler secret put NAME` and `gh secret set NAME`. Worker
-   secrets do not survive a Worker rename.
-4. **Public logs:** `publicErrors` keeps symbols out; OpenRouter's `user_id` is stripped from error text. Keep it so.
-5. **UI work:** use the `ui-ux-pro-max` skill (owner's standing request), then check in the browser at 375 px
-   (`npm run dev` → `http://localhost:5173/?demo=1#/home`, demo data, no account). Keep `npm test` and `npm run
-   typecheck` green.
-6. **Commits** end with `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`. Push triggers CI and
+1. **Edge code runs in Cloudflare Workers, not Node.** Before deploying edge changes, run them under workerd
+   (`npx wrangler dev --local`; cron: `npx wrangler dev --test-scheduled`). `shared/llm.test.ts` has a strict-`this`
+   fetch stand-in; keep it.
+2. **Never write third-party model or API names from memory.** Query the live list; only claim success with the real
+   check (Actions → PSX worker → `aicheck`, `aistatus`).
+3. **Keys never go through chat.** The owner runs `npx wrangler secret put NAME` and `gh secret set NAME`.
+4. **Public logs:** `publicErrors` keeps symbols out. Keep it so.
+5. **Every rate is a setting.** Defaults in `shared/rules.json`, user copies in `settings`; estimates say so in the
+   UI; researched facts stay marked VERIFY until a real document confirms them.
+6. **UI work:** use the `ui-ux-pro-max` skill (owner's standing request), then check in the browser at 375 px
+   (`npm run dev` → `http://localhost:5173/?demo=1#/home`). Keep `npm test` and `npm run typecheck` green. The owner
+   wants a "done / remaining" count during long builds and parallel agents where files do not overlap.
+7. **Commits** end with `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`. Push triggers CI and
    migrations; `npm run deploy` publishes the Worker and app.
 
 ## Commands
 
 ```
-npm test                       # 88 tests
+npm test                       # all suites
 npm run typecheck
 npm run dev                    # http://localhost:5173/?demo=1
 npm run worker -- aistatus     # free key checks (needs the API keys in env; on GitHub use the aistatus job)
@@ -139,11 +138,13 @@ gh workflow run worker.yml -f job=market|night|aicheck|aistatus|diag
 
 ## Files that changed most recently
 
-- `shared/llm.ts` (router, OpenRouter, cooldowns, probes), `shared/screenshots.ts`, `shared/changes.ts`
-  (`diffImport`, `describeChange`), `shared/portfolio.ts` (sectors, breakdown), `shared/discover.ts` (sorts),
-  `shared/growth.ts`, `shared/format.ts` (`sectorLabel`).
-- `edge/index.ts` (import, ai-status, key shapes, cron dispatch), `wrangler.jsonc` (name `app`, crons).
-- `src/components/ImportSheet.tsx`, `Breakdown.tsx`, `Growth.tsx`, `Donut.tsx`, `ui.tsx` (`Chips`);
-  `src/screens/Home.tsx`, `Discover.tsx`, `Profile.tsx`; `src/App.tsx` (auto-refresh); `src/lib/importer.ts`, `data.ts`.
-- `worker/run.ts` (`aistatus`), `worker/jobs.ts` (sector backfill, duplicate-tick guard), `worker/store.ts`.
-- `supabase/migrations/0005_sip_step_up.sql`, `.github/workflows/worker.yml` (OPENROUTER key, aistatus option).
+- New shared modules: `shared/symbols.ts`, `costs.ts`, `tax.ts`, `performance.ts`, `calendar.ts`, `quality.ts`,
+  `grounding.ts`, `transactions-csv.ts` (each with a test file). Changed: `shared/types.ts` (settings, receipts,
+  index/portfolio days, thesis fields), `rules.json` (costs, tax, holidays, T+1, outlier bounds), `portfolio.ts`
+  (sector cap, trim/review rules, `sectorPeMap`), `discover.ts` (dedupe, outliers, regular yield, calendar),
+  `signals.ts` (trim and review alerts), `changes.ts` (Shariah on import).
+- App: `src/screens/Home.tsx`, `Portfolio.tsx` (tabs), `Discover.tsx`, `News.tsx`, `Profile.tsx`;
+  `src/components/PerformanceTab.tsx`, `TaxTab.tsx`, `Allocation.tsx`, `SellPlanner.tsx`, `Transactions.tsx`,
+  `Holding.tsx` (order ticket, thesis), `HoldingActions.tsx`, `ImportSheet.tsx`, `Icon.tsx`; `src/lib/data.ts`.
+- Worker: `worker/feed.ts` (symbol markers), `jobs.ts` (index/portfolio days, rule context), `store.ts`, `ai.ts`
+  (date sanity). Migration `supabase/migrations/0006_costs_tax_performance.sql`; RLS test extended.

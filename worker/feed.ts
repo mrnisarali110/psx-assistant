@@ -13,6 +13,7 @@
 import * as cheerio from 'cheerio';
 import type { Announcement, AnnouncementKind, Price } from '../shared/types.ts';
 import type { ScreenRow } from '../shared/discover.ts';
+import { dedupeBySymbol, splitSymbol } from '../shared/symbols.ts';
 
 export const BASE_URL = 'https://dps.psx.com.pk';
 export const USER_AGENT = 'psx-personal-assistant/1.0 (personal, non-commercial)';
@@ -22,7 +23,7 @@ const POLITE_DELAY_MS = 600;
 
 export interface IndexQuote { name: string; value: number | null; change: number | null; change_pct: number | null }
 export interface ScreenerRow {
-  symbol: string; sector_code: string; sector: string | null; listed_in: string[]; price: number | null;
+  symbol: string; ex: string | null; sector_code: string; sector: string | null; listed_in: string[]; price: number | null;
   change_pct: number | null; change_1y_pct: number | null; pe: number | null; dividend_yield_pct: number | null; market_cap: number | null;
 }
 export interface Quote {
@@ -128,12 +129,16 @@ export function parseScreener(html: string): Record<string, ScreenerRow> {
       const cells = tds.map((_, td) => txt($(td).text()) ?? '').get();
       if (!cells.length) return;
       const at = (name: string) => (col(name) >= 0 ? cells[col(name)] ?? null : null);
-      // data-order holds the bare symbol; the visible text can carry a badge such as "XD" (ex-dividend).
-      const symbol = ($(tds[col('SYMBOL')]).attr('data-order') ?? at('SYMBOL') ?? '').toUpperCase().trim();
-      if (!symbol) return;
+      // data-order holds the bare symbol; the visible text can carry a marker such as "XD" (ex-dividend). When the
+      // marker is glued to the symbol itself (APLXD), it is split off here so one company is one row everywhere.
+      const raw = ($(tds[col('SYMBOL')]).attr('data-order') ?? at('SYMBOL') ?? '').toUpperCase().trim();
+      if (!raw) return;
+      const { base: symbol, ex } = splitSymbol(raw);
+      const badge = txt($(tds[col('SYMBOL')]).find('.badge, span').text())?.toUpperCase() ?? '';
       const code = at('SECTOR') ?? '';
-      out[symbol] = {
+      const row: ScreenerRow = {
         symbol,
+        ex: ex ?? (splitSymbol(`${symbol}${badge}`).ex ?? null),
         sector_code: code,
         sector: sectorNames[code] ?? null,
         listed_in: (at('LISTED IN') ?? '').split(',').map((s) => s.trim()).filter(Boolean),
@@ -144,6 +149,8 @@ export function parseScreener(html: string): Record<string, ScreenerRow> {
         dividend_yield_pct: parseNum(at('DIVIDEND YIELD (%)')),
         market_cap: parseNum(at('MARKET CAP.')),
       };
+      // The same company under two spellings (APL and APLXD): keep the fuller row, remember the marker.
+      out[symbol] = out[symbol] ? dedupeBySymbol([out[symbol], row])[0] : row;
     });
   });
   return out;
@@ -342,6 +349,7 @@ export function toPrice(q: Quote, s: ScreenerRow | undefined): Price {
     // KMI All Share membership = Shariah compliant. Unknown when the stock is missing from the screener.
     is_shariah: s ? s.listed_in.includes('KMIALLSHR') : null,
     as_of: q.as_of,
+    ex: s?.ex ?? null,
   };
 }
 
@@ -351,8 +359,8 @@ export function isUsable(s: Snapshot): boolean {
 
 /** KSE-100 members from the screener, in the shape Discover and the AI use. */
 export function toScreenRows(screener: Record<string, ScreenerRow>): ScreenRow[] {
-  return Object.values(screener).filter((s) => s.listed_in.includes('KSE100')).map((s) => ({
-    symbol: s.symbol, sector: s.sector, price: s.price, change_pct: s.change_pct, change_1y_pct: s.change_1y_pct,
+  return dedupeBySymbol(Object.values(screener).filter((s) => s.listed_in.includes('KSE100')).map((s) => ({
+    symbol: s.symbol, ex: s.ex, sector: s.sector, price: s.price, change_pct: s.change_pct, change_1y_pct: s.change_1y_pct,
     pe: s.pe, dividend_yield_pct: s.dividend_yield_pct, market_cap: s.market_cap, is_shariah: s.listed_in.includes('KMIALLSHR'),
-  }));
+  })));
 }

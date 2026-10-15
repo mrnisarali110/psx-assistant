@@ -128,10 +128,23 @@ export function holdingAlerts(view: PortfolioView, settings: Settings, date: str
         });
       }
     }
-    if (call.call === 'trim' || r.flags.over_cap) {
+    if (r.flags.over_cap) {
       out.push({
         kind: 'over_cap', symbol: s, level: 'market', url: '/#/portfolio', dedupe_key: `over_cap:${s}:${week}`,
         title: `${s} over your ${settings.max_position_pct}% cap`, message: `${s} is ${r.weight_pct!.toFixed(1)}% of your portfolio. Pause new money to it.`,
+      });
+    } else if (call.call === 'trim') {
+      // Your own sell/trim rules (target price, P/E far above the sector, a dividend cut) or the AI's trim call: once a week per stock.
+      out.push({
+        kind: 'trim', symbol: s, level: 'market', url: '/#/portfolio', dedupe_key: `trim:${s}:${week}`,
+        title: `Trim? ${s}`, message: `${s} Rs ${p.toFixed(2)}: ${call.text}. Plan the sale in Portfolio → Sell.`,
+      });
+    }
+    if (r.call.call === 'review' && r.holding.status !== 'review') {
+      // A review date reached: a digest item, once a week per stock.
+      out.push({
+        kind: 'review_due', symbol: s, level: 'digest', url: '/#/portfolio', dedupe_key: `review_due:${s}:${week}`,
+        title: `Review ${s}`, message: `${s}: ${r.call.text}.`,
       });
     }
     if (r.flags.big_move && r.price?.change_pct != null) {

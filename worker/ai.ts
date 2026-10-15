@@ -10,41 +10,9 @@ import { extractText, getDocumentProxy } from 'unpdf';
 import type { LlmRouter } from '../shared/llm.ts';
 import type { AiSuggestion, HoldingCallKind } from '../shared/types.ts';
 
-// ---------------------------------------------------------------------------
-// Number grounding
-// ---------------------------------------------------------------------------
-const NUM_RE = /\d[\d,]*(?:\.\d+)?/g;
-
-export function numbersIn(text: string): number[] {
-  return (text.match(NUM_RE) ?? []).map((s) => Number(s.replace(/,/g, ''))).filter(Number.isFinite);
-}
-
-/** Every number found anywhere in `facts` (JSON or text), plus rounded variants. */
-export function numberSet(facts: unknown): number[] {
-  const out = new Set<number>();
-  const add = (n: number) => {
-    for (const v of [n, Math.abs(n)]) for (const k of [1, 10, 100]) out.add(Math.round(v * k) / k);
-    out.add(n);
-  };
-  const walk = (x: unknown) => {
-    if (typeof x === 'number') add(x);
-    else if (typeof x === 'string') numbersIn(x).forEach(add);
-    else if (Array.isArray(x)) x.forEach(walk);
-    else if (x && typeof x === 'object') Object.values(x).forEach(walk);
-  };
-  walk(facts);
-  return [...out];
-}
-
-/** True if every number in `text` matches a known number (small integers like dates and counts are allowed). */
-export function numbersGrounded(text: string, known: number[]): { ok: boolean; unknown: number[] } {
-  const unknown = numbersIn(text).filter((n) => {
-    if (Number.isInteger(n) && n <= 31) return false; // dates, counts
-    if (Number.isInteger(n) && n >= 2020 && n <= 2035) return false; // years
-    return !known.some((k) => Math.abs(k - n) <= Math.max(0.05, Math.abs(k) * 0.005));
-  });
-  return { ok: unknown.length === 0, unknown };
-}
+import { numberSet, numbersGrounded, numbersIn } from '../shared/grounding.ts';
+import { dateSane, dateVerdict } from '../shared/calendar.ts';
+export { numberSet, numbersGrounded, numbersIn };
 
 const clamp = (s: unknown, n: number) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, n);
 const isoDate = (s: unknown) => (typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s)) ? s : null);
@@ -57,6 +25,8 @@ export interface AnnouncementDigest {
   figures: { label: string; value: string; verified: boolean }[];
   verified: boolean; // every number in the summary and figures was found in the PDF text
   dividend: { dps: number; type: 'interim' | 'final' | 'special' | null; book_closure_from: string | null; book_closure_to: string | null; verified: boolean } | null;
+  /** The dates the AI wrote do not fit the filing date: a re-upload of an old notice, or a date that cannot be right (ISSUE-06). */
+  date_note: 'older_document' | 'date_unclear' | null;
   model: string;
 }
 
@@ -87,7 +57,7 @@ export async function pdfText(bytes: Uint8Array): Promise<string> {
   }
 }
 
-export async function readAnnouncement(ai: LlmRouter, pdf: Uint8Array, meta: { symbol: string; title: string }): Promise<AnnouncementDigest> {
+export async function readAnnouncement(ai: LlmRouter, pdf: Uint8Array, meta: { symbol: string; title: string; published_at?: string }): Promise<AnnouncementDigest> {
   const text = await pdfText(pdf);
   const { data, model } = await ai.json<any>('pdf',
     'You read Pakistan Stock Exchange company announcements. Report only what the document says. Never guess, never give investment advice, never invent numbers.',
@@ -102,18 +72,22 @@ export async function readAnnouncement(ai: LlmRouter, pdf: Uint8Array, meta: { s
     verified: numbersIn(String(f.value)).length > 0 && checks(String(f.value)),
   }));
   const summary = clamp(data.summary, 400);
+  // A book closure far from the filing date is not this filing's (the model read an old notice or guessed): drop it.
+  const plausible = (d: string | null) => (d && meta.published_at && !dateSane(d, meta.published_at) ? null : d);
   const dps = Number(data.cash_dividend_per_share);
   const dividend = Number.isFinite(dps) && dps > 0 && dps < 10_000 ? {
     dps: Math.round(dps * 100) / 100,
     type: ['interim', 'final', 'special'].includes(data.dividend_type) ? data.dividend_type : null,
-    book_closure_from: isoDate(data.book_closure_from),
-    book_closure_to: isoDate(data.book_closure_to),
+    book_closure_from: plausible(isoDate(data.book_closure_from)),
+    book_closure_to: plausible(isoDate(data.book_closure_to)),
     // "70%" on Rs 10 face value is printed as 70, so accept either the DPS or the percentage form.
     verified: !!text && (numbersGrounded(String(dps), known).ok || numbersGrounded(String(dps * 10), known).ok),
   } : null;
+  const verdict = meta.published_at ? dateVerdict([summary, ...figures.map((f: { value: string }) => f.value)], meta.published_at) : 'ok';
   return {
     summary, figures, dividend, model,
     verified: checks(summary || '0') && figures.every((f: { value: string; verified: boolean }) => f.verified || numbersIn(f.value).length === 0),
+    date_note: verdict === 'ok' ? null : verdict,
   };
 }
 

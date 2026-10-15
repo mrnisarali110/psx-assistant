@@ -4,12 +4,13 @@
  */
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import type {
-  AiInsight, AiPicks, Announcement, AlertLogRow, DividendEvent, Holding, IndexSnapshot, PriceMap, Settings, Txn, WatchItem,
+  AiInsight, AiPicks, Announcement, AlertLogRow, DividendEvent, DividendReceipt, Holding, IndexDay, IndexSnapshot, PortfolioDay, PriceMap, Settings, Txn, WatchItem,
 } from '../../shared/types.ts';
 import { DEFAULT_SETTINGS } from '../../shared/types.ts';
 import type { ScreenRow } from '../../shared/discover.ts';
 import type { ImportedRow } from '../../shared/changes.ts';
 import { addDays, pktDate } from '../../shared/time.ts';
+import { dedupeBySymbol, normalisePriceMap } from '../../shared/symbols.ts';
 import {
   SEED_ANNOUNCEMENTS, SEED_CAPTURED_AT, SEED_HOLDINGS, SEED_INDEX, SEED_PRICES, SEED_SCREEN, SEED_TXNS, SEED_WATCHLIST,
 } from '../../shared/fixtures/seed.ts';
@@ -32,8 +33,11 @@ export interface AppData {
   email: string | null;
   aiInsight: AiInsight | null;
   screen: ScreenRow[];
-  transactions: Txn[]; // this month
+  transactions: Txn[]; // every buy and sell ever recorded, oldest first (FIFO lots, XIRR and the tax ledger need them all)
   dividends: DividendEvent[];
+  receipts: DividendReceipt[]; // dividends credited to the account, newest first
+  indexDaily: IndexDay[]; // KSE-100 close per trading day, oldest first (benchmark)
+  portfolioDaily: PortfolioDay[]; // your value per trading day, oldest first (Performance chart)
   picks: { undervalued: AiPicks | null; dividend: AiPicks | null };
 }
 
@@ -42,6 +46,13 @@ export interface DataSource {
   load(): Promise<AppData>;
   /** One write path for every holding change: edit, delete, record buy, import. */
   saveHoldingChange(before: Holding | undefined, after: Holding | null, txn: Txn | null): Promise<void>;
+  /** Transactions on their own (CSV import, corrections); holdings are not touched. */
+  saveTxns(txns: Txn[]): Promise<void>;
+  updateTxn(id: string, patch: Partial<Txn>): Promise<void>;
+  deleteTxn(id: string): Promise<void>;
+  /** A dividend credited to the account. */
+  saveReceipt(r: DividendReceipt): Promise<void>;
+  deleteReceipt(id: string): Promise<void>;
   addWatch(symbol: string, note?: string): Promise<void>;
   deleteWatch(id: string): Promise<void>;
   saveSettings(s: Partial<Settings>): Promise<void>;
@@ -78,9 +89,42 @@ const normHolding = (h: any): Holding => ({ ...h, shares: Number(h.shares), avg_
 const holdingRow = (h: Holding) => ({
   symbol: h.symbol, shares: h.shares, avg_cost: h.avg_cost, status: h.status, sector: h.sector || null,
   is_shariah: h.is_shariah, note: h.note || null, last_buy_price: h.last_buy_price ?? null, last_buy_on: h.last_buy_on ?? null,
+  thesis: h.thesis || null, review_on: h.review_on || null, target_price: h.target_price ?? null,
 });
+const normTxn = (t: any): Txn => ({ ...t, shares: Number(t.shares), price: Number(t.price), amount: Number(t.amount), charges: n(t.charges) });
+const txnRow = (t: Txn) => ({
+  symbol: t.symbol, side: t.side, shares: t.shares, price: t.price, amount: t.amount, executed_on: t.executed_on, source: t.source, charges: t.charges ?? null,
+});
+const normReceipt = (r: any): DividendReceipt => ({ ...r, shares: Number(r.shares), dps: Number(r.dps), gross: Number(r.gross), wht_pct: Number(r.wht_pct), net: Number(r.net) });
+const receiptRow = (r: DividendReceipt) => ({
+  symbol: r.symbol, paid_on: r.paid_on, shares: r.shares, dps: r.dps, gross: r.gross, wht_pct: r.wht_pct, net: r.net, dividend_id: r.dividend_id ?? null, note: r.note || null,
+});
+/** Settings row -> Settings: numbers are numeric strings in PostgREST; new columns fall back to the defaults. */
+function normSettings(s: any): Settings {
+  const num = (k: keyof Settings) => Number(s[k] ?? (DEFAULT_SETTINGS as any)[k]);
+  return {
+    ...DEFAULT_SETTINGS, ...s,
+    monthly_budget_pkr: num('monthly_budget_pkr'), sip_step_up_pct: num('sip_step_up_pct'), crash_fund_pkr: num('crash_fund_pkr'),
+    crash_trigger_kse: num('crash_trigger_kse'), max_position_pct: num('max_position_pct'), drop_alert_pct: num('drop_alert_pct'),
+    max_sector_pct: num('max_sector_pct'), trim_pe_over_sector_pct: num('trim_pe_over_sector_pct'),
+    commission_pct: num('commission_pct'), min_commission_per_share: num('min_commission_per_share'), sales_tax_pct: num('sales_tax_pct'),
+    cgt_paid: s.cgt_paid ?? {}, loss_carry_forward: s.loss_carry_forward ?? {},
+  };
+}
 
 /** Optional extras (AI, screen, dividends): if a table is missing or empty, the app still works. */
+/** PostgREST caps a response at the project's max rows (1000 by default) and drops the rest silently: read long tables a page at a time. */
+async function allRows(make: (from: number, to: number) => PromiseLike<{ data: any[] | null; error: unknown }>, page = 1000, maxPages = 20): Promise<any[]> {
+  const out: any[] = [];
+  for (let i = 0; i < maxPages; i++) {
+    let rows: any[];
+    try { const r = await make(i * page, (i + 1) * page - 1); if (r.error || r.data == null) break; rows = r.data; } catch { break; }
+    out.push(...rows);
+    if (rows.length < page) break;
+  }
+  return out;
+}
+
 async function optional<T>(q: PromiseLike<{ data: T | null; error: unknown }>, fallback: T): Promise<T> {
   try { const r = await q; return r.error || r.data == null ? fallback : r.data; } catch { return fallback; }
 }
@@ -104,26 +148,26 @@ export class LiveSource implements DataSource {
     const H = (ok(holdings) as any[]).map(normHolding);
     const W = ok(watchlist) as WatchItem[];
     const symbols = [...new Set([...H.map((h) => h.symbol), ...W.map((w) => w.symbol)])];
-    const [prices, anns, insights, screen, txns, divs, uv, dv] = await Promise.all([
+    const [prices, anns, insights, screen, txns, divs, uv, dv, receipts, indexDaily, portfolioDaily] = await Promise.all([
       symbols.length ? optional(sb.from('prices').select('*').in('symbol', symbols), [] as any[]) : Promise.resolve([] as any[]),
       symbols.length ? optional(sb.from('announcements').select('*').in('symbol', symbols).gte('published_at', addDays(today, -60)).order('published_at', { ascending: false }).limit(150), [] as any[]) : Promise.resolve([] as any[]),
       optional(sb.from('ai_insights').select('created_at, job, headline, stance, suggestions, holding_calls, rebalance, cash_note, risks, model').order('created_at', { ascending: false }).limit(1), [] as any[]),
       optional(sb.from('market_screen').select('*'), [] as any[]),
-      optional(sb.from('transactions').select('*').gte('executed_on', `${today.slice(0, 7)}-01`), [] as any[]),
+      allRows((a, b) => sb.from('transactions').select('*').order('executed_on').order('created_at').range(a, b)),
       optional(sb.from('dividends').select('*').gte('announced_on', addDays(today, -400)).order('announced_on', { ascending: false }).limit(500), [] as any[]),
       optional(sb.from('ai_picks').select('*').eq('kind', 'undervalued').order('created_at', { ascending: false }).limit(1), [] as any[]),
       optional(sb.from('ai_picks').select('*').eq('kind', 'dividend').order('created_at', { ascending: false }).limit(1), [] as any[]),
+      allRows((a, b) => sb.from('dividend_receipts').select('*').order('paid_on', { ascending: false }).range(a, b)),
+      allRows((a, b) => sb.from('index_daily').select('day, close').order('day').range(a, b)),
+      allRows((a, b) => sb.from('portfolio_daily').select('day, value, invested').order('day').range(a, b)),
     ]);
     const s = ok(settings) as any;
     const history = (ok(idx) as any[]).map(normIdx);
     return {
-      settings: s ? {
-        ...DEFAULT_SETTINGS, ...s, monthly_budget_pkr: Number(s.monthly_budget_pkr), sip_step_up_pct: Number(s.sip_step_up_pct ?? 0), crash_fund_pkr: Number(s.crash_fund_pkr),
-        crash_trigger_kse: Number(s.crash_trigger_kse), max_position_pct: Number(s.max_position_pct), drop_alert_pct: Number(s.drop_alert_pct),
-      } : { ...DEFAULT_SETTINGS },
+      settings: s ? normSettings(s) : { ...DEFAULT_SETTINGS },
       holdings: H,
       watchlist: W,
-      prices: Object.fromEntries(prices.map((p: any) => [p.symbol, normPrice(p)])),
+      prices: normalisePriceMap(Object.fromEntries(prices.map((p: any) => [p.symbol, normPrice(p)]))),
       index: history[0] ?? null,
       indexHistory: [...history].reverse(),
       announcements: anns as Announcement[],
@@ -132,12 +176,15 @@ export class LiveSource implements DataSource {
       telegramLinked: !!(ok(profile) as any)?.telegram_chat_id,
       email: this.email,
       aiInsight: insights[0] ? { holding_calls: [], suggestions: [], ...insights[0] } as AiInsight : null,
-      screen: screen.map((r: any) => ({
-        symbol: r.symbol, sector: r.sector, price: n(r.price), change_pct: n(r.change_pct), change_1y_pct: n(r.change_1y_pct), pe: n(r.pe),
+      screen: dedupeBySymbol(screen.map((r: any) => ({
+        symbol: r.symbol, ex: r.ex ?? null, sector: r.sector, price: n(r.price), change_pct: n(r.change_pct), change_1y_pct: n(r.change_1y_pct), pe: n(r.pe),
         dividend_yield_pct: n(r.dividend_yield_pct), market_cap: n(r.market_cap), is_shariah: r.is_shariah,
-      })),
-      transactions: txns.map((t: any) => ({ ...t, shares: Number(t.shares), price: Number(t.price), amount: Number(t.amount) })),
+      }))),
+      transactions: txns.map(normTxn),
       dividends: divs.map((d: any) => ({ ...d, dps: n(d.dps) })),
+      receipts: receipts.map(normReceipt),
+      indexDaily: indexDaily.map((r: any) => ({ day: r.day, close: Number(r.close) })),
+      portfolioDaily: portfolioDaily.map((r: any) => ({ day: r.day, value: Number(r.value), invested: Number(r.invested) })),
       picks: { undervalued: (uv[0] ?? null) as AiPicks | null, dividend: (dv[0] ?? null) as AiPicks | null },
     };
   }
@@ -147,8 +194,17 @@ export class LiveSource implements DataSource {
     if (!after) ok(await sb.from('holdings').delete().eq('id', before!.id!));
     else if (before?.id) ok(await sb.from('holdings').update(holdingRow(after)).eq('id', before.id));
     else ok(await sb.from('holdings').insert({ ...holdingRow(after), user_id: this.userId }));
-    if (txn) ok(await sb.from('transactions').insert({ ...txn, user_id: this.userId }));
+    if (txn) ok(await sb.from('transactions').insert({ ...txnRow(txn), user_id: this.userId }));
   }
+  async saveTxns(txns: Txn[]) { if (txns.length) ok(await supabase().from('transactions').insert(txns.map((t) => ({ ...txnRow(t), user_id: this.userId })))); }
+  async updateTxn(id: string, patch: Partial<Txn>) {
+    const row: Record<string, unknown> = {};
+    for (const k of ['symbol', 'side', 'shares', 'price', 'amount', 'executed_on', 'source', 'charges'] as const) if (k in patch) row[k] = patch[k] ?? null;
+    ok(await supabase().from('transactions').update(row).eq('id', id));
+  }
+  async deleteTxn(id: string) { ok(await supabase().from('transactions').delete().eq('id', id)); }
+  async saveReceipt(r: DividendReceipt) { ok(await supabase().from('dividend_receipts').insert({ ...receiptRow(r), user_id: this.userId })); }
+  async deleteReceipt(id: string) { ok(await supabase().from('dividend_receipts').delete().eq('id', id)); }
   async addWatch(symbol: string, note?: string) { ok(await supabase().from('watchlist').insert({ symbol, note: note || null, user_id: this.userId })); }
   async deleteWatch(id: string) { ok(await supabase().from('watchlist').delete().eq('id', id)); }
   async saveSettings(s: Partial<Settings>) { ok(await supabase().from('settings').update(s).eq('user_id', this.userId)); }
@@ -178,14 +234,33 @@ export class LiveSource implements DataSource {
   }
 }
 
+/** The demo's buys of the seed holdings are dated the last day of the month before the seed capture. */
+const DEMO_BASELINE_DAY = addDays(`${SEED_CAPTURED_AT.slice(0, 7)}-01`, -1);
+const r2 = (v: number) => Math.round(v * 100) / 100;
+function demoTxns(): Txn[] {
+  const held = new Set(SEED_HOLDINGS.map((h) => h.symbol));
+  const recent = SEED_TXNS.filter((t) => held.has(t.symbol)).map((t, i) => ({ ...t, id: `demo-s${i}`, executed_on: pktDate(new Date()) }));
+  const baseline = SEED_HOLDINGS.flatMap((h, i) => {
+    const mine = recent.filter((t) => t.symbol === h.symbol);
+    const shares = h.shares - mine.reduce((a, t) => a + t.shares, 0);
+    const amount = r2(h.shares * h.avg_cost - mine.reduce((a, t) => a + t.amount, 0));
+    if (shares <= 0 || amount <= 0) return [];
+    return [{ id: `demo-t${i}`, symbol: h.symbol, side: 'buy' as const, shares, price: r2(amount / shares), amount, executed_on: DEMO_BASELINE_DAY, source: 'import' as const }];
+  });
+  return [...baseline, ...recent];
+}
+
 /** In-memory demo: the owner's seed portfolio and the PSX close of 2026-10-05. Nothing is saved. */
 export class DemoSource implements DataSource {
   kind = 'demo' as const;
   private holdings: Holding[] = SEED_HOLDINGS.map((h, i) => ({ ...h, id: `demo-h${i}` }));
   private watch: WatchItem[] = SEED_WATCHLIST.map((w, i) => ({ ...w, id: `demo-w${i}` }));
   private settings: Settings = { ...DEFAULT_SETTINGS };
-  // Recorded buys, moved into the current month so "invested this month" shows something.
-  private txns: Txn[] = SEED_TXNS.map((t) => ({ ...t, executed_on: pktDate(new Date()) }));
+  // A trade history that adds up to the seed holdings: this month's recorded buys (moved to today), and for the
+  // rest of each holding one buy at the end of the month before the seed capture, priced so the average cost
+  // matches. Last month keeps the baseline out of "invested this month"; the demo has no real trade dates.
+  private txns: Txn[] = demoTxns();
+  private receipts: DividendReceipt[] = [];
   private alerts: AlertLogRow[] = [
     { kind: 'buy_chance', symbol: 'SYS', message: 'SYS Rs 114.37: 12.3% below your last buy.', channel: 'push', sent_at: '2026-10-05T07:30:00Z', dedupe_key: 'd1' },
     { kind: 'night_digest', symbol: null, message: 'KSE-100 closed at 165,867. Your portfolio Rs 56,279, today -Rs 593, total -Rs 4,836.', channel: 'push', sent_at: '2026-10-05T16:00:00Z', dedupe_key: 'd3' },
@@ -199,13 +274,19 @@ export class DemoSource implements DataSource {
       lastRun: { job: 'market', started_at: SEED_CAPTURED_AT, finished_at: SEED_CAPTURED_AT, ok: true },
       aiInsight: null, // never show made-up AI text; real suggestions appear after the first signed-in run
       screen: SEED_SCREEN, transactions: [...this.txns], dividends: [], picks: { undervalued: null, dividend: null },
+      receipts: [...this.receipts], indexDaily: [{ day: SEED_INDEX.ts.slice(0, 10), close: SEED_INDEX.kse100 }], portfolioDaily: [],
     };
   }
+  async saveTxns(txns: Txn[]) { this.txns.push(...txns.map((t, i) => ({ ...t, id: t.id ?? `demo-t${Date.now()}-${i}` }))); }
+  async updateTxn(id: string, patch: Partial<Txn>) { this.txns = this.txns.map((t) => (t.id === id ? { ...t, ...patch } : t)); }
+  async deleteTxn(id: string) { this.txns = this.txns.filter((t) => t.id !== id); }
+  async saveReceipt(r: DividendReceipt) { this.receipts.unshift({ ...r, id: r.id ?? `demo-r${Date.now()}` }); }
+  async deleteReceipt(id: string) { this.receipts = this.receipts.filter((r) => r.id !== id); }
   async saveHoldingChange(before: Holding | undefined, after: Holding | null, txn: Txn | null) {
     if (!after) this.holdings = this.holdings.filter((h) => h.id !== before?.id);
     else if (before?.id) this.holdings = this.holdings.map((h) => (h.id === before.id ? { ...after, id: before.id } : h));
     else this.holdings.push({ ...after, id: `demo-h${Date.now()}` });
-    if (txn) this.txns.push(txn);
+    if (txn) this.txns.push({ ...txn, id: `demo-t${Date.now()}` });
   }
   async addWatch(symbol: string, note?: string) { this.watch.push({ id: `demo-w${Date.now()}`, symbol, note }); }
   async deleteWatch(id: string) { this.watch = this.watch.filter((w) => w.id !== id); }

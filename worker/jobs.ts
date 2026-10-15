@@ -13,7 +13,7 @@ import { dividendLeaders, undervalued, upcomingDividends, type ScreenRow } from 
 import { investedThisMonth } from '../shared/changes.ts';
 import { dedupeFilings, tidyTitle } from '../shared/news.ts';
 import type { LlmRouter } from '../shared/llm.ts';
-import { buildPortfolio, screenSectors, type PortfolioView } from '../shared/portfolio.ts';
+import { buildPortfolio, screenSectors, sectorPeMap, type PortfolioView } from '../shared/portfolio.ts';
 import { holdingAlerts, marketAlerts, planDelivery, todayBanner, type AlertCandidate, type AlertLevel } from '../shared/signals.ts';
 import { addDays, daysBetween, isMarketOpen, isoWeek, minutesToClose, pktDate } from '../shared/time.ts';
 import { DEFAULT_RULES, type Announcement, type DividendEvent, type IndexSnapshot, type PriceMap } from '../shared/types.ts';
@@ -106,6 +106,8 @@ export async function runJob(job: JobName, deps: JobDeps): Promise<RunReport> {
       const k = snap.indices.KSE100!;
       idx = { ts: asOf as string, kse100: k.value as number, change: k.change, change_pct: k.change_pct };
       await store.saveIndex(idx);
+      // The day's close for the benchmark: every tick overwrites it, so the last run after the close wins.
+      if (pktDate(new Date(idx.ts)) === today) await store.saveIndexDay({ day: today, close: idx.kse100 }).catch((e) => report.errors.push(`index day: ${errMsg(e)}`));
       await store.saveNewAnnouncements(Object.values(snap.quotes).flatMap((q) => q.announcements));
       // Symbols that failed this run keep their last good price, never a made-up one.
       prices = { ...(await store.latestPrices(userSymbols)), ...Object.fromEntries(fresh.map((p) => [p.symbol, p])) };
@@ -187,8 +189,8 @@ async function readFilings(symbols: string[], today: string, limit: number, deps
       continue;
     }
     try {
-      const d = await readAnnouncement(deps.ai!, pdf, { symbol: a.symbol, title: a.title });
-      await deps.store.saveAnnouncementDigest(a.id, { summary: d.summary, figures: d.figures, verified: d.verified });
+      const d = await readAnnouncement(deps.ai!, pdf, { symbol: a.symbol, title: a.title, published_at: a.published_at });
+      await deps.store.saveAnnouncementDigest(a.id, { summary: d.summary, figures: d.figures, verified: d.verified, date_note: d.date_note });
       report.ai.announcements_read++;
       if (d.dividend) {
         await deps.store.saveDividend({
@@ -228,7 +230,7 @@ async function processUser(u: UserCtx, c: RunCtx) {
   const lastSent = (kind: string, symbol: string) =>
     recent.filter((r) => r.kind === kind && r.symbol === symbol && r.channel && r.channel !== 'none')
       .map((r) => pktDate(new Date(r.sent_at))).sort().at(-1) ?? null;
-  const view = buildPortfolio(u.holdings, c.prices, u.settings, rules, screenSectors(c.screen));
+  const view = buildPortfolio(u.holdings, c.prices, u.settings, rules, screenSectors(c.screen), { today: c.today, sectorPe: sectorPeMap(c.screen), dividends: c.dividends });
   const mine = new Set([...u.holdings.map((h) => h.symbol), ...u.watchlist.map((w) => w.symbol)]);
   const night = c.job === 'night';
   const cands: AlertCandidate[] = [];
@@ -268,6 +270,11 @@ async function processUser(u: UserCtx, c: RunCtx) {
   // At night only the digest goes out; buying chances wait for the next market check.
   if (night) cands.push(...holdingAlerts(view, u.settings, c.today, insight, lastSent).filter((a) => a.level === 'digest'));
   if (night) cands.push(...nightItems(view, mine, c, insight));
+  // One value per trading day, so Performance can draw your money against the KSE-100 from now on.
+  if (night && c.tradedToday && view.rows.length) {
+    await store.savePortfolioDay(u.id, { day: c.today, value: r2(view.total_value) as number, invested: r2(view.total_cost) as number })
+      .catch((e) => c.report.errors.push(`portfolio day: ${errMsg(e)}`));
+  }
 
   const fresh = cands.filter((x, i) => !sentKeys.has(x.dedupe_key) && cands.findIndex((y) => y.dedupe_key === x.dedupe_key) === i);
   const todays = recent.filter((r) => pktDate(new Date(r.sent_at)) === c.today && r.batch_id && r.channel !== 'none');

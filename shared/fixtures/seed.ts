@@ -17,7 +17,8 @@ export const SEED_HOLDINGS: Holding[] = [
 
 export const SEED_WATCHLIST: WatchItem[] = ['MARI', 'HUBC', 'FFC', 'OGDC', 'PPL'].map((symbol) => ({ symbol, note: 'Suggested candidate' }));
 
-export const SEED_SETTINGS = { ...DEFAULT_SETTINGS };
+/** The seed portfolio keeps 31% in banks, so tests use the spec's original 35% sector limit; the demo runs on the defaults. */
+export const SEED_SETTINGS = { ...DEFAULT_SETTINGS, max_sector_pct: 35 };
 
 /** A few recorded buys this month, for demo mode and tests. */
 export const SEED_TXNS = [
