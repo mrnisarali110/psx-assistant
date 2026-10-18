@@ -202,7 +202,7 @@ export class LiveSource implements DataSource {
       email: this.email,
       aiInsight: insights[0] ? { holding_calls: [], suggestions: [], ...insights[0] } as AiInsight : null,
       screen: dedupeBySymbol(screen.map((r: any) => ({
-        symbol: r.symbol, ex: r.ex ?? null, sector: r.sector, price: n(r.price), change_pct: n(r.change_pct), change_1y_pct: n(r.change_1y_pct), pe: n(r.pe),
+        symbol: r.symbol, ex: r.ex ?? null, listed_in: Array.isArray(r.listed_in) ? r.listed_in : null, avg_volume_30d: n(r.avg_volume_30d), mcap_rank: n(r.mcap_rank), sector: r.sector, price: n(r.price), change_pct: n(r.change_pct), change_1y_pct: n(r.change_1y_pct), pe: n(r.pe),
         dividend_yield_pct: n(r.dividend_yield_pct), market_cap: n(r.market_cap), is_shariah: r.is_shariah,
       }))),
       transactions: txns.map(normTxn),
