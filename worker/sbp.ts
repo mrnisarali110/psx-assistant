@@ -2,7 +2,8 @@
  * State Bank of Pakistan policy rate, read politely from SBP's own public documents (honest User-Agent, two requests
  * a night):
  *   - the history PDF "SBP's Reverse Repo, Repo and Policy (Target) Rates" (every decision since 1991), and
- *   - the monetary policy page (the rate in force now, and the latest meeting's sentence when SBP shows it).
+ *   - the home page (the rate in force now, and the latest meeting's sentence). Cloudflare sometimes shows scripts a
+ *     bot check there; it is never bypassed, and the PDF (updated after every change) is enough on its own.
  * Before 25 May 2015 SBP's policy rate was the reverse repo (ceiling) rate (footnote 1 of the PDF), so that column is
  * used for older rows. Nothing here is a hardcoded rate.
  */
@@ -102,6 +103,9 @@ export function mergeRates(history: PolicyRate[], page: ReturnType<typeof parseR
 
 async function get(url: string, accept: string, fetchImpl: typeof fetch): Promise<Response> {
   const resp = await fetchImpl(url, { headers: { 'User-Agent': USER_AGENT, Accept: accept }, signal: AbortSignal.timeout(30_000) });
+  if (resp.status === 403 && /Just a moment|challenge/i.test(await resp.clone().text().catch(() => ''))) {
+    throw new FetchError(`${new URL(url).host} asked for a bot check (not bypassed; the history PDF is used on its own)`);
+  }
   if (resp.status !== 200) throw new FetchError(`GET ${url} failed: HTTP ${resp.status}`);
   return resp;
 }
