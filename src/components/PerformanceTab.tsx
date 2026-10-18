@@ -103,10 +103,11 @@ export function PerformanceTab({ data, view, source, reload, onTransactions }: {
   const diffLine = gap == null ? '' : gap === 0 ? `vs KSE-100: level with it${bmYearly ? '' : ' so far'}`
     : bmYearly ? `vs KSE-100: ${pct(gap)} a year ${gap > 0 ? 'better' : 'behind'}` : `vs KSE-100: ${pct(gap)} ${gap > 0 ? 'better' : 'behind'} so far`;
 
+  // Wide screens: the headline and its breakdown side by side, the chart and dividends full width below.
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 lg:grid lg:grid-cols-2 lg:gap-4 lg:space-y-0">
       {/* 1. Hero */}
-      <Card>
+      <Card className="lg:order-1">
         {/* The same headline as Home and the Portfolio header: profit/loss on your average cost plus dividends received. */}
         <p className={`text-xs ${muted}`}>Total return, dividends included</p>
         <p className={`num text-3xl font-bold tracking-tight ${changeTone(hr.total)}`}>
@@ -154,7 +155,7 @@ export function PerformanceTab({ data, view, source, reload, onTransactions }: {
 
       {/* 2. Chart: only when the buys log explains every holding */}
       {!partial && (
-      <Card>
+      <Card className="lg:order-3 lg:col-span-2">
         <h3 className="font-semibold">Your money vs the KSE-100</h3>
         {series.length < 2 ? (
           <div className="mt-2">
@@ -169,7 +170,7 @@ export function PerformanceTab({ data, view, source, reload, onTransactions }: {
       )}
 
       {/* 3. Breakdown */}
-      <Card>
+      <Card className="lg:order-2">
         <h3 className="font-semibold">Where the return comes from</h3>
         <div className="mt-1 divide-y divide-slate-100 dark:divide-slate-800">
           <Row label="Put in" value={noTxns ? 'n/a' : partial ? rs(view.total_cost) : rs(tr.invested)} note={partial ? 'at your average cost' : 'incl. charges'} />
@@ -190,7 +191,7 @@ export function PerformanceTab({ data, view, source, reload, onTransactions }: {
       </Card>
 
       {/* 4. Dividends */}
-      <Section title="Dividends">
+      <div className="lg:order-4 lg:col-span-2"><Section title="Dividends">
         <Card className="space-y-3">
           <p className={`num text-sm ${muted}`}>
             {income.with_data > 0
@@ -257,11 +258,11 @@ export function PerformanceTab({ data, view, source, reload, onTransactions }: {
           )}
           <ErrorNote error={error} />
         </Card>
-      </Section>
+      </Section></div>
 
       {/* 5. Footer */}
-      <Button kind="ghost" className="w-full" onClick={onTransactions}><Icon name="list" className="h-4 w-4" />Buys and sells<Icon name="chevron" className="h-4 w-4" /></Button>
-      <p className={`px-1 text-xs ${muted}`}>Returns use your recorded buys and sells. Buys imported from screenshots are dated the import day until you fix them.</p>
+      <Button kind="ghost" className="w-full lg:order-5 lg:col-span-2 lg:w-auto lg:justify-self-start" onClick={onTransactions}><Icon name="list" className="h-4 w-4" />Buys and sells<Icon name="chevron" className="h-4 w-4" /></Button>
+      <p className={`px-1 text-xs lg:order-6 lg:col-span-2 ${muted}`}>Returns use your recorded buys and sells. Buys imported from screenshots are dated the import day until you fix them.</p>
     </div>
   );
 }

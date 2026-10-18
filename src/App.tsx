@@ -19,9 +19,10 @@ import { Portfolio } from './screens/Portfolio.tsx';
 import { Discover } from './screens/Discover.tsx';
 import { News } from './screens/News.tsx';
 import { Profile } from './screens/Profile.tsx';
+import { Market } from './screens/Market.tsx';
 
-export type Route = 'home' | 'portfolio' | 'discover' | 'news' | 'profile';
-const ROUTES: Route[] = ['home', 'portfolio', 'discover', 'news', 'profile'];
+export type Route = 'home' | 'portfolio' | 'discover' | 'news' | 'profile' | 'market';
+const ROUTES: Route[] = ['home', 'portfolio', 'discover', 'news', 'profile', 'market'];
 const LEGACY: Record<string, Route> = { today: 'home', plan: 'home', settings: 'profile' };
 
 export interface ScreenProps {
@@ -32,7 +33,9 @@ export interface ScreenProps {
 }
 
 const readRoute = (): Route => {
-  const r = location.hash.replace(/^#\/?/, '').split(/[/?]/)[0];
+  const h = location.hash.replace(/^#\/?/, '');
+  const r = h.split(/[/?]/)[0];
+  if (r === 'home' && /[?&]market/.test(h)) return 'market'; // links in bull/bear and rate-change notifications
   return ROUTES.includes(r as Route) ? (r as Route) : LEGACY[r] ?? 'home';
 };
 
@@ -153,6 +156,7 @@ export default function App() {
           {props && route === 'discover' && <Discover {...props} />}
           {props && route === 'news' && <News {...props} />}
           {props && route === 'profile' && <Profile {...props} onExitDemo={exitDemo} />}
+          {props && route === 'market' && <Market {...props} />}
         </main>
         <TabBar route={route} go={go} unread={data ? countNew(data) : 0} />
         <SideNav route={route} go={go} unread={data ? countNew(data) : 0} />
@@ -179,6 +183,7 @@ function ScreenSkeleton() {
   );
 }
 
+/** The phone's tab bar keeps five places; Market is reached from Home's market card (and is in the desktop sidebar). */
 const TABS: { route: Route; label: string; icon: IconName }[] = [
   { route: 'home', label: 'Home', icon: 'home' },
   { route: 'portfolio', label: 'Portfolio', icon: 'briefcase' },
@@ -188,16 +193,19 @@ const TABS: { route: Route; label: string; icon: IconName }[] = [
 ];
 
 /**
- * Desktop (1024px and up): a page, not a stretched phone. Home and Profile flow their cards into two columns
+ * Desktop (1024px and up): a page, not a stretched phone. Home and Market lay out their own grid; Profile flows its cards into two columns
  * (each card stays whole); the list screens get a wider page whose lists form a grid (see each screen).
  */
 const DESKTOP: Record<Route, string> = {
-  home: 'lg:max-w-6xl lg:block lg:columns-2 lg:gap-6 lg:space-y-0 lg:[&>*]:mb-5 lg:[&>*]:break-inside-avoid',
+  home: 'lg:max-w-6xl lg:space-y-5 2xl:max-w-7xl',
+  market: 'lg:max-w-6xl lg:space-y-5 2xl:max-w-7xl',
   profile: 'lg:max-w-6xl lg:block lg:columns-2 lg:gap-6 lg:space-y-0 lg:[&>*]:mb-5 lg:[&>*]:break-inside-avoid',
-  portfolio: 'lg:max-w-6xl',
-  discover: 'lg:max-w-6xl',
+  portfolio: 'lg:max-w-6xl 2xl:max-w-7xl',
+  discover: 'lg:max-w-6xl 2xl:max-w-7xl',
   news: 'lg:max-w-5xl',
 };
+
+const SIDE: typeof TABS = [...TABS.slice(0, 1), { route: 'market', label: 'Market', icon: 'chart' }, ...TABS.slice(1)];
 
 /** The desktop navigation: the same five places as the phone's tab bar, as a fixed left sidebar. */
 function SideNav({ route, go, unread }: { route: Route; go: (r: Route) => void; unread: number }) {
@@ -207,7 +215,7 @@ function SideNav({ route, go, unread }: { route: Route; go: (r: Route) => void; 
         <img src="/favicon.svg" alt="" className="h-8 w-8 rounded-lg" />
         <span className="text-base font-bold tracking-tight">PSX Assist</span>
       </div>
-      {TABS.map((t) => {
+      {SIDE.map((t) => {
         const active = route === t.route;
         return (
           <button key={t.route} type="button" onClick={() => go(t.route)} aria-current={active ? 'page' : undefined}
@@ -228,11 +236,11 @@ function TabBar({ route, go, unread }: { route: Route; go: (r: Route) => void; u
     <nav className="safe-bottom fixed inset-x-0 bottom-0 z-30 border-t lg:hidden border-slate-200/80 bg-white/90 backdrop-blur-xl dark:border-slate-800 dark:bg-black/85">
       <ul className="relative mx-auto flex max-w-md">
         <li aria-hidden="true" className="slide-indicator pointer-events-none absolute top-0 left-0 flex w-1/5 justify-center"
-          style={{ transform: `translateX(${Math.max(0, TABS.findIndex((t) => t.route === route)) * 100}%)` }}>
+          style={{ transform: `translateX(${Math.max(0, TABS.findIndex((t) => t.route === (route === 'market' ? 'home' : route))) * 100}%)` }}>
           <span className="h-0.5 w-8 rounded-full bg-teal-600 dark:bg-teal-400" />
         </li>
         {TABS.map((t) => {
-          const active = route === t.route;
+          const active = route === t.route || (route === 'market' && t.route === 'home');
           return (
             <li key={t.route} className="flex-1">
               <button type="button" onClick={() => { haptic(); go(t.route); }} aria-current={active ? 'page' : undefined}

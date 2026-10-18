@@ -9,7 +9,7 @@ import { asOfLabel, dateLabel } from '../../shared/format.ts';
 import { DEFAULT_RULES, type AlertLogRow, type Announcement } from '../../shared/types.ts';
 import { AiBadge } from '../components/AiCard.tsx';
 import { Icon, type IconName } from '../components/Icon.tsx';
-import { Card, Empty, Segmented, SymbolAvatar, Tag, type Tone } from '../components/ui.tsx';
+import { Card, Empty, Segmented, SymbolAvatar, Tag, chipCls, chipRowCls, type Tone } from '../components/ui.tsx';
 import { useSwipeTabs } from '../lib/gestures.ts';
 
 const KIND: Record<Announcement['kind'], { label: string; tone: Tone }> = {
@@ -39,19 +39,19 @@ export function News({ data }: ScreenProps) {
     announcements: data.announcements, holdings: data.holdings, cal: tradingCalendar(DEFAULT_RULES, data.indexDaily),
   }), [data, today]);
 
+  // One centred, readable feed at every width: cards of very different heights never sit side by side.
   return (
-    <>
+    <div className="space-y-4 lg:mx-auto lg:w-full lg:max-w-3xl">
       <header className="space-y-3">
         <h1 className="text-xl font-bold tracking-tight">News</h1>
         <Segmented label="News" value={tab} onChange={setTab} options={[{ value: 'news', label: 'Company news' }, { value: 'alerts', label: 'Your alerts' }]} />
       </header>
-      <div {...swipe} className="touch-pan-y space-y-5">
+      <div {...swipe} className="touch-pan-y space-y-4">
         {tab === 'news' ? (
           <>
-            <div className="-mx-4 flex gap-2 overflow-x-auto px-4 py-0.5 scrollbar-none">
+            <div role="group" aria-label="Show" className={chipRowCls}>
               {FILTERS.map((o) => (
-                <button key={o.v} type="button" onClick={() => setFilter(o.v)} aria-pressed={filter === o.v}
-                  className={`min-h-9 shrink-0 cursor-pointer rounded-full px-3 text-sm font-medium whitespace-nowrap ${filter === o.v ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900' : 'bg-slate-200/70 dark:bg-slate-800'}`}>{o.l}</button>
+                <button key={o.v} type="button" onClick={() => setFilter(o.v)} aria-pressed={filter === o.v} className={chipCls(filter === o.v, 'ink')}>{o.l}</button>
               ))}
             </div>
             {filter === 'week' ? (
@@ -61,22 +61,31 @@ export function News({ data }: ScreenProps) {
                 </Card>
               ) : <Empty title="Nothing dated in the next 7 days">Book closures, last days to buy, results and board meetings for your stocks appear here as PSX announces them.</Empty>
             ) : news.length ? news.map((g) => (
-              <section key={g.label} className="space-y-2 lg:grid lg:grid-cols-2 lg:items-start lg:gap-3 lg:space-y-0 lg:[&>h2]:col-span-2">
-                <h2 className="px-1 text-[13px] font-semibold text-slate-500 dark:text-slate-400">{g.label}</h2>
+              <section key={g.label} className="space-y-2">
+                <DayHeader>{g.label}</DayHeader>
                 {g.items.map((a) => <NewsCard key={a.id} a={a} />)}
               </section>
             )) : <Empty title="No news for your stocks yet">Filings are checked every 30 minutes in market hours; the AI reads the important ones.</Empty>}
           </>
         ) : alerts.length ? alerts.map((g) => (
           <section key={g.label} className="space-y-2">
-            <h2 className="px-1 text-[13px] font-semibold text-slate-500 dark:text-slate-400">{g.label}</h2>
+            <DayHeader>{g.label}</DayHeader>
             <Card className="divide-y divide-slate-100 py-1 dark:divide-slate-800">
               {g.items.map((a) => <AlertItem key={a.dedupe_key} a={a} />)}
             </Card>
           </section>
         )) : <Empty title="No alerts yet">Market alerts arrive during trading hours; the digest at 9 PM.</Empty>}
       </div>
-    </>
+    </div>
+  );
+}
+
+/** A day's label: stays at the top while its cards scroll past, so the feed always says which day you are reading. */
+function DayHeader({ children }: { children: React.ReactNode }) {
+  return (
+    <h2 className="sticky top-0 z-10 -mx-1 bg-slate-50/90 px-2 py-2 text-[13px] font-semibold tracking-wide text-slate-500 uppercase backdrop-blur dark:bg-black/85 dark:text-slate-400">
+      {children}
+    </h2>
   );
 }
 
@@ -116,14 +125,18 @@ function NewsCard({ a }: { a: Announcement }) {
     <Card>
       <div className="flex gap-3">
         <SymbolAvatar symbol={a.symbol} size="h-10 w-10" />
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="font-semibold">{a.symbol}</span>
-            <Tag tone={KIND[a.kind].tone}>{KIND[a.kind].label}</Tag>
-            {a.ai_summary && <AiBadge />}
-            {note && <Tag tone="amber">{DATE_NOTE[note]}</Tag>}
+        <div className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+          <div className="flex items-start gap-2">
+            <div className="flex min-h-7 min-w-0 flex-1 flex-wrap items-center gap-1.5">
+              <span className="font-semibold">{a.symbol}</span>
+              <Tag tone={KIND[a.kind].tone}>{KIND[a.kind].label}</Tag>
+              {a.ai_summary && <AiBadge />}
+              {note && <Tag tone="amber">{DATE_NOTE[note]}</Tag>}
+            </div>
+            {/* The source sits top-right on every card, so a short notice does not end in an empty row. */}
+            {a.pdf_url && <a href={a.pdf_url} target="_blank" rel="noopener noreferrer" aria-label={`${a.symbol} filing PDF`} className="-mt-2 -mr-2 inline-flex min-h-11 shrink-0 items-center gap-1 rounded-full px-3 text-sm font-semibold text-teal-700 hover:bg-teal-50 dark:text-teal-400 dark:hover:bg-slate-800">PDF <Icon name="external" className="h-4 w-4" /></a>}
           </div>
-          <p className="mt-1 text-[15px] leading-snug">{a.ai_summary ?? tidyTitle(a.title, a.symbol)}</p>
+          <p className="mt-1 text-[15px] leading-relaxed">{a.ai_summary ?? tidyTitle(a.title, a.symbol)}</p>
           {a.ai_summary && <p className="mt-1 line-clamp-1 text-xs text-slate-500 dark:text-slate-400">{tidyTitle(a.title, a.symbol)}</p>}
           {!!a.ai_figures?.length && (
             <div className="mt-2 flex flex-wrap gap-1.5">
@@ -138,14 +151,11 @@ function NewsCard({ a }: { a: Announcement }) {
                   </span>
                 );
               })}
-              {a.ai_figures.length > 3 && !open && <button type="button" className="cursor-pointer text-xs font-semibold text-teal-700 dark:text-teal-400" onClick={() => setOpen(true)}>+{a.ai_figures.length - 3}</button>}
+              {a.ai_figures.length > 3 && !open && <button type="button" aria-label={`Show ${a.ai_figures.length - 3} more figures`} className="-my-2.5 inline-flex min-h-11 min-w-11 cursor-pointer items-center justify-center rounded-full text-xs font-semibold text-teal-700 dark:text-teal-400" onClick={() => setOpen(true)}>+{a.ai_figures.length - 3}</button>}
             </div>
           )}
-          <div className="mt-2 flex items-center justify-between gap-2">
-            {note ? <span className="text-[11px] text-amber-700 dark:text-amber-400">{note === 'older_document' ? 'The dates inside are long before the filing: a re-upload of an old notice.' : 'A date inside does not fit the filing date; read the PDF.'}</span>
-              : a.ai_summary && a.ai_verified === false ? <span className="text-[11px] text-amber-700 dark:text-amber-400">Some figures not checked (scanned PDF)</span> : <span />}
-            {a.pdf_url && <a href={a.pdf_url} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-9 items-center gap-1 text-sm font-semibold text-teal-700 dark:text-teal-400">PDF <Icon name="external" className="h-4 w-4" /></a>}
-          </div>
+          {note ? <p className="mt-2 text-xs text-amber-700 dark:text-amber-400">{note === 'older_document' ? 'The dates inside are long before the filing: a re-upload of an old notice.' : 'A date inside does not fit the filing date; read the PDF.'}</p>
+            : a.ai_summary && a.ai_verified === false ? <p className="mt-2 text-xs text-amber-700 dark:text-amber-400">Some figures not checked (scanned PDF)</p> : null}
         </div>
       </div>
     </Card>
@@ -156,8 +166,8 @@ function AlertItem({ a }: { a: AlertLogRow }) {
   return (
     <div className="flex gap-3 py-3">
       <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300"><Icon name={ALERT_ICON(a.kind)} className="h-4 w-4" /></span>
-      <div className="min-w-0">
-        <p className="text-sm">{a.message}</p>
+      <div className="min-w-0 [overflow-wrap:anywhere]">
+        <p className="text-sm leading-relaxed">{a.message}</p>
         <p className="text-xs text-slate-500 dark:text-slate-400">
           {asOfLabel(a.sent_at)} · {a.channel === 'none' ? 'in the app only (daily limit)' : a.channel === 'both' ? 'push + Telegram' : a.channel === 'telegram' ? 'Telegram' : 'push'}
         </p>

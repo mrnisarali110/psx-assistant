@@ -15,7 +15,7 @@ import { ago, dateLabel, rs2, titleCase } from '../../shared/format.ts';
 import { AiBadge } from '../components/AiCard.tsx';
 import { Icon } from '../components/Icon.tsx';
 import { useToast } from '../components/Toast.tsx';
-import { Button, Card, Chips, Disclaimer, Empty, Segmented, SymbolAvatar, Tag } from '../components/ui.tsx';
+import { Button, Card, Chips, Disclaimer, Empty, Segmented, SymbolAvatar, Tag, chipCls, chipRowCls } from '../components/ui.tsx';
 import { haptic, useSwipeTabs } from '../lib/gestures.ts';
 
 type Tab = 'undervalued' | 'dividends' | 'upcoming';
@@ -66,7 +66,7 @@ const isLossLike = (chips: QualityChip[]) => chips.some((c) => c.key === 'loss' 
 function FilterChip({ on, onChange, children }: { on: boolean; onChange: (v: boolean) => void; children: React.ReactNode }) {
   return (
     <button type="button" role="checkbox" aria-checked={on} onClick={() => { haptic(); onChange(!on); }}
-      className={`inline-flex min-h-9 shrink-0 cursor-pointer items-center gap-1 rounded-full px-3 text-xs font-semibold whitespace-nowrap transition ${on ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900' : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'}`}>
+      className={chipCls(on, 'ink')}>
       {on && <Icon name="check" className="h-3.5 w-3.5" />}{children}
     </button>
   );
@@ -113,48 +113,51 @@ export function Discover({ data, source, reload }: ScreenProps) {
   };
   const WatchBtn = ({ symbol }: { symbol: string }) => mine.has(symbol)
     ? <Tag tone={held.has(symbol) ? 'teal' : 'slate'}>{held.has(symbol) ? 'You own it' : 'Watching'}</Tag>
-    : <Button kind="ghost" className="min-h-9 px-2" onClick={() => watch(symbol)}><Icon name="plus" className="h-4 w-4" />Watch</Button>;
+    : <Button kind="ghost" className="-mr-2 shrink-0 px-3" onClick={() => watch(symbol)}><Icon name="plus" className="h-4 w-4" />Watch</Button>;
   const picksTime = tab === 'undervalued' ? data.picks.undervalued?.created_at : tab === 'dividends' ? data.picks.dividend?.created_at : null;
   /** The AI's sentence, only while every number in it still matches what the card shows (ISSUE-05). */
   const AiWhy = ({ why, shown }: { why: string | undefined; shown: Record<string, number | null | undefined> }) =>
-    why && aiTextMatches(why, shown) ? <p className="min-w-0 text-sm">{why}</p> : <span className="min-w-0" />;
+    why && aiTextMatches(why, shown) ? <p className="min-w-0 text-sm leading-relaxed text-slate-700 dark:text-slate-300">{why}</p> : <span className="min-w-0" />;
 
   return (
     <>
       <header className="space-y-3">
         <h1 className="text-xl font-bold tracking-tight">Discover</h1>
-        <Segmented label="Discover" value={tab} onChange={setTab} options={TABS} />
-        <p className="px-1 text-xs text-slate-500 dark:text-slate-400">
+        <div className="lg:max-w-xl"><Segmented label="Discover" value={tab} onChange={setTab} options={TABS} /></div>
+        <p className="max-w-2xl px-1 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
           {tab === 'undervalued' && 'KSE-100 stocks trading below their sector’s usual P/E that still pay dividends. A P/E under 2 or over 100 is left out: it is a quirk of the figures, not a bargain.'}
           {tab === 'dividends' && 'Highest dividend yields in the KSE-100. A yield built on a one-off special payout is ranked on the regular payout instead.'}
           {tab === 'upcoming' && 'Dividends where you can still buy in time. “Buy by” = book closure minus 2 working days (T+1 settlement since Feb 2026; an estimate, confirm with your broker).'}
           {picksTime && <> AI reviewed {ago(picksTime)}.</>}{shariahOnly && ' Shariah only.'}
         </p>
-        {tab !== 'upcoming' && (
-          <div role="group" aria-label="Filters" className="-mx-4 flex gap-1.5 overflow-x-auto px-4 py-0.5 scrollbar-none">
-            <FilterChip on={filters.loss} onChange={(loss) => setFilters((f) => ({ ...f, loss }))}>Hide loss-making</FilterChip>
-            {tab === 'dividends' && <FilterChip on={filters.special} onChange={(special) => setFilters((f) => ({ ...f, special }))}>Hide special dividends</FilterChip>}
-            <FilterChip on={filters.bc} onChange={(bc) => setFilters((f) => ({ ...f, bc }))}>Blue chips only</FilterChip>
-            {!data.settings.shariah_only && <FilterChip on={filters.shariah} onChange={(shariah) => setFilters((f) => ({ ...f, shariah }))}>Shariah only</FilterChip>}
-          </div>
-        )}
-        {tab === 'undervalued' && <Chips label="Sort undervalued stocks by" options={UV_SORTS} value={sorts.uv} onChange={(uv) => setSorts((s) => ({ ...s, uv }))} />}
-        {tab === 'dividends' && <Chips label="Sort dividend stocks by" options={DV_SORTS} value={sorts.dv} onChange={(dv) => setSorts((s) => ({ ...s, dv }))} />}
-        {tab === 'upcoming' && <Chips label="Sort upcoming dividends by" options={UP_SORTS} value={sorts.up} onChange={(up) => setSorts((s) => ({ ...s, up }))} />}
+        {/* Filters and sort: one row each on a phone (scrolls sideways), side by side on a wide screen. */}
+        <div className="space-y-2 lg:flex lg:flex-wrap lg:items-start lg:gap-x-8 lg:gap-y-3 lg:space-y-0">
+          {tab !== 'upcoming' && (
+            <div role="group" aria-label="Filters" className={chipRowCls}>
+              <FilterChip on={filters.loss} onChange={(loss) => setFilters((f) => ({ ...f, loss }))}>Hide loss-making</FilterChip>
+              {tab === 'dividends' && <FilterChip on={filters.special} onChange={(special) => setFilters((f) => ({ ...f, special }))}>Hide special dividends</FilterChip>}
+              <FilterChip on={filters.bc} onChange={(bc) => setFilters((f) => ({ ...f, bc }))}>Blue chips only</FilterChip>
+              {!data.settings.shariah_only && <FilterChip on={filters.shariah} onChange={(shariah) => setFilters((f) => ({ ...f, shariah }))}>Shariah only</FilterChip>}
+            </div>
+          )}
+          {tab === 'undervalued' && <Chips label="Sort undervalued stocks by" options={UV_SORTS} value={sorts.uv} onChange={(uv) => setSorts((s) => ({ ...s, uv }))} />}
+          {tab === 'dividends' && <Chips label="Sort dividend stocks by" options={DV_SORTS} value={sorts.dv} onChange={(dv) => setSorts((s) => ({ ...s, dv }))} />}
+          {tab === 'upcoming' && <Chips label="Sort upcoming dividends by" options={UP_SORTS} value={sorts.up} onChange={(up) => setSorts((s) => ({ ...s, up }))} />}
+        </div>
       </header>
 
-      <div {...swipe} className="touch-pan-y space-y-3 lg:grid lg:grid-cols-2 lg:items-start lg:gap-4 lg:space-y-0 xl:grid-cols-3">
+      <div {...swipe} className="touch-pan-y space-y-3 lg:grid lg:grid-cols-[repeat(auto-fill,minmax(20rem,1fr))] lg:gap-4 lg:space-y-0">
         {tab === 'undervalued' && (uv.length ? uv.map(({ r, chips }, i) => <UndervaluedCard key={r.symbol} r={r} i={i} chips={chips} by={sorts.uv} bc={data.bluechip[r.symbol]} watch={<WatchBtn symbol={r.symbol} />}
           ai={<AiWhy why={r.ai?.why} shown={{ pe: r.pe, sector_pe: r.sector_pe, discount: r.discount_pct, yield: r.dividend_yield_pct, price: r.price, change_1y: r.change_1y_pct }} />} />)
-          : <Empty title={filters.loss || filters.bc || shariahOnly ? 'Nothing passes these filters' : 'No screen data yet'}>{filters.loss || filters.bc || shariahOnly ? 'Turn a filter off to see more.' : 'It fills after the next market check.'}</Empty>)}
+          : <Empty className="lg:col-span-full" title={filters.loss || filters.bc || shariahOnly ? 'Nothing passes these filters' : 'No screen data yet'}>{filters.loss || filters.bc || shariahOnly ? 'Turn a filter off to see more.' : 'It fills after the next market check.'}</Empty>)}
 
         {tab === 'dividends' && (dv.length ? dv.map(({ d, chips }, i) => <DividendCard key={d.symbol} d={d} i={i} chips={chips} bc={data.bluechip[d.symbol]} watch={<WatchBtn symbol={d.symbol} />}
           ai={<AiWhy why={d.ai?.why} shown={{ yield: d.dividend_yield_pct, psx_yield: d.psx_yield_pct, dps: d.annual_dps, last: d.last?.dps, price: d.price, pe: d.pe }} />} />)
-          : <Empty title={filters.loss || filters.special || filters.bc || shariahOnly ? 'Nothing passes these filters' : 'No dividend data yet'}>{filters.loss || filters.special || filters.bc || shariahOnly ? 'Turn a filter off to see more.' : 'It fills after the next market check.'}</Empty>)}
+          : <Empty className="lg:col-span-full" title={filters.loss || filters.special || filters.bc || shariahOnly ? 'Nothing passes these filters' : 'No dividend data yet'}>{filters.loss || filters.special || filters.bc || shariahOnly ? 'Turn a filter off to see more.' : 'It fills after the next market check.'}</Empty>)}
 
         {tab === 'upcoming' && (up.length ? up.map((u) => (
-          <Card key={u.id}>
-            <div className="flex items-center gap-3">
+          <Card key={u.id} className="flex h-full items-center">
+            <div className="flex w-full items-center gap-3">
               <div className={`flex h-14 w-14 shrink-0 flex-col items-center justify-center rounded-2xl ${u.days_left <= 2 ? 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300' : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'}`}>
                 <span className="num text-lg leading-none font-bold">{u.days_left}</span>
                 <span className="text-[10px] font-semibold uppercase">{u.days_left === 1 ? 'day' : 'days'}</span>
@@ -169,7 +172,7 @@ export function Discover({ data, source, reload }: ScreenProps) {
                 : <WatchBtn symbol={u.symbol} />}
             </div>
           </Card>
-        )) : <Empty title="No upcoming dividends found yet">The night scan reads dividend notices from PSX and lists them here with the last day to buy.</Empty>)}
+        )) : <Empty className="lg:col-span-full" title="No upcoming dividends found yet">The night scan reads dividend notices from PSX and lists them here with the last day to buy.</Empty>)}
       </div>
       <Disclaimer />
     </>
@@ -179,7 +182,7 @@ export function Discover({ data, source, reload }: ScreenProps) {
 function UndervaluedCard({ r, i, chips, by, watch, ai, bc }: { r: Undervalued & { ai: { n: number; why: string } | null }; i: number; chips: QualityChip[]; by: UvSort; watch: React.ReactNode; ai: React.ReactNode; bc?: BcState }) {
   const m = uvMetric(r, by);
   return (
-    <Card>
+    <Card className="flex h-full flex-col">
       <div className="flex items-center gap-3">
         <SymbolAvatar symbol={r.symbol} change={r.change_pct} />
         <div className="min-w-0 flex-1">
@@ -199,7 +202,7 @@ function UndervaluedCard({ r, i, chips, by, watch, ai, bc }: { r: Undervalued & 
         <QualityTags chips={chips} />
       </div>
       <NotBlueChip bc={bc} />
-      <div className="mt-2 flex items-center justify-between gap-2">{ai}{watch}</div>
+      <CardFoot ai={ai} watch={watch} />
     </Card>
   );
 }
@@ -208,14 +211,14 @@ function DividendCard({ d, i, chips, watch, ai, bc }: { d: DividendLeader & { ai
   const freq = effectiveFrequency(d);
   const freqNote = d.frequency ? 'from filings' : freq ? 'AI estimate' : d.frequency_enough ? 'how often' : 'not enough history';
   return (
-    <Card>
+    <Card className="flex h-full flex-col">
       <div className="flex items-center gap-3">
         <SymbolAvatar symbol={d.symbol} />
         <div className="min-w-0 flex-1">
           <p className="flex flex-wrap items-center gap-1.5 font-semibold"><span className="num text-xs text-slate-400">{i + 1}</span>{d.symbol}<BcBadge state={bc} symbol={d.symbol} mode="status" />{d.ai && <AiBadge />}{d.is_shariah && <Tag tone="green">Shariah</Tag>}<ExTag ex={d.ex} /></p>
           <p className="truncate text-xs text-slate-500 dark:text-slate-400">{d.sector ? titleCase(d.sector) : ''} · {rs2(d.price)}</p>
         </div>
-        <div className="text-right">
+        <div className="shrink-0 text-right">
           <p className="num text-lg font-bold text-emerald-600 dark:text-emerald-400">{d.dividend_yield_pct.toFixed(1)}%</p>
           <p className="text-[11px] text-slate-500 dark:text-slate-400">{d.yield_from === 'filings' ? 'regular yield' : 'yield'}</p>
         </div>
@@ -234,8 +237,18 @@ function DividendCard({ d, i, chips, watch, ai, bc }: { d: DividendLeader & { ai
         </div>
       )}
       <NotBlueChip bc={bc} />
-      <div className="mt-2 flex items-center justify-between gap-2">{ai}{watch}</div>
+      <CardFoot ai={ai} watch={watch} />
     </Card>
+  );
+}
+
+/** The AI's reason and the Watch action, pinned to the bottom of the card so every card in a row ends on the same line. */
+function CardFoot({ ai, watch }: { ai: React.ReactNode; watch: React.ReactNode }) {
+  return (
+    <>
+      <span aria-hidden="true" className="min-h-3 flex-1" />
+      <div className="flex items-center justify-between gap-3 border-t border-slate-100 pt-2 dark:border-slate-800">{ai}{watch}</div>
+    </>
   );
 }
 

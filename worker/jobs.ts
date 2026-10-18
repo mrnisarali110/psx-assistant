@@ -172,7 +172,7 @@ export async function runJob(job: JobName, deps: JobDeps): Promise<RunReport> {
     }
 
     // ---- Bull market ON/OFF and the State Bank policy rate (nightly) ----
-    const market: MarketNews = deep ? await updateMarket({ today, idx, tradedToday, screen, deps, report, log }) : { flip: null, rate: null, headline: null };
+    const market: MarketNews = deep ? await updateMarket({ today, idx, screen, deps, report, log }) : { flip: null, rate: null, headline: null };
 
     const bcMap = Object.fromEntries((await store.bluechipStates().catch(() => [])).map((b) => [b.symbol, b.status]));
     log(`job=${job} users=${users.length} symbols=${userSymbols.length}+${readSymbols.length - userSymbols.length} usable=${usable} tradedToday=${tradedToday} preclose=${preclose} aiRead=${report.ai.announcements_read}`);
@@ -262,7 +262,7 @@ async function readFilings(symbols: string[], today: string, limit: number, deps
  * Reads the State Bank's rate (history PDF + home page) and today's bull/bear state from the stored KSE-100 closes and
  * PSX's screener; saves both. Returns what changed since the last reading. Never throws: errors go to the report.
  */
-async function updateMarket(o: { today: string; idx: IndexSnapshot | null; tradedToday: boolean; screen: ScreenRow[]; deps: JobDeps; report: RunReport; log: (m: string) => void }): Promise<MarketNews> {
+async function updateMarket(o: { today: string; idx: IndexSnapshot | null; screen: ScreenRow[]; deps: JobDeps; report: RunReport; log: (m: string) => void }): Promise<MarketNews> {
   const out: MarketNews = { flip: null, rate: null, headline: null };
   const { store } = o.deps;
   try {
@@ -281,16 +281,18 @@ async function updateMarket(o: { today: string; idx: IndexSnapshot | null; trade
       }
     }
     const rate = rateState(rates, o.today, rules);
-    if (!o.tradedToday || !o.idx) return out;
+    if (!o.idx) return out;
+    // The reading belongs to the last trading day (a weekend Refresh latest stores Friday's).
+    const mday = pktDate(new Date(o.idx.ts));
     const c = rules.regime;
-    const closes = (await store.indexCloses(addDays(o.today, -c.lookback_days))).filter((d) => d.day < o.today);
-    const prev = (await store.regimeDays(addDays(o.today, -400))).filter((d) => d.day < o.today).at(-1) ?? null;
+    const closes = (await store.indexCloses(addDays(mday, -c.lookback_days))).filter((d) => d.day < mday);
+    const prev = (await store.regimeDays(addDays(mday, -400))).filter((d) => d.day < mday).at(-1) ?? null;
     const screen = o.screen.length ? o.screen : await store.screenRows().catch(() => [] as ScreenRow[]);
     const b = marketBreadth(screen, rules);
-    const t = evaluateTrend({ today: o.today, closes, close: o.idx.kse100, change_1y_pct: b.change_1y_pct }, prev?.bull ?? null, rules);
+    const t = evaluateTrend({ today: mday, closes, close: o.idx.kse100, change_1y_pct: b.change_1y_pct }, prev?.bull ?? null, rules);
     if (t.on == null) return out;
     const day: RegimeDay = {
-      day: o.today, bull: t.on, close: o.idx.kse100, ma: t.ma, change_1y_pct: b.change_1y_pct, drawdown_pct: t.drawdown_pct,
+      day: mday, bull: t.on, close: o.idx.kse100, ma: t.ma, change_1y_pct: b.change_1y_pct, drawdown_pct: t.drawdown_pct,
       earnings_yield_pct: b.earnings_yield_pct, policy_rate: rate?.rate ?? null, reasons: t.reasons,
     };
     await store.saveRegimeDay(day);

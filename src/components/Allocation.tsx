@@ -37,8 +37,9 @@ export function AllocationTab({ view, maxPositionPct, onOpenStock, bc = {} }: { 
     );
   }
 
+  // Wide screens: the sector donut and the per-stock bars side by side; the notes run underneath both.
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 lg:grid lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:grid-rows-[auto_auto_1fr] lg:items-start lg:gap-6 lg:space-y-0">
       <Card>
         {slices.length > 0 ? (
           <Donut slices={slices} total={view.total_value} caption={`${sectorCount} sector${sectorCount === 1 ? '' : 's'}`} />
@@ -59,7 +60,7 @@ export function AllocationTab({ view, maxPositionPct, onOpenStock, bc = {} }: { 
         <Button kind="ghost" className="mt-2 w-full" onClick={() => setMore(true)}>Show more<Icon name="chevron" className="h-4 w-4" /></Button>
       </Card>
 
-      <Section title="Per stock">
+      <div className="lg:col-start-2 lg:row-span-3 lg:row-start-1"><Section title="Per stock">
         <div className="space-y-1">
           {/* The cap label sits once above the list, aligned with the marker in every bar below it. */}
           <div className="flex items-end gap-3 px-1">
@@ -107,13 +108,13 @@ export function AllocationTab({ view, maxPositionPct, onOpenStock, bc = {} }: { 
             })}
           </ul>
         </div>
-      </Section>
+      </Section></div>
 
-      <p className="num px-1 text-sm font-medium">
+      <p className="num px-1 text-sm font-medium lg:col-start-1">
         Blue chips: {blue.pct == null ? 'n/a' : `${blue.pct.toFixed(0)}% of my portfolio`}
         {blue.unchecked > 0 && <span className="block text-xs font-normal text-slate-500 dark:text-slate-400">{blue.unchecked} holding{blue.unchecked === 1 ? '' : 's'} not checked yet or without enough data</span>}
       </p>
-      <p className="px-1 text-xs text-slate-500 dark:text-slate-400">
+      <p className="max-w-2xl px-1 text-xs text-slate-500 lg:col-start-1 dark:text-slate-400">
         New money goes where it keeps every stock under {maxPositionPct}% and every sector under {limit}%.
       </p>
 

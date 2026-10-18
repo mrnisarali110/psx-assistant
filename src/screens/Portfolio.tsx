@@ -61,21 +61,21 @@ export function Portfolio(props: ScreenProps) {
         </div>
       </header>
 
-      <div className="grid grid-cols-2 gap-3">
-        <Card>
+      <div className="grid grid-cols-2 gap-3 lg:gap-4">
+        <Card className="lg:p-5">
           <p className="text-xs text-slate-500 dark:text-slate-400">Value</p>
-          <p className="num text-lg font-bold">{rs(view.total_value)}</p>
+          <p className="num text-lg font-bold lg:text-2xl">{rs(view.total_value)}</p>
           <p className={`num text-xs font-semibold ${changeTone(hr.total)}`}>{signedRs(hr.total)} ({pct(hr.pct)}) total</p>
           {hr.dividends > 0 && <p className="num text-[11px] text-slate-500 dark:text-slate-400">incl. {rs(hr.dividends)} dividends</p>}
         </Card>
-        <Card>
+        <Card className="lg:p-5">
           <p className="text-xs text-slate-500 dark:text-slate-400">Invested this month</p>
-          <p className="num text-lg font-bold">{rs(invested)}</p>
+          <p className="num text-lg font-bold lg:text-2xl">{rs(invested)}</p>
           <p className="num text-xs text-slate-500 dark:text-slate-400">of {rs(budget)} · {rs(Math.max(0, budget - invested))} left</p>
         </Card>
       </div>
 
-      <Segmented label="Portfolio view" value={tab} onChange={setTab} options={TABS} />
+      <div className="lg:max-w-2xl"><Segmented label="Portfolio view" value={tab} onChange={setTab} options={TABS} /></div>
 
       <div {...swipe} className="touch-pan-y space-y-4">
         {tab === 'holdings' && (
@@ -96,7 +96,7 @@ export function Portfolio(props: ScreenProps) {
                 </div>
               </Empty>
             ) : (
-              <ul className="space-y-2 lg:grid lg:grid-cols-2 lg:gap-3 lg:space-y-0">
+              <ul className="space-y-2 lg:grid lg:grid-cols-2 lg:gap-3 lg:space-y-0 lg:[&>li>div]:h-full lg:[&>li>div>button]:h-full">
                 {view.rows.map((r) => (
                   <HoldingRow key={r.holding.id ?? r.holding.symbol} row={r} call={acts.callFor(r)} bc={data.bluechip[r.holding.symbol]} actions={{
                     onOpen: () => acts.open(r.holding.symbol), onMenu: () => acts.menu(r.holding.symbol),
@@ -107,7 +107,7 @@ export function Portfolio(props: ScreenProps) {
             )}
             {view.missing_prices.length > 0 && <p className="px-1 text-xs text-amber-700 dark:text-amber-400">No price yet for {view.missing_prices.join(', ')}. It appears after the next market check.</p>}
             <button type="button" onClick={() => { haptic(); setTxns(true); }}
-              className="flex min-h-12 w-full cursor-pointer items-center gap-3 rounded-3xl bg-white px-4 text-left text-sm ring-1 ring-slate-200/80 active:scale-[0.99] dark:bg-slate-900 dark:ring-slate-800">
+              className="flex min-h-14 w-full cursor-pointer items-center gap-3 rounded-3xl bg-white px-4 py-2 text-left text-sm ring-1 ring-slate-200/80 active:scale-[0.99] lg:max-w-[calc(50%-0.375rem)] dark:bg-slate-900 dark:ring-slate-800">
               <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300"><Icon name="list" className="h-[18px] w-[18px]" /></span>
               <span className="flex-1"><span className="block font-medium">Buys and sells</span><span className="block text-xs text-slate-500 dark:text-slate-400">{data.transactions.length} recorded · edit, add or import a CSV</span></span>
               <Icon name="chevron" className="h-4 w-4 text-slate-400" />
@@ -148,7 +148,7 @@ function Watchlist({ data, source, reload, onOpen, onMenu }: ScreenProps & { onO
       <ul className="space-y-2 lg:grid lg:grid-cols-2 lg:gap-3 lg:space-y-0">
         {data.watchlist.map((w) => <WatchRow key={w.id ?? w.symbol} symbol={w.symbol} p={data.prices[w.symbol]} bc={data.bluechip[w.symbol]} onOpen={() => onOpen(w.symbol)} onMenu={() => onMenu(w.symbol)} />)}
       </ul>
-      <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); add(); }}>
+      <form className="flex gap-2 lg:max-w-[calc(50%-0.375rem)]" onSubmit={(e) => { e.preventDefault(); add(); }}>
         <input className={`${inputCls} uppercase`} placeholder="Add symbol, e.g. MARI" value={symbol} autoCapitalize="characters" onChange={(e) => setSymbol(e.target.value)} aria-label="Symbol to watch" />
         <Button type="submit" kind="secondary">Watch</Button>
       </form>
@@ -162,15 +162,15 @@ function WatchRow({ symbol, p, bc, onOpen, onMenu }: { symbol: string; p: Screen
   return (
     <li>
       <button type="button" {...press.handlers} onClick={() => { if (!press.consumed()) onOpen(); }}
-        className="no-callout flex w-full cursor-pointer items-center gap-3 rounded-3xl bg-white px-4 py-3 text-left ring-1 ring-slate-200/80 active:scale-[0.99] dark:bg-slate-900 dark:ring-slate-800">
+        className="no-callout flex h-full w-full cursor-pointer items-center gap-3 rounded-3xl bg-white px-4 py-3 text-left ring-1 ring-slate-200/80 active:scale-[0.99] dark:bg-slate-900 dark:ring-slate-800">
         <SymbolAvatar symbol={symbol} change={p?.change_pct} size="h-10 w-10" />
         <span className="min-w-0 flex-1">
-          <span className="flex items-center gap-1.5 font-semibold">{symbol}<BcBadge state={bc} symbol={symbol} />{p?.ex && <Tag tone="violet">{exLabel(p.ex)}</Tag>}</span>
+          <span className="flex flex-wrap items-center gap-1.5 font-semibold">{symbol}<BcBadge state={bc} symbol={symbol} />{p?.ex && <Tag tone="violet">{exLabel(p.ex)}</Tag>}</span>
           <span className="block truncate text-xs text-slate-500 dark:text-slate-400">
             {p ? `Yield ${missingNum(p.dividend_yield_pct) ? 'n/a' : `${p.dividend_yield_pct!.toFixed(1)}%`} · P/E ${missingNum(p.pe) ? 'n/a' : `${p.pe!.toFixed(1)}${peOutlier(p.pe).outlier ? ' (check figures)' : ''}`}` : 'Price after the next market check'}
           </span>
         </span>
-        <span className="num text-right">
+        <span className="num shrink-0 text-right">
           <span className="block text-sm font-semibold">{rs2(p?.price)}</span>
           <span className={`block text-xs ${changeTone(p?.change_pct)}`}>{pct(p?.change_pct, 2)}</span>
         </span>

@@ -101,7 +101,7 @@ export function Segmented<T extends string>({ options, value, onChange, label }:
       )}
       {options.map((o) => (
         <button key={o.value} type="button" role="tab" aria-selected={value === o.value} onClick={() => { haptic(); onChange(o.value); }}
-          className={`press relative min-h-9 flex-1 cursor-pointer rounded-xl px-2 text-sm font-semibold ${value === o.value ? 'text-slate-900 dark:text-white' : 'text-slate-500 dark:text-slate-400'}`}>
+          className={`press relative min-h-10 flex-1 cursor-pointer rounded-xl px-2 text-sm font-semibold ${value === o.value ? 'text-slate-900 dark:text-white' : 'text-slate-500 dark:text-slate-400'}`}>
           {o.label}
         </button>
       ))}
@@ -109,15 +109,27 @@ export function Segmented<T extends string>({ options, value, onChange, label }:
   );
 }
 
+/**
+ * A row of pills: scrolls sideways on a phone (edges fade so it is clear there is more), wraps on a wide screen.
+ * Shared by sort chips, Discover's filters and News's filters so every chip row looks and behaves the same.
+ */
+export const chipRowCls =
+  '-mx-4 flex gap-2 overflow-x-auto px-4 py-0.5 scrollbar-none [mask-image:linear-gradient(to_right,transparent,#000_16px,#000_calc(100%-16px),transparent)] lg:mx-0 lg:flex-wrap lg:overflow-visible lg:px-0 lg:[mask-image:none]';
+/** One pill in such a row: 44px tall, never wraps its own label. */
+export const chipCls = (on: boolean, solid: 'teal' | 'ink' = 'teal') =>
+  `press inline-flex min-h-11 shrink-0 cursor-pointer items-center gap-1 rounded-full px-3.5 text-[13px] font-semibold whitespace-nowrap transition-colors ${
+    on ? (solid === 'teal' ? 'bg-teal-700 text-white' : 'bg-slate-900 text-white dark:bg-white dark:text-slate-900')
+      : 'bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700'}`;
+
 /** One-of-many pills in a scrolling row (sort orders, filters). */
 export function Chips<T extends string>({ options, value, onChange, label }: {
   options: { value: T; label: string }[]; value: T; onChange: (v: T) => void; label: string;
 }) {
   return (
-    <div role="radiogroup" aria-label={label} className="-mx-4 flex gap-1.5 overflow-x-auto px-4 py-0.5 scrollbar-none">
+    <div role="radiogroup" aria-label={label} className={chipRowCls}>
       {options.map((o) => (
         <button key={o.value} type="button" role="radio" aria-checked={value === o.value} onClick={() => { haptic(); onChange(o.value); }}
-          className={`press min-h-9 shrink-0 cursor-pointer rounded-full px-3 text-xs font-semibold whitespace-nowrap ${value === o.value ? 'bg-teal-700 text-white' : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'}`}>
+          className={chipCls(value === o.value)}>
           {o.label}
         </button>
       ))}
@@ -138,9 +150,9 @@ export function Skeleton({ className = '' }: { className?: string }) {
   return <div className={`skeleton ${className}`} aria-hidden="true" />;
 }
 
-export function Empty({ title, children }: { title: string; children?: ReactNode }) {
+export function Empty({ title, children, className = '' }: { title: string; children?: ReactNode; className?: string }) {
   return (
-    <div className="rounded-3xl border border-dashed border-slate-300 p-6 text-center dark:border-slate-700">
+    <div className={`rounded-3xl border border-dashed border-slate-300 p-6 text-center dark:border-slate-700 ${className}`}>
       <p className="font-semibold">{title}</p>
       {children && <div className="mt-1 text-sm text-slate-500 dark:text-slate-400">{children}</div>}
     </div>

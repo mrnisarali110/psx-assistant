@@ -9,9 +9,9 @@ import { addDays, isMarketOpen, isStale, minutesToClose, pktDate, pktParts } fro
 import { DEFAULT_RULES } from '../../shared/types.ts';
 import { asOfLabel, num, pct, rs, signedRs } from '../../shared/format.ts';
 import { AiCard } from '../components/AiCard.tsx';
-import { MarketMoodLine } from '../components/MarketMood.tsx';
+import { MarketCard } from '../components/MarketMood.tsx';
 import { useHoldingActions } from '../components/HoldingActions.tsx';
-import { Button, Card, Section, Sparkline, SymbolAvatar, changeTone } from '../components/ui.tsx';
+import { Button, Card, Section, SymbolAvatar, changeTone } from '../components/ui.tsx';
 import { useLongPress } from '../lib/gestures.ts';
 import { WeekRow } from './News.tsx';
 
@@ -47,7 +47,6 @@ export function Home(props: ScreenProps) {
   const budget = data.settings.monthly_budget_pkr;
   const open = isMarketOpen(now, DEFAULT_RULES.market_hours_pkt);
   const toClose = minutesToClose(now, DEFAULT_RULES.market_hours_pkt);
-  const idx = data.index;
 
   // One story with the AI card below: what it suggests adding or trimming decides the Today card too (the worker's
   // guardrails already dropped any add that breaks your caps, Shariah or hold-no-add rules).
@@ -84,7 +83,7 @@ export function Home(props: ScreenProps) {
 
   return (
     <>
-      <header className="flex items-center justify-between lg:[column-span:all]">
+      <header className="flex items-center justify-between">
         <div>
           <p className="text-xs text-slate-500 dark:text-slate-400">{new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Karachi', weekday: 'long', month: 'short', day: 'numeric' }).format(now)}</p>
           <h1 className="text-xl font-bold tracking-tight">{greeting(now)}</h1>
@@ -95,7 +94,7 @@ export function Home(props: ScreenProps) {
         </span>
       </header>
 
-      <div className={`flex items-center gap-4 rounded-3xl bg-gradient-to-br px-4 py-3.5 lg:[column-span:all] lg:px-6 lg:py-5 ${hero.cls}`} role="status">
+      <div className={`flex items-center gap-4 rounded-3xl bg-gradient-to-br px-4 py-3.5 lg:px-6 lg:py-5 ${hero.cls}`} role="status">
         <div className="shrink-0">
           <p className="text-[10px] font-semibold tracking-wide uppercase opacity-80">Today</p>
           <p className="text-3xl leading-none font-extrabold tracking-tight">{hero.word}</p>
@@ -106,6 +105,9 @@ export function Home(props: ScreenProps) {
         </div>
       </div>
 
+      {/* Desktop: your money on the left, the market and the AI on the right. Phone: one column in this order. */}
+      <div className="space-y-4 lg:grid lg:grid-cols-12 lg:items-start lg:gap-5 lg:space-y-0">
+      <div className="space-y-4 lg:col-span-7 lg:space-y-5">
       <Card onClick={() => go('portfolio')}>
         <div className="flex items-end justify-between gap-3">
           <div className="min-w-0">
@@ -128,8 +130,9 @@ export function Home(props: ScreenProps) {
       </Card>
 
       {view.rows.length > 0 && (
-        <div className="-mx-4 overflow-x-auto px-4 scrollbar-none">
-          <ul className="flex gap-3 pb-1">
+        <div className="-mx-4 overflow-x-auto px-4 scrollbar-none lg:mx-0 lg:overflow-visible lg:rounded-3xl lg:bg-white lg:p-4 lg:ring-1 lg:ring-slate-200/80 lg:dark:bg-slate-900 lg:dark:ring-slate-800">
+          <p className="mb-2 hidden text-[13px] font-semibold tracking-wide text-slate-500 uppercase lg:block dark:text-slate-400">Your stocks today</p>
+          <ul className="flex gap-3 pb-1 lg:flex-wrap lg:gap-x-4 lg:gap-y-3">
             {view.rows.map((r) => <Story key={r.holding.symbol} symbol={r.holding.symbol} change={r.price?.change_pct ?? null} onOpen={() => acts.open(r.holding.symbol)} onMenu={() => acts.menu(r.holding.symbol)} />)}
           </ul>
         </div>
@@ -158,22 +161,15 @@ export function Home(props: ScreenProps) {
         </Card>
       </Section>
 
-      <AiCard insight={ai} aiEnabled={!!data.settings.ai_enabled} demo={source.kind === 'demo'} bc={data.bluechip} />
+      </div>
 
-      <Card>
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <p className="text-sm text-slate-500 dark:text-slate-400">KSE-100</p>
-            <p className="num text-xl font-bold">{idx ? num(idx.kse100, 0) : 'no data'}</p>
-            <p className={`num text-sm font-semibold ${changeTone(idx?.change_pct)}`}>{pct(idx?.change_pct, 2)}</p>
-          </div>
-          <Sparkline values={data.indexHistory.map((i) => i.kse100)} />
-        </div>
-        <p className={`mt-2 text-xs ${stale ? 'font-medium text-amber-600 dark:text-amber-400' : 'text-slate-500 dark:text-slate-400'}`}>
-          {stale ? 'Prices may be out of date · ' : ''}as of {asOfLabel(asOf)} · crash level {num(data.settings.crash_trigger_kse, 0)}
-        </p>
-        <MarketMoodLine data={data} />
-      </Card>
+      <div className="space-y-4 lg:col-span-5 lg:space-y-5">
+        <MarketCard data={data} onOpen={() => go('market')} footnote={
+          <span className={stale ? 'font-medium text-amber-600 dark:text-amber-400' : ''}>{stale ? 'Prices may be out of date · ' : ''}as of {asOfLabel(asOf)} · crash level {num(data.settings.crash_trigger_kse, 0)}</span>
+        } />
+        <AiCard insight={ai} aiEnabled={!!data.settings.ai_enabled} demo={source.kind === 'demo'} bc={data.bluechip} />
+      </div>
+      </div>
 
       {acts.ui}
     </>

@@ -194,8 +194,10 @@ export function Profile({ data, source, reload, onExitDemo }: ScreenProps & { on
             <NumberInput label="Sales tax on commission" suffix="%" value={s.sales_tax_pct} min={0} max={100} width="w-24" onSave={(v) => save({ sales_tax_pct: v })} />
           </Row>
           <Row icon="user" label="Tax status" hint="On the Active Taxpayer List (filer): 15% capital gains tax and 15% dividend tax. Non-filer: 30% on dividends.">
-            <Segmented label="Tax status" value={s.tax_filer ? 'filer' : 'non'} onChange={(v) => save({ tax_filer: v === 'filer' })}
-              options={[{ value: 'filer', label: 'Filer' }, { value: 'non', label: 'Non-filer' }]} />
+            <span className="shrink-0 whitespace-nowrap">
+              <Segmented label="Tax status" value={s.tax_filer ? 'filer' : 'non'} onChange={(v) => save({ tax_filer: v === 'filer' })}
+                options={[{ value: 'filer', label: 'Filer' }, { value: 'non', label: 'Non-filer' }]} />
+            </span>
           </Row>
           <Row icon="check" label="Match NCCPL statement" hint="Count gains without broker charges, the way NCCPL's monthly CGT statement does.">
             <Toggle label="Match NCCPL statement" checked={s.match_nccpl} onChange={(v) => save({ match_nccpl: v })} />

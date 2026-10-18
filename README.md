@@ -170,8 +170,9 @@ used; dividend and profit history therefore fill in from filings over time.
 
 ## Bull market ON/OFF and the interest rate
 
-The KSE-100 card on Home shows **Bull market ON/OFF** with how long it has lasted and the **State Bank policy rate**;
-tap it for the charts, the reasons and where spare cash could go. Every threshold is in `shared/rules.json` (`regime`).
+The **Market** card on Home shows the KSE-100, **Bull market ON/OFF** with a shaded chart and how long it has lasted,
+the **State Bank policy rate** and the spare-cash stance; tap it for the **Market** page (charts, reasons, rate
+cycles, where spare cash could go). On a computer Market is also in the sidebar. Every threshold is in `shared/rules.json` (`regime`).
 
 - **ON** when the KSE-100 is up 20% on a year (PSX's own 1-year change of the index stocks, weighted by market cap,
   from the screener) or 20% above its 12-month low, and not below its 200-day average. **OFF** after a 20% fall from

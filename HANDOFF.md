@@ -37,6 +37,13 @@ rate box/meeting), `updateMarket` in `worker/jobs.ts` (deep runs: night + refres
 closes we store: the 200-day average starts after 120 stored days. `shared/sbp-policy-rates.json` is a dated snapshot
 for the demo and a parser test, never used by the worker.
 
+**Layout pass (2026-10-18, owner: "does it look like a flagship product?"):** Home is a 12-column grid on desktop
+(money left, market + AI right) and its KSE-100 card became the **Market card** (KSE-100, ON/OFF with shaded chart,
+policy rate, 1-year change, spare-cash stance) that opens the new **Market** page (`#/market`, desktop sidebar item;
+`#/home?market` redirects there). Until a reading is stored the app shows a provisional one computed from the same
+data (`useMarketMood`). Weekend runs store the reading for the last trading day. News is one centred feed, Discover
+cards are equal height, Portfolio tabs use the width; chips are 44px and scroll on phones (`chipRowCls` in ui.tsx).
+
 Live: commit `d623087`, Worker version `20f67f9f`, 324 tests green, CI green, migration 0006 applied.
 
 **Owner's feedback on the phone (2026-10-15 13:33 PKT), and what was done about it:**

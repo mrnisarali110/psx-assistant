@@ -46,8 +46,9 @@ export function TaxTab({ data, onPlanSale, onTransactions }: { data: AppData; on
     ? `Dividends are taxed at source: ${wht.filer_pct}% for you as a filer (${wht.non_filer_pct}% for non-filers). They are not capital gains.`
     : `Dividends are taxed at source: ${wht.non_filer_pct}% for you as a non-filer (${wht.filer_pct}% for filers). They are not capital gains.`;
 
+  // Wide screens: capital gains and dividends side by side; the year picker, actions and notes span both.
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 lg:grid lg:grid-cols-2 lg:gap-4 lg:space-y-0 lg:[&>*:first-child]:col-span-2">
       <Chips options={years.map((y) => ({ value: y, label: y === current ? `${y} (now)` : y }))} value={year} onChange={setYear} label="Tax year" />
 
       <Card>
@@ -141,9 +142,9 @@ export function TaxTab({ data, onPlanSale, onTransactions }: { data: AppData; on
         </Card>
       )}
 
-      <Button className="w-full" onClick={onPlanSale}>Plan a sale</Button>
+      <Button className="w-full lg:col-span-2 lg:w-auto lg:justify-self-start" onClick={onPlanSale}>Plan a sale</Button>
 
-      <p className="px-1 text-xs text-slate-500 dark:text-slate-400">
+      <p className="max-w-2xl px-1 text-xs lg:col-span-2 text-slate-500 dark:text-slate-400">
         FIFO per stock, gains and losses netted across every stock within the tax year (1 July to 30 June), deducted monthly by NCCPL.
         Estimates from your own transaction log; the NCCPL statement is the real figure. Not tax advice.
       </p>
