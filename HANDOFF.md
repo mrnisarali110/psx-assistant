@@ -26,7 +26,7 @@ rule and the data sources in full; this file is about state, open items and how 
 
 ## State right now (all green)
 
-- **Live:** commit on `main` after `7255b46` (this handoff), Worker version `36cf603b`, 395 tests, typecheck clean,
+- **Live:** commit on `main` after `7255b46` (this handoff), Worker version `bb3d815d`, 395 tests, typecheck clean,
   CI green, migrations green. Refresh latest verified live twice on 2026-10-18 (workflow_dispatch runs succeeded).
 - **Market Compass live reading (2026-10-18, for Friday's close):** value Fair (P/E 8.2x), shares vs bonds "Bonds pay
   more" (−0.7 pts vs 10-year PIB 12.85%), trend Sideways (KSE-100 +1.2% on a year), policy 11.5% tightening, CPI
