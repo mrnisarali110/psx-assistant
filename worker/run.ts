@@ -9,6 +9,7 @@
  * aistatus checks every AI key with a free call (no tokens) and prints which providers are ready or cooling down.
  */
 import { fetchPolicyRates } from './sbp.ts';
+import { fetchMacro } from './macro.ts';
 import { DEFAULT_SETTINGS } from '../shared/types.ts';
 import { SEED_HOLDINGS, SEED_WATCHLIST } from '../shared/fixtures/seed.ts';
 import { llmHealth, makeRouter } from '../shared/llm.ts';
@@ -139,7 +140,7 @@ async function main(): Promise<number> {
     if (job === 'telegram') { console.log('dry run: telegram job skipped'); return 0; }
     const r = await runJob(job as JobName, {
       store, notifier: new ConsoleNotifier(), fetchSnapshot: snapshot, testEmail: email ?? 'owner@example.com',
-      fetchPdf: (url) => fetcher.getBytes(url), fetchPolicyRates: () => fetchPolicyRates(), ai: ai.available ? ai : undefined, now: clock,
+      fetchPdf: (url) => fetcher.getBytes(url), fetchPolicyRates: () => fetchPolicyRates(), fetchMacro: () => fetchMacro(), ai: ai.available ? ai : undefined, now: clock,
     });
     console.log('\nreport:', r, `\nlogged alerts: ${store.alerts.length}, prices saved: ${Object.keys(store.prices).length}, insights: ${store.insights.length}, dividends: ${store.divs.length}`);
     return r.ok ? 0 : 1;
@@ -172,7 +173,7 @@ async function main(): Promise<number> {
     telegramToken: env.TELEGRAM_BOT_TOKEN, appUrl: env.APP_URL,
   }, store);
   const report = await runJob(job as JobName, {
-    store, notifier, fetchSnapshot: snapshot, testEmail: email, fetchPdf: (url) => fetcher.getBytes(url), fetchPolicyRates: () => fetchPolicyRates(), ai: ai.available ? ai : undefined,
+    store, notifier, fetchSnapshot: snapshot, testEmail: email, fetchPdf: (url) => fetcher.getBytes(url), fetchPolicyRates: () => fetchPolicyRates(), fetchMacro: () => fetchMacro(), ai: ai.available ? ai : undefined,
   });
   console.log('report:', JSON.stringify(report, null, 2));
   // A PSX outage or an AI hiccup is reported (and the user told once a day) but is not a workflow failure.

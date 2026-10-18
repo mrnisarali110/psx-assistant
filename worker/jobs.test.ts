@@ -256,51 +256,64 @@ describe('test job', () => {
   });
 });
 
-describe('bull market and policy rate (night job)', () => {
+describe('Market Compass and policy rate (night job)', () => {
   const RATES = sbpRates as PolicyRate[];
+  const src = 'https://www.sbp.org.pk/assets/document/test.pdf';
+  const MACRO = [
+    { series: 'pib_10y', as_of: '2026-10-01', value: 12.85, source: src }, { series: 'tbill_3m', as_of: '2026-10-01', value: 12, source: src },
+    { series: 'cpi_yoy', as_of: '2026-09-01', value: 10.3, source: src }, { series: 'kse100_1y_pct', as_of: '2026-10-05', value: 1.2, source: 'https://dps.psx.com.pk/' },
+  ];
   const night = (store: MemoryStore, n: ConsoleNotifier, fetchPolicyRates?: () => Promise<{ rates: PolicyRate[]; errors: string[] }>) =>
-    runJob('night', deps(store, n, MON_2100, { fetchSnapshot: async (s: string[]) => snap(-1.36, AS_OF, s.length ? s : undefined), fetchPolicyRates }));
-  const yesterday = (bull: boolean) => ({ day: '2026-10-02', bull, close: 160000, ma: null, change_1y_pct: 30, drawdown_pct: null, earnings_yield_pct: 12, policy_rate: 11.5, reasons: [] });
+    runJob('night', deps(store, n, MON_2100, {
+      fetchSnapshot: async (s: string[]) => snap(-1.36, AS_OF, s.length ? s : undefined), fetchPolicyRates,
+      fetchMacro: async () => ({ readings: MACRO, errors: [] }),
+    }));
+  const yesterday = (trend: 'up' | 'down', action: string) => ({ day: '2026-10-02', bull: trend === 'up', close: 160000, ma: null, change_1y_pct: 30, drawdown_pct: null, earnings_yield_pct: 12, policy_rate: 11.5, reasons: [], trend, action });
+  const kinds = (n: ConsoleNotifier) => n.sent.flatMap((s) => s.n.alerts).map((a) => a.kind);
 
-  it('saves the State Bank history and a reading for the day; the first reading sends nothing', async () => {
+  it('saves the State Bank history, the SBP/PBS/PSX figures and a compass reading; the first reading sends nothing', async () => {
     const store = new MemoryStore([owner(false)], () => MON_2100);
     const n = new ConsoleNotifier(quiet);
     await night(store, n, async () => ({ rates: RATES, errors: [] }));
     expect(store.rates).toHaveLength(89);
+    expect(store.macro).toHaveLength(4);
     expect(store.regime).toHaveLength(1);
-    expect(store.regime[0]).toMatchObject({ day: '2026-10-05', close: SEED_INDEX.kse100, policy_rate: 11.5 });
-    expect(n.sent.flatMap((s) => s.n.alerts).some((a) => a.kind === 'market_regime' || a.kind === 'policy_rate')).toBe(false);
+    expect(store.regime[0]).toMatchObject({ day: '2026-10-05', close: SEED_INDEX.kse100, policy_rate: 11.5, trend: 'sideways', change_1y_pct: 1.2, bull: false });
+    expect(store.regime[0].action).toBeTruthy();
+    expect((store.regime[0].compass as { cpi: number }).cpi).toBe(10.3);
+    expect(kinds(n).some((k) => ['market_trend', 'market_compass', 'policy_rate'].includes(k))).toBe(false);
   });
 
-  it('a new rate decision and a flip since the last reading go into the night digest, once each', async () => {
+  it('a rate decision, a trend change and new advice go into the night digest, once each', async () => {
     const store = new MemoryStore([owner(false)], () => MON_2100);
     store.rates = RATES.filter((r) => r.decided_on < '2026-04-28'); // we last saw 10.5%
     const n = new ConsoleNotifier(quiet);
     await night(store, n, async () => ({ rates: RATES, errors: [] }));
     expect(n.sent.flatMap((s) => s.n.alerts).find((a) => a.kind === 'policy_rate')?.title).toBe('State Bank raised the policy rate to 11.5%');
     const today = store.regime.find((d) => d.day === '2026-10-05')!;
-    store.regime.push(yesterday(!today.bull));
-    store.rates = RATES.filter((r) => r.decided_on < '2026-04-28');
+    store.regime.push(yesterday('up', today.action === 'add_extra' ? 'park_extra' : 'add_extra'));
     store.runs = [];
     const n2 = new ConsoleNotifier(quiet);
     await night(store, n2, async () => ({ rates: RATES, errors: [] }));
     const alerts = n2.sent.flatMap((s) => s.n.alerts);
-    const flip = alerts.find((a) => a.kind === 'market_regime');
-    expect(flip?.title).toBe(today.bull ? 'Bull market ON' : 'Bull market OFF');
-    expect(flip?.message).toMatch(/rule of thumb, not advice/);
-    expect(flip?.url).toBe('/#/home?market');
+    const trend = alerts.find((a) => a.kind === 'market_trend');
+    expect(trend?.title).toBe('KSE-100 trend now sideways');
+    expect(trend?.message).toMatch(/Your monthly investment stays on/);
+    expect(trend?.url).toBe('/#/market');
+    const advice = alerts.find((a) => a.kind === 'market_compass');
+    expect(advice?.title).toMatch(/^Market Compass: /);
+    expect(advice?.message).toMatch(/rule of thumb, not advice/);
     expect(alerts.some((a) => a.kind === 'policy_rate')).toBe(false); // already sent the first night
     store.runs = [];
     const n3 = new ConsoleNotifier(quiet);
     await night(store, n3, async () => ({ rates: RATES, errors: [] }));
-    expect(n3.sent.flatMap((s) => s.n.alerts).some((a) => a.kind === 'market_regime' || a.kind === 'policy_rate')).toBe(false);
+    expect(kinds(n3).some((k) => ['market_trend', 'market_compass', 'policy_rate'].includes(k))).toBe(false);
   });
 
   it('an SBP failure is reported and nothing else breaks', async () => {
     const store = new MemoryStore([owner(false)], () => MON_2100);
     const r = await night(store, new ConsoleNotifier(quiet), async () => { throw new Error('GET https://www.sbp.org.pk failed: HTTP 503'); });
     expect(r.errors.some((e) => e.startsWith('sbp: '))).toBe(true);
-    expect(store.regime).toHaveLength(1); // the trend reading still happens
+    expect(store.regime).toHaveLength(1); // the compass reading still happens
   });
 });
-

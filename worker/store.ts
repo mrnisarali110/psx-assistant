@@ -10,6 +10,7 @@ import { DEFAULT_SETTINGS } from '../shared/types.ts';
 import type { ScreenRow } from '../shared/discover.ts';
 import type { AnnualProfit, AuditFinding, BcState } from '../shared/bluechip.ts';
 import type { PolicyRate, RegimeDay } from '../shared/regime.ts';
+import type { MacroReading } from './macro.ts';
 
 export interface PushSub { id: string; endpoint: string; p256dh: string; auth: string }
 
@@ -84,6 +85,10 @@ export interface Store {
   /** Bull/bear readings from a date on, oldest first; one per trading day. */
   regimeDays(sinceDate: string): Promise<RegimeDay[]>;
   saveRegimeDay(d: RegimeDay): Promise<void>;
+  /** Dated macro facts (T-bill/PIB yields, CPI, reserves, PKR/USD, ...); upsert on (series, as_of); no-op when empty. */
+  saveMacro(rows: MacroReading[]): Promise<void>;
+  /** Every macro series from a date on, oldest first. */
+  macroReadings(sinceDate: string): Promise<MacroReading[]>;
 }
 
 const READ_KINDS = ['dividend', 'results', 'board_meeting'];
@@ -361,11 +366,27 @@ export class SupabaseStore implements Store {
   async regimeDays(since: string) {
     const num = (v: unknown) => (v == null ? null : Number(v));
     return (check(await this.sb.from('market_regime').select('*').gte('day', since).order('day').limit(2000), 'regime') as any[])
-      .map((r) => ({ day: r.day, bull: r.bull, close: num(r.close), ma: num(r.ma), change_1y_pct: num(r.change_1y_pct), drawdown_pct: num(r.drawdown_pct), earnings_yield_pct: num(r.earnings_yield_pct), policy_rate: num(r.policy_rate), reasons: r.reasons ?? [] }));
+      .map((r) => ({
+        day: r.day, bull: r.bull, close: num(r.close), ma: num(r.ma), change_1y_pct: num(r.change_1y_pct), drawdown_pct: num(r.drawdown_pct), earnings_yield_pct: num(r.earnings_yield_pct), policy_rate: num(r.policy_rate), reasons: r.reasons ?? [],
+        // Market Compass columns (migration 0011)
+        trend: r.trend ?? null, pe: num(r.pe), dividend_yield_pct: num(r.dividend_yield_pct), value_state: r.value_state ?? null, action: r.action ?? null, compass: r.compass ?? null,
+      } as RegimeDay));
   }
 
   async saveRegimeDay(d: RegimeDay) {
-    check(await this.sb.from('market_regime').upsert({ ...d, updated_at: new Date().toISOString() }, { onConflict: 'day' }), 'save regime');
+    // The optional Market Compass fields travel with the object when present; absent ones leave stored columns alone.
+    check(await this.sb.from('market_regime').upsert({ ...(d as any), updated_at: new Date().toISOString() }, { onConflict: 'day' }), 'save regime');
+  }
+
+  async saveMacro(rows: MacroReading[]) {
+    if (!rows.length) return;
+    const at = new Date().toISOString();
+    check(await this.sb.from('macro_readings').upsert(rows.map((r) => ({ series: r.series, as_of: r.as_of, value: r.value, source: r.source, updated_at: at })), { onConflict: 'series,as_of' }), 'save macro');
+  }
+
+  async macroReadings(since: string) {
+    return (check(await this.sb.from('macro_readings').select('series, as_of, value, source').gte('as_of', since).order('as_of').limit(10000), 'macro') as any[])
+      .map((r) => ({ series: r.series, as_of: r.as_of, value: Number(r.value), source: r.source }));
   }
 }
 
@@ -465,7 +486,16 @@ export class MemoryStore implements Store {
   async policyRates() { return [...this.rates].sort((a, b) => a.decided_on.localeCompare(b.decided_on)); }
   async savePolicyRates(rows: PolicyRate[]) { for (const r of rows) this.rates = [...this.rates.filter((x) => x.decided_on !== r.decided_on), r]; }
   async regimeDays(since: string) { return this.regime.filter((d) => d.day >= since).sort((a, b) => a.day.localeCompare(b.day)); }
-  async saveRegimeDay(d: RegimeDay) { this.regime = [...this.regime.filter((x) => x.day !== d.day), d]; }
+  async saveRegimeDay(d: RegimeDay) {
+    const prev = this.regime.find((x) => x.day === d.day);
+    // Like an upsert: optional fields not on the new object keep their stored values.
+    this.regime = [...this.regime.filter((x) => x.day !== d.day), { ...(prev ?? {}), ...d }];
+  }
+  macro: MacroReading[] = [];
+  async saveMacro(rows: MacroReading[]) {
+    for (const r of rows) this.macro = [...this.macro.filter((x) => !(x.series === r.series && x.as_of === r.as_of)), { ...r }];
+  }
+  async macroReadings(since: string) { return this.macro.filter((r) => r.as_of >= since).sort((a, b) => a.as_of.localeCompare(b.as_of) || a.series.localeCompare(b.series)); }
   async savePortfolioDay(userId: string, d: PortfolioDay) {
     this.portfolioDays = [...this.portfolioDays.filter((x) => !(x.user_id === userId && x.day === d.day)), { ...d, user_id: userId }];
   }

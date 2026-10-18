@@ -44,6 +44,12 @@ policy rate, 1-year change, spare-cash stance) that opens the new **Market** pag
 data (`useMarketMood`). Weekend runs store the reading for the last trading day. News is one centred feed, Discover
 cards are equal height, Portfolio tabs use the width; chips are 44px and scroll on phones (`chipRowCls` in ui.tsx).
 
+**Market Compass (2026-10-18, owner approved after research):** `shared/compass.ts` (value / shares-vs-PIB / trend
+lights + one action for extra money; SIP never changes), `worker/macro.ts` (SBP T-bill, PIB, reserves, PKR, KIBOR
+PDFs; PBS CPI; PSX KSE-100 1-year), migration 0011 (`macro_readings`, compass columns on `market_regime`), alerts
+`market_compass` / `market_trend` / `policy_rate`. Research notes: P/E bands and the PIB spread average are broker
+opinion (Al Meezan, AHL, BMA) and stay VERIFY; MUFAP and NCCPL are bot-checked, so fund returns and flows are not shown.
+
 Live: commit `d623087`, Worker version `20f67f9f`, 324 tests green, CI green, migration 0006 applied.
 
 **Owner's feedback on the phone (2026-10-15 13:33 PKT), and what was done about it:**

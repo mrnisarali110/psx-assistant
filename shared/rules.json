@@ -241,5 +241,57 @@
       }
     },
     "mix_note": "Split for spare cash beyond your monthly investment and crash fund. A rule of thumb, not advice."
+  },
+  "compass": {
+    "source": "Market Compass, owner go-ahead 2026-10-18. Three separate lights (value, shares vs safe yield, trend) plus rates and inflation; only extra money changes, the monthly SIP never does. Research: Al Meezan Rapid Reads Jul 2026, AHL Pakistan Strategy, BMA Capital Jan 2021, Faber 10-month trend, Vanguard/Morningstar on staying invested.",
+    "pe_long_run_avg": 8.5,
+    "pe_avg_note": "VERIFY: Al Meezan (Jul 2026) puts the KSE-100's 20-year average forward P/E at about 8.5x (AHL 10-year 8.0x; MG since 2005 9.3x). Ours is the trailing P/E of the index stocks from PSX's screener, so it can differ by a turn or so.",
+    "pe_cheap_below": 6.5,
+    "pe_expensive_above": 10.5,
+    "pe_bands_note": "Below ~6x has been a buying zone (2019, 2023, 2024); above ~10-11x marked the 2008 and 2017 tops (Al Meezan, AHL). Thresholds are settings.",
+    "spread_shares_above": 3.5,
+    "spread_safe_below": 0,
+    "spread_note": "Earnings yield of the KSE-100 stocks minus the 10-year PIB cut-off yield (SBP auction). BMA Capital (Jan 2021): about +1.8 points on average over 10 years; well above that favours shares, below 0 means government bonds pay more than shares earn. Opinion, VERIFY.",
+    "money_market_fee_pct": 1.0,
+    "money_market_note": "VERIFY: money-market funds hold T-bills; estimate = 3-month T-bill cut-off minus about 1% for fees, before tax. MUFAP's fund returns are behind a bot check, so they are not read.",
+    "extra_multiplier": {
+      "add_extra": 1.5,
+      "buy_in_steps": 1.0,
+      "on_schedule": 1.0,
+      "park_extra": 0
+    },
+    "steps_months": 3,
+    "release_months": 6,
+    "mix": {
+      "add_extra": {
+        "stocks": 70,
+        "equity_funds": 20,
+        "money_market": 10
+      },
+      "buy_in_steps": {
+        "stocks": 50,
+        "equity_funds": 20,
+        "money_market": 30
+      },
+      "on_schedule": {
+        "stocks": 50,
+        "equity_funds": 20,
+        "money_market": 30
+      },
+      "park_extra": {
+        "stocks": 15,
+        "equity_funds": 10,
+        "money_market": 75
+      }
+    },
+    "mix_note": "Split for spare cash beyond your monthly investment and crash fund. A rule of thumb, not advice.",
+    "stale_days": {
+      "cpi_yoy": 70,
+      "pib_10y": 60,
+      "tbill_3m": 30,
+      "fx_reserves_total": 21,
+      "pkr_usd": 10,
+      "kse100_1y_pct": 7
+    }
   }
 }

@@ -85,7 +85,7 @@ Gestures always have a button alternative (detail sheet buttons, `…` menu). Re
 | Job | PKT | Sends |
 | --- | --- | --- |
 | market | every 30 min, 09:45–15:45 Mon–Thu; Fri to 16:45 | Actionable only: crash (always), dip, buying chances below your last buy, strong AI buy/trim calls, big moves. Last run before close is titled "Before close". Max 3 a day, bundled. |
-| night | 21:00 Mon–Fri | One digest: close, your portfolio, company news, upcoming dividends, rebalance notes, bull market ON/OFF and State Bank rate changes. Outside the 3-a-day limit. |
+| night | 21:00 Mon–Fri | One digest: close, your portfolio, company news, upcoming dividends, rebalance notes, Market Compass advice or trend changes and State Bank rate changes. Outside the 3-a-day limit. |
 | telegram | every 20 min | Links Telegram chats. |
 | refresh | on demand (Profile → Refresh latest) | Nothing: runs the night job's work now, no notifications. |
 
@@ -168,30 +168,31 @@ dividend filing, when KSE-30 members change, when the config changes, once in Se
 `bluechip_history`. PSX's payouts history, listing status and 5-year report pages load behind a captcha, so they are not
 used; dividend and profit history therefore fill in from filings over time.
 
-## Bull market ON/OFF and the interest rate
+## Market Compass (value, safe yield, trend, rates)
 
-The **Market** card on Home shows the KSE-100, **Bull market ON/OFF** with a shaded chart and how long it has lasted,
-the **State Bank policy rate** and the spare-cash stance; tap it for the **Market** page (charts, reasons, rate
-cycles, where spare cash could go). On a computer Market is also in the sidebar. Every threshold is in `shared/rules.json` (`regime`).
+The **Market** card on Home shows the KSE-100, the Compass's one-line advice for spare cash, three lights and a rates
+strip; tap it for the **Market** page. **Your monthly investment (SIP) always runs; only extra money changes.**
+Every threshold is in `shared/rules.json` (`compass`, trend thresholds in `regime`); logic in `shared/compass.ts`.
 
-- **ON** when the KSE-100 is up 20% on a year (PSX's own 1-year change of the index stocks, weighted by market cap,
-  from the screener) or 20% above its 12-month low, and not below its 200-day average. **OFF** after a 20% fall from
-  the 12-month high, or below the average with the year negative. In between it keeps its last state (no flicker).
-  The average and the high/low use the KSE-100 closes the worker stores each trading day (PSX publishes no index
-  history on a page we read honestly), so they switch on once 120 days are stored; until then the 1-year change leads.
-- **Interest rate:** the State Bank's own [rate history PDF](https://www.sbp.org.pk/assets/document/OVR-Repo-History.pdf)
-  (every decision since 1991, read by position because its text scrambles the columns) plus the rate box and latest
-  meeting on [sbp.org.pk](https://www.sbp.org.pk/). Cycle: easing after a cut, tightening after a hike, on hold after
-  9 months without a change. Before 25 May 2015 the reverse repo rate was the policy rate (SBP's footnote).
-- **Where spare cash could go** (a rule of thumb, never advice; your SIP and crash fund stay as they are): bull ON and
-  stocks out-earn the policy rate (market-cap-weighted earnings yield of the KSE-100 stocks) → shares 60 / equity
-  funds 20 / money market 20; bull ON but stocks earn less → 40/20/40; bull OFF → 15/10/75, or 40/20/40 while rates
-  are being cut. Savings and money-market returns are **VERIFY** estimates: SBP's minimum savings profit is 0.5%
-  below its repo floor ([BPRD Circular 07 of 2013](https://www.sbp.org.pk/bprd/2013/c7.htm)), i.e. policy − 1.5%;
-  money-market funds about policy − 0.75%, before fees and tax.
-- **Checked every night** (and by Refresh latest): the night job reads SBP, saves `policy_rates`, saves one
-  `market_regime` row per trading day, and puts **Bull market ON/OFF** or **State Bank cut/raised the rate** in the
-  night digest when either changes (once each).
+| Light | What it measures | States |
+| --- | --- | --- |
+| **Value** | KSE-100 P/E (index stocks' total value / total profit, PSX screener) vs its long-run average ~8.5x (Al Meezan, AHL; **VERIFY**, ours is trailing) | cheap < 6.5x, expensive > 10.5x |
+| **Shares vs safe yield** | earnings yield minus the 10-year PIB cut-off (SBP auction); BMA's 10-year average +1.8 pts (**VERIFY**) | shares ≥ +3.5, bonds pay more < 0, else even |
+| **Trend** | PSX's own KSE-100 1-year change, 12-month high/low and 200-day average from stored closes | up (+20%), down (−20% from high, or below the average with the year negative), sideways |
+
+**Advice for extra money:** cheap → add extra (1.5x); cheap but falling → buy in steps over 3 months; expensive or
+bonds pay more → park it in T-bills / a money-market fund and move it in over 6 months once fair; otherwise stick to
+the plan. Research behind it: valuation speaks to long-run returns, not the next 12 months; trend rules mainly cut
+crash depth and are untested on the KSE-100; pausing a plan costs more than any signal saves (Vanguard,
+Morningstar, J.P. Morgan). The lights are shown separately, never as one score.
+
+**Rates and Pakistan figures, all official and read honestly every night** (`worker/macro.ts`, `worker/sbp.ts`):
+SBP policy-rate history PDF; SBP T-bill and PIB auction PDFs; PBS monthly CPI review; SBP FX reserves (weekly) and
+PKR/USD mark-to-market (daily); KIBOR; PSX home page KSE-100 1-year and YTD. SBP's HTML pages, MUFAP (fund returns)
+and NCCPL (foreign flows) sit behind Cloudflare bot checks and are **not** read. A missing SBP file answers 200 with an
+HTML page, so only real PDFs (content-type and `%PDF`) count. Stored in `macro_readings` (series, date, value,
+source URL) and one `market_regime` row per trading day; alerts in the night digest when the advice or the trend
+changes, or the State Bank moves its rate.
 
 ## Data source (read this if prices stop updating)
 

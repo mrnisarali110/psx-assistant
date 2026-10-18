@@ -5,7 +5,8 @@
  *           close is labelled "Before close". AI suggestions refresh every few hours.
  *   night:  21:00 PKT. AI reads new filings (summaries + dividends), refreshes Discover picks, and sends
  *           one night digest: close, your portfolio, news, upcoming dividends, rebalance notes.
- *           Also the bull market ON/OFF reading and the State Bank policy rate (alerts when either changes).
+ *           Also the Market Compass (value, shares vs safe yield, trend; SBP/PBS/PSX figures) with alerts when its
+ *           advice or the trend changes, or the State Bank moves its rate.
  *   test:   send a test crash alert to one account.
  * Every AI step is optional and isolated: if both AI providers fail, prices, rules and alerts still run.
  */
@@ -18,7 +19,9 @@ import { buildPortfolio, screenSectors, sectorPeMap, type PortfolioView } from '
 import { holdingAlerts, marketAlerts, planDelivery, todayBanner, type AlertCandidate, type AlertLevel } from '../shared/signals.ts';
 import { addDays, daysBetween, isMarketOpen, isoWeek, minutesToClose, pktDate } from '../shared/time.ts';
 import { DEFAULT_RULES, type Announcement, type DividendEvent, type IndexSnapshot, type PriceMap, type QuarterEarnings } from '../shared/types.ts';
-import { allocation, evaluateTrend, marketBreadth, rateState, type PolicyRate, type RegimeDay } from '../shared/regime.ts';
+import { marketBreadth, rateState, type PolicyRate, type RegimeDay } from '../shared/regime.ts';
+import { compass } from '../shared/compass.ts';
+import type { MacroReading } from './macro.ts';
 import { annualsFromPage, auditOpinion, reportYear, runBluechip } from './bluechip.ts';
 import { discoverPicks, pdfText, portfolioInsight, readAnnouncement, type GuardContext, type Insight, type InsightFacts } from './ai.ts';
 import { FetchError, isUsable, toPrice, toScreenRows, type Snapshot } from './feed.ts';
@@ -36,6 +39,8 @@ export interface JobDeps {
   fetchPdf?: (url: string) => Promise<Uint8Array>;
   /** The State Bank's policy rate history and current rate (worker/sbp.ts); nightly. */
   fetchPolicyRates?: () => Promise<{ rates: PolicyRate[]; errors: string[] }>;
+  /** SBP T-bills/PIB/reserves/PKR/KIBOR, PBS CPI and PSX's KSE-100 1-year change (worker/macro.ts); nightly. */
+  fetchMacro?: () => Promise<{ readings: MacroReading[]; errors: string[] }>;
   ai?: LlmRouter;
   now?: () => Date;
   log?: (m: string) => void;
@@ -66,7 +71,11 @@ interface RunCtx {
 }
 
 /** What changed tonight in the market-wide readings (each sends one alert to everyone). */
-interface MarketNews { flip: RegimeDay | null; rate: { from: number; to: number; on: string } | null; headline: string | null }
+interface MarketNews {
+  trend: { from: string; to: string; day: string; reasons: string[] } | null;
+  action: { key: string; title: string; detail: string; day: string } | null;
+  rate: { from: number; to: number; on: string } | null;
+}
 
 export async function runJob(job: JobName, deps: JobDeps): Promise<RunReport> {
   const now = deps.now?.() ?? new Date();
@@ -171,8 +180,8 @@ export async function runJob(job: JobName, deps: JobDeps): Promise<RunReport> {
       }
     }
 
-    // ---- Bull market ON/OFF and the State Bank policy rate (nightly) ----
-    const market: MarketNews = deep ? await updateMarket({ today, idx, screen, deps, report, log }) : { flip: null, rate: null, headline: null };
+    // ---- Market Compass: rates, macro figures, value, trend (nightly) ----
+    const market: MarketNews = deep ? await updateMarket({ today, idx, screen, deps, report, log }) : { trend: null, action: null, rate: null };
 
     const bcMap = Object.fromEntries((await store.bluechipStates().catch(() => [])).map((b) => [b.symbol, b.status]));
     log(`job=${job} users=${users.length} symbols=${userSymbols.length}+${readSymbols.length - userSymbols.length} usable=${usable} tradedToday=${tradedToday} preclose=${preclose} aiRead=${report.ai.announcements_read}`);
@@ -259,11 +268,12 @@ async function readFilings(symbols: string[], today: string, limit: number, deps
 }
 
 /**
- * Reads the State Bank's rate (history PDF + home page) and today's bull/bear state from the stored KSE-100 closes and
- * PSX's screener; saves both. Returns what changed since the last reading. Never throws: errors go to the report.
+ * The Market Compass reading, nightly: the State Bank's policy rate (history PDF), SBP/PBS/PSX figures (T-bills, PIB,
+ * CPI, reserves, PKR, KSE-100 1-year), then the three lights and the action from the stored KSE-100 closes and PSX's
+ * screener; saves one row per trading day. Returns what changed since the last reading. Never throws.
  */
 async function updateMarket(o: { today: string; idx: IndexSnapshot | null; screen: ScreenRow[]; deps: JobDeps; report: RunReport; log: (m: string) => void }): Promise<MarketNews> {
-  const out: MarketNews = { flip: null, rate: null, headline: null };
+  const out: MarketNews = { trend: null, action: null, rate: null };
   const { store } = o.deps;
   try {
     const before = await store.policyRates().catch(() => [] as PolicyRate[]);
@@ -280,7 +290,15 @@ async function updateMarket(o: { today: string; idx: IndexSnapshot | null; scree
         o.report.errors.push(`sbp: ${errMsg(e)}`);
       }
     }
-    const rate = rateState(rates, o.today, rules);
+    if (o.deps.fetchMacro) {
+      try {
+        const m = await o.deps.fetchMacro();
+        o.report.errors.push(...m.errors);
+        await store.saveMacro(m.readings);
+      } catch (e) {
+        o.report.errors.push(`macro: ${errMsg(e)}`);
+      }
+    }
     if (!o.idx) return out;
     // The reading belongs to the last trading day (a weekend Refresh latest stores Friday's).
     const mday = pktDate(new Date(o.idx.ts));
@@ -288,19 +306,26 @@ async function updateMarket(o: { today: string; idx: IndexSnapshot | null; scree
     const closes = (await store.indexCloses(addDays(mday, -c.lookback_days))).filter((d) => d.day < mday);
     const prev = (await store.regimeDays(addDays(mday, -400))).filter((d) => d.day < mday).at(-1) ?? null;
     const screen = o.screen.length ? o.screen : await store.screenRows().catch(() => [] as ScreenRow[]);
-    const b = marketBreadth(screen, rules);
-    const t = evaluateTrend({ today: mday, closes, close: o.idx.kse100, change_1y_pct: b.change_1y_pct }, prev?.bull ?? null, rules);
-    if (t.on == null) return out;
+    const macro = await store.macroReadings(addDays(o.today, -800)).catch(() => []);
+    const k = compass({ today: o.today, closes, close: o.idx.kse100, breadth: marketBreadth(screen, rules), macro, rates }, rules);
+    if (!k.trend.state) return out;
     const day: RegimeDay = {
-      day: mday, bull: t.on, close: o.idx.kse100, ma: t.ma, change_1y_pct: b.change_1y_pct, drawdown_pct: t.drawdown_pct,
-      earnings_yield_pct: b.earnings_yield_pct, policy_rate: rate?.rate ?? null, reasons: t.reasons,
+      day: mday, bull: k.trend.state === 'up', close: o.idx.kse100, ma: k.trend.ma, change_1y_pct: k.trend.one_year_pct, drawdown_pct: k.trend.drawdown_pct,
+      earnings_yield_pct: k.value.earnings_yield_pct, policy_rate: k.rates.policy?.rate ?? null, reasons: k.trend.reasons,
+      trend: k.trend.state, pe: k.value.pe, dividend_yield_pct: k.value.dividend_yield_pct, value_state: k.value.state, action: k.action.key,
+      compass: {
+        spread_pct: k.gap.spread_pct, gap: k.gap.state, pib_10y: k.gap.pib_10y?.value ?? null, tbill_3m: k.gap.tbill_3m?.value ?? null,
+        cpi: k.rates.cpi?.value ?? null, real_rate_pct: k.rates.real_rate_pct, money_market_pct: k.rates.money_market_pct, title: k.action.title,
+      },
     };
     await store.saveRegimeDay(day);
-    out.headline = allocation({ bull: t.on, rate, earnings_yield_pct: b.earnings_yield_pct, dividend_yield_pct: b.dividend_yield_pct }, rules).headline;
-    if (prev && prev.bull !== t.on) out.flip = day;
-    o.log(`market: bull=${t.on}${out.flip ? ' (changed)' : ''} 1y=${b.change_1y_pct ?? 'n/a'} ma=${t.ma ?? 'n/a'} rate=${rate?.rate ?? 'n/a'} ${rate?.cycle ?? ''}`);
+    // Older rows (before the compass) only know ON/OFF: ON was "up", OFF compares as "not up".
+    const prevTrend = prev?.trend ?? (prev ? (prev.bull ? 'up' : null) : null);
+    if (prev && prevTrend && prevTrend !== k.trend.state) out.trend = { from: prevTrend, to: k.trend.state, day: mday, reasons: k.trend.reasons };
+    if (prev?.action && prev.action !== k.action.key) out.action = { key: k.action.key, title: k.action.title, detail: k.action.detail, day: mday };
+    o.log(`market: trend=${k.trend.state} value=${k.value.state ?? 'n/a'} pe=${k.value.pe ?? 'n/a'} gap=${k.gap.spread_pct ?? 'n/a'} action=${k.action.key} rate=${k.rates.policy?.rate ?? 'n/a'} cpi=${k.rates.cpi?.value ?? 'n/a'}${out.trend ? ' (trend changed)' : ''}${out.action ? ' (action changed)' : ''}`);
   } catch (e) {
-    o.report.errors.push(`market regime: ${errMsg(e)}`);
+    o.report.errors.push(`market compass: ${errMsg(e)}`);
   }
   return out;
 }
@@ -405,24 +430,24 @@ async function processUser(u: UserCtx, c: RunCtx) {
   }
 }
 
-/** Bull market turned ON or OFF, or the State Bank changed its rate: one line each in the night digest. */
+/** The Market Compass changed its advice, the trend turned, or the State Bank moved its rate: one line each, night digest. */
 function marketItems(c: RunCtx): AlertCandidate[] {
   const out: AlertCandidate[] = [];
-  const { flip, rate, headline } = c.market;
-  if (flip) {
-    const title = flip.bull ? 'Bull market ON' : 'Bull market OFF';
-    out.push({
-      kind: 'market_regime', symbol: null, level: 'digest', url: '/#/home?market', dedupe_key: `regime:${flip.bull ? 'on' : 'off'}:${flip.day}`,
-      title, message: `${title}: ${flip.reasons.slice(0, 2).join('; ')}.${headline ? ` ${headline} (a rule of thumb, not advice).` : ''}`,
-    });
+  const { trend, action, rate } = c.market;
+  const item = (kind: string, key: string, title: string, message: string): AlertCandidate => ({ kind, symbol: null, level: 'digest', url: '/#/market', dedupe_key: key, title, message });
+  if (action) {
+    out.push(item('market_compass', `compass:${action.key}:${action.day}`, `Market Compass: ${action.title}`,
+      `${action.title}. ${action.detail} A rule of thumb, not advice.`));
+  }
+  if (trend) {
+    const word = (t: string) => (t === 'up' ? 'up' : t === 'down' ? 'down' : 'sideways');
+    out.push(item('market_trend', `trend:${trend.to}:${trend.day}`, `KSE-100 trend now ${word(trend.to)}`,
+      `KSE-100 trend turned ${word(trend.to)} (was ${word(trend.from)}): ${trend.reasons.slice(0, 2).join('; ')}. Your monthly investment stays on.`));
   }
   if (rate) {
     const verb = rate.to < rate.from ? 'cut' : 'raised';
-    out.push({
-      kind: 'policy_rate', symbol: null, level: 'digest', url: '/#/home?market', dedupe_key: `rate:${rate.on}`,
-      title: `State Bank ${verb} the policy rate to ${rate.to}%`,
-      message: `State Bank ${verb} the policy rate from ${rate.from}% to ${rate.to}% (decision of ${rate.on}). Savings and money-market returns follow it.`,
-    });
+    out.push(item('policy_rate', `rate:${rate.on}`, `State Bank ${verb} the policy rate to ${rate.to}%`,
+      `State Bank ${verb} the policy rate from ${rate.from}% to ${rate.to}% (decision of ${rate.on}). Savings and money-market returns follow it.`));
   }
   return out;
 }

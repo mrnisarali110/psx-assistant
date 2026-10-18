@@ -13,6 +13,7 @@ import { addDays, pktDate } from '../../shared/time.ts';
 import { dedupeBySymbol, normalisePriceMap } from '../../shared/symbols.ts';
 import { evaluateBc, marketCapRanks, nextBcState, type BcState } from '../../shared/bluechip.ts';
 import { evaluateTrend, marketBreadth, rateOn, type PolicyRate, type RegimeDay } from '../../shared/regime.ts';
+import type { MacroReading } from '../../shared/compass.ts';
 import sbpPolicyRates from '../../shared/sbp-policy-rates.json' with { type: 'json' };
 import {
   SEED_ANNOUNCEMENTS, SEED_CAPTURED_AT, SEED_HOLDINGS, SEED_INDEX, SEED_PRICES, SEED_SCREEN, SEED_TXNS, SEED_WATCHLIST,
@@ -46,7 +47,8 @@ export interface AppData {
   bluechip: Record<string, BcState>; // blue-chip state per company, from the worker's checks (empty until the first night run)
   picks: { undervalued: AiPicks | null; dividend: AiPicks | null };
   policyRates: PolicyRate[]; // State Bank policy-rate decisions, oldest first (empty until the table exists and is filled)
-  regime: RegimeDay[]; // bull market ON/OFF reading per trading day, oldest first (empty until the night check stores one)
+  regime: RegimeDay[]; // market reading per trading day (trend, P/E, action), oldest first (empty until the night check stores one)
+  macro: MacroReading[]; // dated SBP / PBS / PSX figures (T-bills, PIB, CPI, reserves, PKR), oldest first (empty until migration 0011 runs and the worker fills it)
 }
 
 export interface DataSource {
@@ -115,7 +117,16 @@ const normRate = (r: any): PolicyRate => ({ decided_on: r.decided_on, policy_rat
 const normRegime = (r: any): RegimeDay => ({
   day: r.day, bull: !!r.bull, close: n(r.close), ma: n(r.ma), change_1y_pct: n(r.change_1y_pct), drawdown_pct: n(r.drawdown_pct),
   earnings_yield_pct: n(r.earnings_yield_pct), policy_rate: n(r.policy_rate), reasons: Array.isArray(r.reasons) ? r.reasons.map(String) : [],
+  // Market Compass columns (migration 0011): absent on older rows, and any value outside the known words reads as unknown.
+  trend: r.trend === 'up' || r.trend === 'sideways' || r.trend === 'down' ? r.trend : null,
+  pe: n(r.pe), dividend_yield_pct: n(r.dividend_yield_pct),
+  value_state: r.value_state === 'cheap' || r.value_state === 'fair' || r.value_state === 'expensive' ? r.value_state : null,
+  action: typeof r.action === 'string' ? r.action : null,
 });
+const normMacro = (r: any): MacroReading | null => {
+  const value = Number(r.value);
+  return typeof r.series === 'string' && typeof r.as_of === 'string' && Number.isFinite(value) ? { series: r.series, as_of: r.as_of.slice(0, 10), value, source: r.source ?? '' } : null;
+};
 /** Settings row -> Settings: numbers are numeric strings in PostgREST; new columns fall back to the defaults. */
 function normSettings(s: any): Settings {
   const num = (k: keyof Settings) => Number(s[k] ?? (DEFAULT_SETTINGS as any)[k]);
@@ -167,7 +178,7 @@ export class LiveSource implements DataSource {
     const H = (ok(holdings) as any[]).map(normHolding);
     const W = ok(watchlist) as WatchItem[];
     const symbols = [...new Set([...H.map((h) => h.symbol), ...W.map((w) => w.symbol)])];
-    const [prices, anns, insights, screen, txns, divs, uv, dv, receipts, indexDaily, portfolioDaily, earnings, bluechip, rates, regime] = await Promise.all([
+    const [prices, anns, insights, screen, txns, divs, uv, dv, receipts, indexDaily, portfolioDaily, earnings, bluechip, rates, regime, macro] = await Promise.all([
       symbols.length ? optional(sb.from('prices').select('*').in('symbol', symbols), [] as any[]) : Promise.resolve([] as any[]),
       symbols.length ? optional(sb.from('announcements').select('*').in('symbol', symbols).gte('published_at', addDays(today, -60)).order('published_at', { ascending: false }).limit(150), [] as any[]) : Promise.resolve([] as any[]),
       optional(sb.from('ai_insights').select('created_at, job, headline, stance, suggestions, holding_calls, rebalance, cash_note, risks, model').order('created_at', { ascending: false }).limit(1), [] as any[]),
@@ -184,6 +195,8 @@ export class LiveSource implements DataSource {
       // New tables (migration 0010): missing or empty until it runs, and the app loads either way.
       optional(sb.from('policy_rates').select('decided_on, policy_rate, ceiling, floor, source').order('decided_on').limit(1000), [] as any[]),
       optional(sb.from('market_regime').select('*').order('day', { ascending: false }).limit(800), [] as any[]),
+      // Migration 0011: missing until it runs; allRows stops quietly on an error, so the app loads either way.
+      allRows((a, b) => sb.from('macro_readings').select('series, as_of, value, source').gte('as_of', addDays(today, -800)).order('as_of').order('series').range(a, b), 1000, 5),
     ]);
     const s = ok(settings) as any;
     const history = (ok(idx) as any[]).map(normIdx);
@@ -215,6 +228,7 @@ export class LiveSource implements DataSource {
       picks: { undervalued: (uv[0] ?? null) as AiPicks | null, dividend: (dv[0] ?? null) as AiPicks | null },
       policyRates: rates.map(normRate),
       regime: regime.map(normRegime).reverse(),
+      macro: macro.map(normMacro).filter((m): m is MacroReading => m != null),
     };
   }
 
@@ -341,6 +355,7 @@ export class DemoSource implements DataSource {
       screen: SEED_SCREEN, transactions: [...this.txns], dividends: [], picks: { undervalued: null, dividend: null },
       receipts: [...this.receipts], indexDaily: [{ day: SEED_INDEX.ts.slice(0, 10), close: SEED_INDEX.kse100 }], portfolioDaily: [], earnings: [], bluechip: demoBluechip(),
       policyRates: DEMO_RATES, regime: demoRegime(DEMO_RATES),
+      macro: [], // no SBP / PBS figures are bundled: the demo shows them as unknown rather than invent any
     };
   }
   async saveTxns(txns: Txn[]) { this.txns.push(...txns.map((t, i) => ({ ...t, id: t.id ?? `demo-t${Date.now()}-${i}` }))); }

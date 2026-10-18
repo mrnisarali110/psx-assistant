@@ -164,6 +164,9 @@ export function evaluateTrend(f: TrendFacts, prevOn: boolean | null, rules: Rule
 export interface RegimeDay {
   day: string; bull: boolean; close: number | null; ma: number | null; change_1y_pct: number | null; drawdown_pct: number | null;
   earnings_yield_pct: number | null; policy_rate: number | null; reasons: string[];
+  // Market Compass (migration 0011); optional so older rows still load.
+  trend?: 'up' | 'sideways' | 'down' | null; pe?: number | null; dividend_yield_pct?: number | null;
+  value_state?: 'cheap' | 'fair' | 'expensive' | null; action?: string | null; compass?: unknown;
 }
 export interface RegimePeriod { bull: boolean; from: string; to: string | null; days: number }
 

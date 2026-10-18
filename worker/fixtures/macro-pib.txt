@@ -1,0 +1,45 @@
+DOMESTIC MARKETS & MONETARY MANAGEMENT DEPARTMENT
+STATE BANK OF PAKISTAN
+Pakistan Investment Bonds - (Fixed Rate) Auction Result
+Auction for 02-Year (Zero Coupon), 03-Year, 05-Year, 10 Year and 15-Year (Zero Coupon) PIBs (Fixed Coupon) was held on 07-Oct-26, with settlement date of 08-Oct-26.
+The bids received are as follows:
+Tenor Face Value Realized Amount Accrued Interest Total Realized
+Amount
+02-Year 63,350.900 50,438.309 - 50,438.309
+03-Year 386,403.200 379,079.334 17,892.148 396,971.482
+05-Year 309,775.000 301,827.281 14,642.761 316,470.042
+10-Year 84,525.000 80,747.211 4,076.953 84,824.164
+15-Year 5,000.100 630.134 - 630.134
+Total 849,054.200 812,722.269 36,611.862 849,334.131
+The result is as below:
+Tenor Face Value Realized Amount Accrued Interest Total Realized
+Amount Cut-off Price Cut-off Yield Weighted Average
+Yield % p.a.
+02-Year 250.900 201.416 - 201.416 80.2766 12.7950% 12.7945%
+03-Year 195,000.000 191,823.395 9,029.348 200,852.743 98.3516 12.7460% 12.7370%
+05-Year 122,000.000 119,551.714 5,766.821 125,318.535 97.7582 12.8998% 12.8299%
+10-Year 25,025.000 24,589.779 1,207.048 25,796.827 98.0643 12.8500% 12.8135%
+15-Year - - -
+Total 342,275.900 336,166.304 16,003.217 352,169.520
+In addition to above, total acceptance including short selling and non competitive bids is as below:
+Tenor Non Competitive
+Price Competitive Bids Non Competitive Bids Short Selling Total Acceptance
+(Face Value)
+02-Year 80.2772 250.900 448.100 - 699.000
+03-Year 98.3709 195,000.000 25,460.300 - 220,460.300
+05-Year 97.9929 122,000.000 8,556.400 - 130,556.400
+10-Year - 25,025.000 No Bid Received - 25,025.000
+15-Year - - -
+342,275.900 34,464.800 - 376,740.700
+Money Market Division
+Bids Rejected
+Total
+(all amounts in PKR million)
+(all amounts in PKR million)
+Price Range
+98.3913 - 95.2500
+98.3058 - 94.1902
+98.9817 - 91.2401
+12.6106 - 11.2198
+80.4652 - 78.4210
+Bids Rejected

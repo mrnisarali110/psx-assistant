@@ -115,6 +115,32 @@ export function parseIndices(html: string): Record<string, IndexQuote> {
   return out;
 }
 
+export interface IndexStats { as_of: string | null; one_year_pct: number | null; ytd_pct: number | null; high_52w: number | null; low_52w: number | null }
+
+/**
+ * The home page's detail panel for one index (server-rendered): "1-Year Change", "YTD Change" and "52-WEEK RANGE",
+ * with the panel's own date (data-date, PKT). Null when the panel is missing.
+ */
+export function parseIndexStats(html: string, name = 'KSE100'): IndexStats | null {
+  const $ = cheerio.load(html);
+  const panel = $('.marketIndices__details').filter((_, el) => $(el).attr('data-name') === name).first();
+  if (!panel.length) return null;
+  const stat = (label: RegExp) => {
+    const item = panel.find('.stats_item').filter((_, el) => label.test(txt($(el).find('.stats_label').text()) ?? '')).first();
+    return item.length ? item.find('.stats_value').first() : null;
+  };
+  const range = stat(/^52-week range$/i)?.find('.numRange');
+  const day = /^(\d{4}-\d{2}-\d{2})/.exec(panel.attr('data-date') ?? '');
+  const out: IndexStats = {
+    as_of: day ? day[1] : null,
+    one_year_pct: parseNum(stat(/^1-year change$/i)?.text()),
+    ytd_pct: parseNum(stat(/^ytd change$/i)?.text()),
+    high_52w: parseNum(range?.attr('data-high')),
+    low_52w: parseNum(range?.attr('data-low')),
+  };
+  return out.one_year_pct == null && out.ytd_pct == null && out.high_52w == null ? null : out;
+}
+
 export function parseScreener(html: string): Record<string, ScreenerRow> {
   const $ = cheerio.load(html);
   const sectorNames: Record<string, string> = {};
