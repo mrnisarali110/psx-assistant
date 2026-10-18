@@ -5,6 +5,7 @@
  *           close is labelled "Before close". AI suggestions refresh every few hours.
  *   night:  21:00 PKT. AI reads new filings (summaries + dividends), refreshes Discover picks, and sends
  *           one night digest: close, your portfolio, news, upcoming dividends, rebalance notes.
+ *           Also the bull market ON/OFF reading and the State Bank policy rate (alerts when either changes).
  *   test:   send a test crash alert to one account.
  * Every AI step is optional and isolated: if both AI providers fail, prices, rules and alerts still run.
  */
@@ -17,6 +18,7 @@ import { buildPortfolio, screenSectors, sectorPeMap, type PortfolioView } from '
 import { holdingAlerts, marketAlerts, planDelivery, todayBanner, type AlertCandidate, type AlertLevel } from '../shared/signals.ts';
 import { addDays, daysBetween, isMarketOpen, isoWeek, minutesToClose, pktDate } from '../shared/time.ts';
 import { DEFAULT_RULES, type Announcement, type DividendEvent, type IndexSnapshot, type PriceMap, type QuarterEarnings } from '../shared/types.ts';
+import { allocation, evaluateTrend, marketBreadth, rateState, type PolicyRate, type RegimeDay } from '../shared/regime.ts';
 import { annualsFromPage, auditOpinion, reportYear, runBluechip } from './bluechip.ts';
 import { discoverPicks, pdfText, portfolioInsight, readAnnouncement, type GuardContext, type Insight, type InsightFacts } from './ai.ts';
 import { FetchError, isUsable, toPrice, toScreenRows, type Snapshot } from './feed.ts';
@@ -32,6 +34,8 @@ export interface JobDeps {
   notifier: Notifier;
   fetchSnapshot: (symbols: string[], opts?: { screener?: boolean }) => Promise<Snapshot>;
   fetchPdf?: (url: string) => Promise<Uint8Array>;
+  /** The State Bank's policy rate history and current rate (worker/sbp.ts); nightly. */
+  fetchPolicyRates?: () => Promise<{ rates: PolicyRate[]; errors: string[] }>;
   ai?: LlmRouter;
   now?: () => Date;
   log?: (m: string) => void;
@@ -58,7 +62,11 @@ interface RunCtx {
   job: JobName; deps: JobDeps; now: Date; today: string; prices: PriceMap; idx: IndexSnapshot | null;
   usable: boolean; tradedToday: boolean; preclose: boolean; news: Announcement[]; dividends: DividendEvent[];
   screen: ScreenRow[]; report: RunReport; aiBudget: { left: number }; earnings: QuarterEarnings[]; bc: Record<string, string>;
+  market: MarketNews;
 }
+
+/** What changed tonight in the market-wide readings (each sends one alert to everyone). */
+interface MarketNews { flip: RegimeDay | null; rate: { from: number; to: number; on: string } | null; headline: string | null }
 
 export async function runJob(job: JobName, deps: JobDeps): Promise<RunReport> {
   const now = deps.now?.() ?? new Date();
@@ -163,9 +171,12 @@ export async function runJob(job: JobName, deps: JobDeps): Promise<RunReport> {
       }
     }
 
+    // ---- Bull market ON/OFF and the State Bank policy rate (nightly) ----
+    const market: MarketNews = deep ? await updateMarket({ today, idx, tradedToday, screen, deps, report, log }) : { flip: null, rate: null, headline: null };
+
     const bcMap = Object.fromEntries((await store.bluechipStates().catch(() => [])).map((b) => [b.symbol, b.status]));
     log(`job=${job} users=${users.length} symbols=${userSymbols.length}+${readSymbols.length - userSymbols.length} usable=${usable} tradedToday=${tradedToday} preclose=${preclose} aiRead=${report.ai.announcements_read}`);
-    const ctx: RunCtx = { job, deps, now, today, prices, idx, usable, tradedToday, preclose, news, dividends, screen, report, aiBudget: { left: rules.ai.max_users_per_run }, earnings, bc: bcMap };
+    const ctx: RunCtx = { job, deps, now, today, prices, idx, usable, tradedToday, preclose, news, dividends, screen, report, aiBudget: { left: rules.ai.max_users_per_run }, earnings, bc: bcMap, market };
     for (const u of users) {
       try {
         await processUser(u, ctx);
@@ -247,6 +258,51 @@ async function readFilings(symbols: string[], today: string, limit: number, deps
   return read;
 }
 
+/**
+ * Reads the State Bank's rate (history PDF + home page) and today's bull/bear state from the stored KSE-100 closes and
+ * PSX's screener; saves both. Returns what changed since the last reading. Never throws: errors go to the report.
+ */
+async function updateMarket(o: { today: string; idx: IndexSnapshot | null; tradedToday: boolean; screen: ScreenRow[]; deps: JobDeps; report: RunReport; log: (m: string) => void }): Promise<MarketNews> {
+  const out: MarketNews = { flip: null, rate: null, headline: null };
+  const { store } = o.deps;
+  try {
+    const before = await store.policyRates().catch(() => [] as PolicyRate[]);
+    let rates = before;
+    if (o.deps.fetchPolicyRates) {
+      try {
+        const r = await o.deps.fetchPolicyRates();
+        o.report.errors.push(...r.errors);
+        await store.savePolicyRates(r.rates);
+        rates = await store.policyRates();
+        const was = rateState(before, o.today), now = rateState(rates, o.today);
+        if (was && now && now.decided_on > was.decided_on && now.rate !== was.rate) out.rate = { from: was.rate, to: now.rate, on: now.decided_on };
+      } catch (e) {
+        o.report.errors.push(`sbp: ${errMsg(e)}`);
+      }
+    }
+    const rate = rateState(rates, o.today, rules);
+    if (!o.tradedToday || !o.idx) return out;
+    const c = rules.regime;
+    const closes = (await store.indexCloses(addDays(o.today, -c.lookback_days))).filter((d) => d.day < o.today);
+    const prev = (await store.regimeDays(addDays(o.today, -400))).filter((d) => d.day < o.today).at(-1) ?? null;
+    const screen = o.screen.length ? o.screen : await store.screenRows().catch(() => [] as ScreenRow[]);
+    const b = marketBreadth(screen, rules);
+    const t = evaluateTrend({ today: o.today, closes, close: o.idx.kse100, change_1y_pct: b.change_1y_pct }, prev?.bull ?? null, rules);
+    if (t.on == null) return out;
+    const day: RegimeDay = {
+      day: o.today, bull: t.on, close: o.idx.kse100, ma: t.ma, change_1y_pct: b.change_1y_pct, drawdown_pct: t.drawdown_pct,
+      earnings_yield_pct: b.earnings_yield_pct, policy_rate: rate?.rate ?? null, reasons: t.reasons,
+    };
+    await store.saveRegimeDay(day);
+    out.headline = allocation({ bull: t.on, rate, earnings_yield_pct: b.earnings_yield_pct, dividend_yield_pct: b.dividend_yield_pct }, rules).headline;
+    if (prev && prev.bull !== t.on) out.flip = day;
+    o.log(`market: bull=${t.on}${out.flip ? ' (changed)' : ''} 1y=${b.change_1y_pct ?? 'n/a'} ma=${t.ma ?? 'n/a'} rate=${rate?.rate ?? 'n/a'} ${rate?.cycle ?? ''}`);
+  } catch (e) {
+    o.report.errors.push(`market regime: ${errMsg(e)}`);
+  }
+  return out;
+}
+
 async function refreshPicks(screen: ScreenRow[], dividends: DividendEvent[], today: string, deps: JobDeps, report: RunReport) {
   const uv = undervalued(screen).map((r) => ({ symbol: r.symbol, sector: r.sector, price: r.price, pe: r.pe, sector_pe: r.sector_pe, pe_discount_pct: r.discount_pct, dividend_yield_pct: r.dividend_yield_pct, change_1y_pct: r.change_1y_pct, shariah: r.is_shariah }));
   const dv = dividendLeaders(screen, dividends, today).map((d) => ({
@@ -312,6 +368,7 @@ async function processUser(u: UserCtx, c: RunCtx) {
   // At night only the digest goes out; buying chances wait for the next market check.
   if (night) cands.push(...holdingAlerts(view, u.settings, c.today, insight, lastSent).filter((a) => a.level === 'digest'));
   if (night) cands.push(...nightItems(view, mine, c, insight));
+  if (night) cands.push(...marketItems(c));
   // One value per trading day, so Performance can draw your money against the KSE-100 from now on.
   if (night && c.tradedToday && view.rows.length) {
     await store.savePortfolioDay(u.id, { day: c.today, value: r2(view.total_value) as number, invested: r2(view.total_cost) as number })
@@ -344,6 +401,28 @@ async function processUser(u: UserCtx, c: RunCtx) {
     })));
     c.report.suppressed += plan.suppressed.length;
   }
+}
+
+/** Bull market turned ON or OFF, or the State Bank changed its rate: one line each in the night digest. */
+function marketItems(c: RunCtx): AlertCandidate[] {
+  const out: AlertCandidate[] = [];
+  const { flip, rate, headline } = c.market;
+  if (flip) {
+    const title = flip.bull ? 'Bull market ON' : 'Bull market OFF';
+    out.push({
+      kind: 'market_regime', symbol: null, level: 'digest', url: '/#/home?market', dedupe_key: `regime:${flip.bull ? 'on' : 'off'}:${flip.day}`,
+      title, message: `${title}: ${flip.reasons.slice(0, 2).join('; ')}.${headline ? ` ${headline} (a rule of thumb, not advice).` : ''}`,
+    });
+  }
+  if (rate) {
+    const verb = rate.to < rate.from ? 'cut' : 'raised';
+    out.push({
+      kind: 'policy_rate', symbol: null, level: 'digest', url: '/#/home?market', dedupe_key: `rate:${rate.on}`,
+      title: `State Bank ${verb} the policy rate to ${rate.to}%`,
+      message: `State Bank ${verb} the policy rate from ${rate.from}% to ${rate.to}% (decision of ${rate.on}). Savings and money-market returns follow it.`,
+    });
+  }
+  return out;
 }
 
 /** The night digest and what goes with it: news, upcoming dividends, rebalance (via holdingAlerts). */

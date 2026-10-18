@@ -12,6 +12,8 @@ import type { ImportedRow } from '../../shared/changes.ts';
 import { addDays, pktDate } from '../../shared/time.ts';
 import { dedupeBySymbol, normalisePriceMap } from '../../shared/symbols.ts';
 import { evaluateBc, marketCapRanks, nextBcState, type BcState } from '../../shared/bluechip.ts';
+import { evaluateTrend, marketBreadth, rateOn, type PolicyRate, type RegimeDay } from '../../shared/regime.ts';
+import sbpPolicyRates from '../../shared/sbp-policy-rates.json' with { type: 'json' };
 import {
   SEED_ANNOUNCEMENTS, SEED_CAPTURED_AT, SEED_HOLDINGS, SEED_INDEX, SEED_PRICES, SEED_SCREEN, SEED_TXNS, SEED_WATCHLIST,
 } from '../../shared/fixtures/seed.ts';
@@ -43,6 +45,8 @@ export interface AppData {
   earnings: QuarterEarnings[]; // quarterly profit after tax read from results filings (loss-quarter rules)
   bluechip: Record<string, BcState>; // blue-chip state per company, from the worker's checks (empty until the first night run)
   picks: { undervalued: AiPicks | null; dividend: AiPicks | null };
+  policyRates: PolicyRate[]; // State Bank policy-rate decisions, oldest first (empty until the table exists and is filled)
+  regime: RegimeDay[]; // bull market ON/OFF reading per trading day, oldest first (empty until the night check stores one)
 }
 
 export interface DataSource {
@@ -107,6 +111,11 @@ const normReceipt = (r: any): DividendReceipt => ({ ...r, shares: Number(r.share
 const receiptRow = (r: DividendReceipt) => ({
   symbol: r.symbol, paid_on: r.paid_on, shares: r.shares, dps: r.dps, gross: r.gross, wht_pct: r.wht_pct, net: r.net, dividend_id: r.dividend_id ?? null, note: r.note || null,
 });
+const normRate = (r: any): PolicyRate => ({ decided_on: r.decided_on, policy_rate: Number(r.policy_rate), ceiling: n(r.ceiling), floor: n(r.floor), source: r.source ?? '' });
+const normRegime = (r: any): RegimeDay => ({
+  day: r.day, bull: !!r.bull, close: n(r.close), ma: n(r.ma), change_1y_pct: n(r.change_1y_pct), drawdown_pct: n(r.drawdown_pct),
+  earnings_yield_pct: n(r.earnings_yield_pct), policy_rate: n(r.policy_rate), reasons: Array.isArray(r.reasons) ? r.reasons.map(String) : [],
+});
 /** Settings row -> Settings: numbers are numeric strings in PostgREST; new columns fall back to the defaults. */
 function normSettings(s: any): Settings {
   const num = (k: keyof Settings) => Number(s[k] ?? (DEFAULT_SETTINGS as any)[k]);
@@ -158,7 +167,7 @@ export class LiveSource implements DataSource {
     const H = (ok(holdings) as any[]).map(normHolding);
     const W = ok(watchlist) as WatchItem[];
     const symbols = [...new Set([...H.map((h) => h.symbol), ...W.map((w) => w.symbol)])];
-    const [prices, anns, insights, screen, txns, divs, uv, dv, receipts, indexDaily, portfolioDaily, earnings, bluechip] = await Promise.all([
+    const [prices, anns, insights, screen, txns, divs, uv, dv, receipts, indexDaily, portfolioDaily, earnings, bluechip, rates, regime] = await Promise.all([
       symbols.length ? optional(sb.from('prices').select('*').in('symbol', symbols), [] as any[]) : Promise.resolve([] as any[]),
       symbols.length ? optional(sb.from('announcements').select('*').in('symbol', symbols).gte('published_at', addDays(today, -60)).order('published_at', { ascending: false }).limit(150), [] as any[]) : Promise.resolve([] as any[]),
       optional(sb.from('ai_insights').select('created_at, job, headline, stance, suggestions, holding_calls, rebalance, cash_note, risks, model').order('created_at', { ascending: false }).limit(1), [] as any[]),
@@ -172,6 +181,9 @@ export class LiveSource implements DataSource {
       allRows((a, b) => sb.from('portfolio_daily').select('day, value, invested').order('day').range(a, b)),
       symbols.length ? optional(sb.from('earnings').select('*').in('symbol', symbols).gte('period_end', addDays(today, -1100)).order('period_end', { ascending: false }).limit(1000), [] as any[]) : Promise.resolve([] as any[]),
       optional(sb.from('bluechip').select('*').limit(2000), [] as any[]),
+      // New tables (migration 0010): missing or empty until it runs, and the app loads either way.
+      optional(sb.from('policy_rates').select('decided_on, policy_rate, ceiling, floor, source').order('decided_on').limit(1000), [] as any[]),
+      optional(sb.from('market_regime').select('*').order('day', { ascending: false }).limit(800), [] as any[]),
     ]);
     const s = ok(settings) as any;
     const history = (ok(idx) as any[]).map(normIdx);
@@ -201,6 +213,8 @@ export class LiveSource implements DataSource {
       earnings: earnings.map((r: any) => ({ ...r, profit_after_tax: Number(r.profit_after_tax) })),
       bluechip: Object.fromEntries(bluechip.map((b: any) => [b.symbol, { ...b, fails: Number(b.fails) } as BcState])),
       picks: { undervalued: (uv[0] ?? null) as AiPicks | null, dividend: (dv[0] ?? null) as AiPicks | null },
+      policyRates: rates.map(normRate),
+      regime: regime.map(normRegime).reverse(),
     };
   }
 
@@ -267,6 +281,24 @@ function demoBluechip(): Record<string, BcState> {
   }), today)]));
 }
 
+/**
+ * The demo's one bull-market reading: the seed day's KSE-100 close and PSX screen, put through the same rules as the
+ * night check. No history is made up, so with a single close and no index membership in the seed the trend has no
+ * clear signal; then there is no reading at all and the app says it is building data, rather than showing OFF.
+ */
+function demoRegime(rates: PolicyRate[]): RegimeDay[] {
+  const day = SEED_INDEX.ts.slice(0, 10);
+  const breadth = marketBreadth(SEED_SCREEN);
+  const t = evaluateTrend({ today: day, closes: [{ day, close: SEED_INDEX.kse100 }], close: SEED_INDEX.kse100, change_1y_pct: breadth.change_1y_pct }, null);
+  const decided = t.on != null && !t.reasons.some((r) => r.startsWith('No clear signal'));
+  if (!decided) return [];
+  return [{
+    day, bull: !!t.on, close: SEED_INDEX.kse100, ma: t.ma, change_1y_pct: breadth.change_1y_pct, drawdown_pct: t.drawdown_pct,
+    earnings_yield_pct: breadth.earnings_yield_pct, policy_rate: rateOn(rates, day), reasons: t.reasons,
+  }];
+}
+const DEMO_RATES = sbpPolicyRates as PolicyRate[];
+
 /** The demo's buys of the seed holdings are dated the last day of the month before the seed capture. */
 const DEMO_BASELINE_DAY = addDays(`${SEED_CAPTURED_AT.slice(0, 7)}-01`, -1);
 const r2 = (v: number) => Math.round(v * 100) / 100;
@@ -308,6 +340,7 @@ export class DemoSource implements DataSource {
       aiInsight: null, // never show made-up AI text; real suggestions appear after the first signed-in run
       screen: SEED_SCREEN, transactions: [...this.txns], dividends: [], picks: { undervalued: null, dividend: null },
       receipts: [...this.receipts], indexDaily: [{ day: SEED_INDEX.ts.slice(0, 10), close: SEED_INDEX.kse100 }], portfolioDaily: [], earnings: [], bluechip: demoBluechip(),
+      policyRates: DEMO_RATES, regime: demoRegime(DEMO_RATES),
     };
   }
   async saveTxns(txns: Txn[]) { this.txns.push(...txns.map((t, i) => ({ ...t, id: t.id ?? `demo-t${Date.now()}-${i}` }))); }

@@ -9,6 +9,7 @@ import type {
 import { DEFAULT_SETTINGS } from '../shared/types.ts';
 import type { ScreenRow } from '../shared/discover.ts';
 import type { AnnualProfit, AuditFinding, BcState } from '../shared/bluechip.ts';
+import type { PolicyRate, RegimeDay } from '../shared/regime.ts';
 
 export interface PushSub { id: string; endpoint: string; p256dh: string; auth: string }
 
@@ -75,6 +76,14 @@ export interface Store {
   saveIndexDay(d: IndexDay): Promise<void>;
   /** One portfolio value per user per trading day, for the Performance chart. */
   savePortfolioDay(userId: string, d: PortfolioDay): Promise<void>;
+  /** Stored KSE-100 closes from a date on, oldest first (bull/bear trend). */
+  indexCloses(sinceDate: string): Promise<IndexDay[]>;
+  /** State Bank policy rate decisions, oldest first. */
+  policyRates(): Promise<PolicyRate[]>;
+  savePolicyRates(rows: PolicyRate[]): Promise<void>;
+  /** Bull/bear readings from a date on, oldest first; one per trading day. */
+  regimeDays(sinceDate: string): Promise<RegimeDay[]>;
+  saveRegimeDay(d: RegimeDay): Promise<void>;
 }
 
 const READ_KINDS = ['dividend', 'results', 'board_meeting'];
@@ -332,6 +341,32 @@ export class SupabaseStore implements Store {
   async savePortfolioDay(userId: string, d: PortfolioDay) {
     check(await this.sb.from('portfolio_daily').upsert({ ...d, user_id: userId }, { onConflict: 'user_id,day' }), 'save portfolio day');
   }
+
+  async indexCloses(since: string) {
+    return (check(await this.sb.from('index_daily').select('day, close').gte('day', since).order('day').limit(2000), 'index days') as any[])
+      .map((r) => ({ day: r.day, close: Number(r.close) }));
+  }
+
+  async policyRates() {
+    return (check(await this.sb.from('policy_rates').select('decided_on, policy_rate, ceiling, floor, source').order('decided_on').limit(1000), 'policy rates') as any[])
+      .map((r) => ({ ...r, policy_rate: Number(r.policy_rate), ceiling: r.ceiling == null ? null : Number(r.ceiling), floor: r.floor == null ? null : Number(r.floor) }));
+  }
+
+  async savePolicyRates(rows: PolicyRate[]) {
+    if (!rows.length) return;
+    const at = new Date().toISOString();
+    check(await this.sb.from('policy_rates').upsert(rows.map((r) => ({ ...r, updated_at: at })), { onConflict: 'decided_on' }), 'save policy rates');
+  }
+
+  async regimeDays(since: string) {
+    const num = (v: unknown) => (v == null ? null : Number(v));
+    return (check(await this.sb.from('market_regime').select('*').gte('day', since).order('day').limit(2000), 'regime') as any[])
+      .map((r) => ({ day: r.day, bull: r.bull, close: num(r.close), ma: num(r.ma), change_1y_pct: num(r.change_1y_pct), drawdown_pct: num(r.drawdown_pct), earnings_yield_pct: num(r.earnings_yield_pct), policy_rate: num(r.policy_rate), reasons: r.reasons ?? [] }));
+  }
+
+  async saveRegimeDay(d: RegimeDay) {
+    check(await this.sb.from('market_regime').upsert({ ...d, updated_at: new Date().toISOString() }, { onConflict: 'day' }), 'save regime');
+  }
 }
 
 /** In-memory store for dry runs and tests. */
@@ -424,6 +459,13 @@ export class MemoryStore implements Store {
     this.picks.push({ id: this.picks.length + 1, kind, items, model, created_at: this.clock().toISOString() });
   }
   async saveIndexDay(d: IndexDay) { this.indexDays = [...this.indexDays.filter((x) => x.day !== d.day), d]; }
+  rates: PolicyRate[] = [];
+  regime: RegimeDay[] = [];
+  async indexCloses(since: string) { return this.indexDays.filter((d) => d.day >= since).sort((a, b) => a.day.localeCompare(b.day)); }
+  async policyRates() { return [...this.rates].sort((a, b) => a.decided_on.localeCompare(b.decided_on)); }
+  async savePolicyRates(rows: PolicyRate[]) { for (const r of rows) this.rates = [...this.rates.filter((x) => x.decided_on !== r.decided_on), r]; }
+  async regimeDays(since: string) { return this.regime.filter((d) => d.day >= since).sort((a, b) => a.day.localeCompare(b.day)); }
+  async saveRegimeDay(d: RegimeDay) { this.regime = [...this.regime.filter((x) => x.day !== d.day), d]; }
   async savePortfolioDay(userId: string, d: PortfolioDay) {
     this.portfolioDays = [...this.portfolioDays.filter((x) => !(x.user_id === userId && x.day === d.day)), { ...d, user_id: userId }];
   }

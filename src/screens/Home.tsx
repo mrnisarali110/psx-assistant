@@ -9,6 +9,7 @@ import { addDays, isMarketOpen, isStale, minutesToClose, pktDate, pktParts } fro
 import { DEFAULT_RULES } from '../../shared/types.ts';
 import { asOfLabel, num, pct, rs, signedRs } from '../../shared/format.ts';
 import { AiCard } from '../components/AiCard.tsx';
+import { MarketMoodLine } from '../components/MarketMood.tsx';
 import { useHoldingActions } from '../components/HoldingActions.tsx';
 import { Button, Card, Section, Sparkline, SymbolAvatar, changeTone } from '../components/ui.tsx';
 import { useLongPress } from '../lib/gestures.ts';
@@ -171,6 +172,7 @@ export function Home(props: ScreenProps) {
         <p className={`mt-2 text-xs ${stale ? 'font-medium text-amber-600 dark:text-amber-400' : 'text-slate-500 dark:text-slate-400'}`}>
           {stale ? 'Prices may be out of date · ' : ''}as of {asOfLabel(asOf)} · crash level {num(data.settings.crash_trigger_kse, 0)}
         </p>
+        <MarketMoodLine data={data} />
       </Card>
 
       {acts.ui}

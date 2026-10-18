@@ -29,6 +29,14 @@ night pipeline without notifications, BC recheck forced for the user's stocks; 1
 window). Needs `GITHUB_DISPATCH_TOKEN` too (issue 1). **Desktop web layout** at `lg`: SideNav, two-column Home and
 Profile (CSS columns), grids on Portfolio/Discover/News, centred Sheet. Verified at 1440 and 375 in the demo.
 
+**Bull market ON/OFF + policy rate (2026-10-18):** `shared/regime.ts` (pure: rateState/rateCycles, marketBreadth,
+evaluateTrend with hysteresis, regimePeriods, allocation), `worker/sbp.ts` (SBP history PDF by x-position + home page
+rate box/meeting), `updateMarket` in `worker/jobs.ts` (deep runs: night + refresh), migration 0010 (`policy_rates`,
+`market_regime`), alerts `market_regime` / `policy_rate` in the night digest (deep link `/#/home?market`),
+`src/components/MarketMood.tsx` (Home KSE-100 card line + sheet with charts). KSE-100 history only grows from the
+closes we store: the 200-day average starts after 120 stored days. `shared/sbp-policy-rates.json` is a dated snapshot
+for the demo and a parser test, never used by the worker.
+
 Live: commit `d623087`, Worker version `20f67f9f`, 324 tests green, CI green, migration 0006 applied.
 
 **Owner's feedback on the phone (2026-10-15 13:33 PKT), and what was done about it:**

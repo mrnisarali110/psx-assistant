@@ -85,7 +85,7 @@ Gestures always have a button alternative (detail sheet buttons, `…` menu). Re
 | Job | PKT | Sends |
 | --- | --- | --- |
 | market | every 30 min, 09:45–15:45 Mon–Thu; Fri to 16:45 | Actionable only: crash (always), dip, buying chances below your last buy, strong AI buy/trim calls, big moves. Last run before close is titled "Before close". Max 3 a day, bundled. |
-| night | 21:00 Mon–Fri | One digest: close, your portfolio, company news, upcoming dividends, rebalance notes. Outside the 3-a-day limit. |
+| night | 21:00 Mon–Fri | One digest: close, your portfolio, company news, upcoming dividends, rebalance notes, bull market ON/OFF and State Bank rate changes. Outside the 3-a-day limit. |
 | telegram | every 20 min | Links Telegram chats. |
 | refresh | on demand (Profile → Refresh latest) | Nothing: runs the night job's work now, no notifications. |
 
@@ -167,6 +167,30 @@ and lost only after two failed rechecks in a row ("BC at risk" in between). Rech
 dividend filing, when KSE-30 members change, when the config changes, once in Sept–Oct. Every recheck is stored in
 `bluechip_history`. PSX's payouts history, listing status and 5-year report pages load behind a captcha, so they are not
 used; dividend and profit history therefore fill in from filings over time.
+
+## Bull market ON/OFF and the interest rate
+
+The KSE-100 card on Home shows **Bull market ON/OFF** with how long it has lasted and the **State Bank policy rate**;
+tap it for the charts, the reasons and where spare cash could go. Every threshold is in `shared/rules.json` (`regime`).
+
+- **ON** when the KSE-100 is up 20% on a year (PSX's own 1-year change of the index stocks, weighted by market cap,
+  from the screener) or 20% above its 12-month low, and not below its 200-day average. **OFF** after a 20% fall from
+  the 12-month high, or below the average with the year negative. In between it keeps its last state (no flicker).
+  The average and the high/low use the KSE-100 closes the worker stores each trading day (PSX publishes no index
+  history on a page we read honestly), so they switch on once 120 days are stored; until then the 1-year change leads.
+- **Interest rate:** the State Bank's own [rate history PDF](https://www.sbp.org.pk/assets/document/OVR-Repo-History.pdf)
+  (every decision since 1991, read by position because its text scrambles the columns) plus the rate box and latest
+  meeting on [sbp.org.pk](https://www.sbp.org.pk/). Cycle: easing after a cut, tightening after a hike, on hold after
+  9 months without a change. Before 25 May 2015 the reverse repo rate was the policy rate (SBP's footnote).
+- **Where spare cash could go** (a rule of thumb, never advice; your SIP and crash fund stay as they are): bull ON and
+  stocks out-earn the policy rate (market-cap-weighted earnings yield of the KSE-100 stocks) → shares 60 / equity
+  funds 20 / money market 20; bull ON but stocks earn less → 40/20/40; bull OFF → 15/10/75, or 40/20/40 while rates
+  are being cut. Savings and money-market returns are **VERIFY** estimates: SBP's minimum savings profit is 0.5%
+  below its repo floor ([BPRD Circular 07 of 2013](https://www.sbp.org.pk/bprd/2013/c7.htm)), i.e. policy − 1.5%;
+  money-market funds about policy − 0.75%, before fees and tax.
+- **Checked every night** (and by Refresh latest): the night job reads SBP, saves `policy_rates`, saves one
+  `market_regime` row per trading day, and puts **Bull market ON/OFF** or **State Bank cut/raised the rate** in the
+  night digest when either changes (once each).
 
 ## Data source (read this if prices stop updating)
 

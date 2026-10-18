@@ -201,5 +201,45 @@
     "dividend_mode": "available",
     "dividend_mode_note": "'available': PSX trailing yield > 0 and no gap in the years covered by filings read so far; 'strict': a dividend in dividend_years_needed of dividend_years_window years, from filings only",
     "audit_note": "false: a qualified opinion still fails once an annual report is read; a missing report does not block the badge"
+  },
+  "regime": {
+    "source": "Bull market ON/OFF, owner request 2026-10-18. Trend from KSE-100 closes the worker stores and PSX's screener (market cap, 1-year change, P/E of the index stocks); interest rate from the State Bank of Pakistan. Every threshold is here.",
+    "index_code": "KSE100",
+    "ma_days": 200,
+    "min_days_for_ma": 120,
+    "band_pct": 2,
+    "lookback_days": 365,
+    "on_1y_pct": 20,
+    "on_rise_pct": 20,
+    "off_drawdown_pct": 20,
+    "off_1y_pct": 0,
+    "rule_note": "ON when the KSE-100 is up 20% on a year (PSX's 1-year change of the index stocks, weighted by market cap) or 20% above its 12-month low, and not below its 200-day average. OFF after a 20% fall from the 12-month high, or below the average with the 1-year change negative. Until 120 days of closes are stored the average is skipped.",
+    "rate_hold_months": 9,
+    "rate_sources": {
+      "history_pdf": "https://www.sbp.org.pk/assets/document/OVR-Repo-History.pdf",
+      "current_page": "https://www.sbp.org.pk/"
+    },
+    "savings_below_policy_pct": 1.5,
+    "money_market_below_policy_pct": 0.75,
+    "rates_note": "VERIFY: estimates from the policy rate. Savings: SBP's minimum profit on rupee savings deposits is 0.5% below its repo (floor) rate, which is 1% below the policy rate (BPRD Circular 07 of 2013, https://www.sbp.org.pk/bprd/2013/c7.htm; reported narrowed to individuals up to Rs 10 million from 1 Aug 2026, not checked against SBP). Money-market funds track T-bills, before fees and tax. Check your bank's and the fund's published rates.",
+    "stock_gap_pct": 0,
+    "mix": {
+      "stocks": {
+        "stocks": 60,
+        "equity_funds": 20,
+        "money_market": 20
+      },
+      "balanced": {
+        "stocks": 40,
+        "equity_funds": 20,
+        "money_market": 40
+      },
+      "cash": {
+        "stocks": 15,
+        "equity_funds": 10,
+        "money_market": 75
+      }
+    },
+    "mix_note": "Split for spare cash beyond your monthly investment and crash fund. A rule of thumb, not advice."
   }
 }
