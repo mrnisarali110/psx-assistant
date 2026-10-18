@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { allocation, evaluateTrend, marketBreadth, rateChanges, rateCycles, rateOn, rateState, regimePeriods, type PolicyRate, type RegimeDay } from './regime.ts';
+import { evaluateTrend, marketBreadth, rateChanges, rateCycles, rateOn, rateState, regimePeriods, type PolicyRate, type RegimeDay } from './regime.ts';
 import { addDays } from './time.ts';
 import type { ScreenRow } from './discover.ts';
 import sbp from './sbp-policy-rates.json' with { type: 'json' };
@@ -98,25 +98,5 @@ describe('bull market ON/OFF', () => {
       { bull: false, from: '2026-10-05', to: '2026-10-08', days: 3 },
       { bull: true, from: '2026-10-08', to: null, days: 10 },
     ]);
-  });
-});
-
-describe('where spare cash could go', () => {
-  const rate = rateState(RATES, '2026-10-18');
-  it('bull ON and stocks out-earn the policy rate: shares favoured', () => {
-    const a = allocation({ bull: true, rate, earnings_yield_pct: 13, dividend_yield_pct: 6 });
-    expect(a.stance).toBe('stocks');
-    expect(a.rows.map((r) => r.pct)).toEqual([60, 20, 20]);
-    expect(a.rows[2].yield_pct).toBe(10.8); // 11.5 - 0.75
-    expect(a.savings_rate_pct).toBe(10); // 11.5 - 1.5
-    expect(a.reasons.join(' ')).toMatch(/Rates went up last/);
-  });
-  it('bull ON but stocks earn less than the policy rate: balanced', () => {
-    expect(allocation({ bull: true, rate, earnings_yield_pct: 9, dividend_yield_pct: 5 }).stance).toBe('balanced');
-  });
-  it('bull OFF: safe yield unless rates are being cut', () => {
-    expect(allocation({ bull: false, rate, earnings_yield_pct: 13, dividend_yield_pct: 6 }).stance).toBe('cash');
-    const easing = rateState([pr('2024-01-01', 22), pr('2026-09-01', 20)], '2026-10-18');
-    expect(allocation({ bull: false, rate: easing, earnings_yield_pct: 13, dividend_yield_pct: 6 }).stance).toBe('balanced');
   });
 });

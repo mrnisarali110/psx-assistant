@@ -1,5 +1,6 @@
 /**
- * Bull market ON/OFF and the interest-rate cycle, from real data only, with every threshold in rules.json (`regime`).
+ * Building blocks for the Market Compass (shared/compass.ts): the KSE-100 trend reading, index breadth from PSX's
+ * screener, and the State Bank interest-rate cycle. Real data only; every threshold in rules.json (`regime`).
  *
  * Market trend (KSE-100):
  *   ON  when the index is up `on_1y_pct` on a year (PSX's 1-year change of the index stocks, weighted by market cap)
@@ -10,8 +11,6 @@
  *   The average uses up to `ma_days` stored closes and is skipped until `min_days_for_ma` are stored.
  * Interest rate (State Bank of Pakistan policy rate): the cycle is easing after a cut, tightening after a hike, and
  *   on hold once the last change is `rate_hold_months` old.
- * Allocation: where spare cash may go (stocks, equity funds, money-market fund or savings) from the two, as a rule of
- *   thumb shown with its reasons. Never advice and never an order.
  */
 import type { ScreenRow } from './discover.ts';
 import { addDays, daysBetween } from './time.ts';
@@ -182,45 +181,4 @@ export function regimePeriods(days: RegimeDay[], today: string): RegimePeriod[] 
   const last = out.at(-1);
   if (last) last.days = daysBetween(last.from, today);
   return out;
-}
-
-// ---------------------------------------------------------------------------
-// Where spare cash may go
-// ---------------------------------------------------------------------------
-export type Stance = 'stocks' | 'balanced' | 'cash';
-export interface AllocationRow { key: 'stocks' | 'equity_funds' | 'money_market'; label: string; pct: number; yield_pct: number | null; note: string }
-export interface Allocation { stance: Stance; headline: string; rows: AllocationRow[]; savings_rate_pct: number | null; reasons: string[] }
-
-export function allocation(o: { bull: boolean | null; rate: RateState | null; earnings_yield_pct: number | null; dividend_yield_pct: number | null }, rules: Rules = DEFAULT_RULES): Allocation {
-  const c = regimeConfig(rules);
-  const policy = o.rate?.rate ?? null;
-  const gap = o.earnings_yield_pct != null && policy != null ? r1(o.earnings_yield_pct - policy) : null;
-  const cycle = o.rate?.cycle ?? null;
-  const reasons: string[] = [];
-  let stance: Stance;
-  if (o.bull === true) {
-    stance = gap == null || gap >= c.stock_gap_pct ? 'stocks' : 'balanced';
-    reasons.push('Bull market ON');
-    if (gap != null) reasons.push(gap >= c.stock_gap_pct
-      ? `Stocks earn ${o.earnings_yield_pct}% a year on their price, ${gap.toFixed(1)} points over the ${policy}% policy rate`
-      : `Stocks earn ${o.earnings_yield_pct}% a year on their price, below the ${policy}% policy rate: safe yield competes`);
-  } else if (o.bull === false) {
-    stance = cycle === 'easing' ? 'balanced' : 'cash';
-    reasons.push('Bull market OFF');
-    reasons.push(cycle === 'easing' ? 'Rates are being cut, which has tended to help shares later' : `Rates ${cycle === 'tightening' ? 'are rising' : 'are on hold'}: safe yield is attractive`);
-  } else {
-    stance = 'balanced';
-    reasons.push('Not enough market data yet for ON or OFF');
-  }
-  if (o.bull === true && cycle === 'tightening') reasons.push('Rates went up last: a headwind for shares');
-  const mix = c.mix[stance];
-  const mmf = policy == null ? null : r1(policy - c.money_market_below_policy_pct);
-  const savings = policy == null ? null : r1(policy - c.savings_below_policy_pct);
-  const rows: AllocationRow[] = [
-    { key: 'stocks', label: 'Stocks (your SIP picks)', pct: mix.stocks, yield_pct: o.earnings_yield_pct, note: o.dividend_yield_pct != null ? `about ${o.dividend_yield_pct}% paid as dividends` : 'earnings yield' },
-    { key: 'equity_funds', label: 'Equity mutual funds', pct: mix.equity_funds, yield_pct: null, note: 'spread across the market, fund fees apply' },
-    { key: 'money_market', label: 'Money-market fund or savings', pct: mix.money_market, yield_pct: mmf, note: savings != null ? `savings about ${savings}% (estimate)` : 'estimate from the policy rate' },
-  ];
-  const headline = stance === 'stocks' ? 'Shares favoured for spare cash' : stance === 'balanced' ? 'Split spare cash between shares and safe yield' : 'Favour safe yield for spare cash; keep your SIP';
-  return { stance, headline, rows, savings_rate_pct: savings, reasons };
 }

@@ -221,26 +221,7 @@
     },
     "savings_below_policy_pct": 1.5,
     "money_market_below_policy_pct": 0.75,
-    "rates_note": "VERIFY: estimates from the policy rate. Savings: SBP's minimum profit on rupee savings deposits is 0.5% below its repo (floor) rate, which is 1% below the policy rate (BPRD Circular 07 of 2013, https://www.sbp.org.pk/bprd/2013/c7.htm; reported narrowed to individuals up to Rs 10 million from 1 Aug 2026, not checked against SBP). Money-market funds track T-bills, before fees and tax. Check your bank's and the fund's published rates.",
-    "stock_gap_pct": 0,
-    "mix": {
-      "stocks": {
-        "stocks": 60,
-        "equity_funds": 20,
-        "money_market": 20
-      },
-      "balanced": {
-        "stocks": 40,
-        "equity_funds": 20,
-        "money_market": 40
-      },
-      "cash": {
-        "stocks": 15,
-        "equity_funds": 10,
-        "money_market": 75
-      }
-    },
-    "mix_note": "Split for spare cash beyond your monthly investment and crash fund. A rule of thumb, not advice."
+    "rates_note": "VERIFY: estimates from the policy rate. Savings: SBP's minimum profit on rupee savings deposits is 0.5% below its repo (floor) rate, which is 1% below the policy rate (BPRD Circular 07 of 2013, https://www.sbp.org.pk/bprd/2013/c7.htm; reported narrowed to individuals up to Rs 10 million from 1 Aug 2026, not checked against SBP). Money-market funds track T-bills, before fees and tax. Check your bank's and the fund's published rates."
   },
   "compass": {
     "source": "Market Compass, owner go-ahead 2026-10-18. Three separate lights (value, shares vs safe yield, trend) plus rates and inflation; only extra money changes, the monthly SIP never does. Research: Al Meezan Rapid Reads Jul 2026, AHL Pakistan Strategy, BMA Capital Jan 2021, Faber 10-month trend, Vanguard/Morningstar on staying invested.",
