@@ -24,6 +24,11 @@ architecture in full. This file is about state, open issues and what to build ne
 
 ## State right now
 
+**2026-10-18:** Profile → Data → **Refresh latest** (edge `/api/refresh` → `workflow_dispatch` job `refresh`: the
+night pipeline without notifications, BC recheck forced for the user's stocks; 10-minute gap, 30-minute running
+window). Needs `GITHUB_DISPATCH_TOKEN` too (issue 1). **Desktop web layout** at `lg`: SideNav, two-column Home and
+Profile (CSS columns), grids on Portfolio/Discover/News, centred Sheet. Verified at 1440 and 375 in the demo.
+
 Live: commit `d623087`, Worker version `20f67f9f`, 324 tests green, CI green, migration 0006 applied.
 
 **Owner's feedback on the phone (2026-10-15 13:33 PKT), and what was done about it:**

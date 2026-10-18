@@ -70,6 +70,13 @@ happened. Profile = settings, rules, broker and tax. Anything you look at once a
   your rules (max per stock, **max per sector**, opportunity alert, Shariah only, **trim rules**); **Broker & tax**
   (broker, commission %, minimum per share, sales tax on commission, filer / non-filer, match NCCPL statement, CGT
   deducted this tax year, losses carried forward); notifications; Telegram; AI on/off.
+  **Data → Refresh latest** runs the whole system now on the server (PSX prices and screen, company pages, filings
+  read by the AI, fresh AI suggestions and Discover picks, a blue-chip recheck of your own stocks), follows the run
+  and reloads when it finishes (usually 3 to 8 minutes). At most one every 10 minutes; it never sends notifications.
+  It needs `GITHUB_DISPATCH_TOKEN` on the Worker (see Schedule); without it the button says so.
+
+**On a computer** (1024 px and wider) the app becomes a web layout: a sidebar instead of the bottom tabs, Home and
+Profile in two columns, Portfolio/Discover/News as grids, and sheets open as centred dialogs. Phones are unchanged.
 
 Gestures always have a button alternative (detail sheet buttons, `…` menu). Respects reduced motion.
 
@@ -80,6 +87,7 @@ Gestures always have a button alternative (detail sheet buttons, `…` menu). Re
 | market | every 30 min, 09:45–15:45 Mon–Thu; Fri to 16:45 | Actionable only: crash (always), dip, buying chances below your last buy, strong AI buy/trim calls, big moves. Last run before close is titled "Before close". Max 3 a day, bundled. |
 | night | 21:00 Mon–Fri | One digest: close, your portfolio, company news, upcoming dividends, rebalance notes. Outside the 3-a-day limit. |
 | telegram | every 20 min | Links Telegram chats. |
+| refresh | on demand (Profile → Refresh latest) | Nothing: runs the night job's work now, no notifications. |
 
 **Who rings the bell:** GitHub's own cron is unreliable for this cadence (runs hours late or not at all), so the
 Cloudflare Worker carries the schedule (`triggers.crons` in `wrangler.jsonc`, UTC) and each tick starts the GitHub job

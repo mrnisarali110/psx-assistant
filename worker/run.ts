@@ -1,7 +1,7 @@
 /**
  * Worker entry point.
  *   npm run worker -- <job> [--dry-run] [--email you@example.com] [--now ISO]
- * jobs: market | night | test | telegram | aicheck | aistatus | diag | auto
+ * jobs: market | night | refresh | test | telegram | aicheck | aistatus | diag | auto
  * diag prints delivery settings and the last alerts per account: kinds, times, channels only (logs are public).
  * "auto" picks the job from the GitHub cron expression in $SCHEDULE.
  * --dry-run fetches live PSX data but uses the seed portfolio in memory and only prints alerts.

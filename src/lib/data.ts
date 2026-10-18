@@ -16,7 +16,7 @@ import {
   SEED_ANNOUNCEMENTS, SEED_CAPTURED_AT, SEED_HOLDINGS, SEED_INDEX, SEED_PRICES, SEED_SCREEN, SEED_TXNS, SEED_WATCHLIST,
 } from '../../shared/fixtures/seed.ts';
 import { config } from './config.ts';
-import { fetchAiStatus, readScreenshots, type AiStatus } from './importer.ts';
+import { fetchAiStatus, readScreenshots, requestRefresh, type AiStatus, type RefreshReply } from './importer.ts';
 
 export interface WorkerRun { job: string; started_at: string; finished_at: string | null; ok: boolean | null }
 
@@ -30,6 +30,7 @@ export interface AppData {
   announcements: Announcement[];
   alerts: AlertLogRow[];
   lastRun: WorkerRun | null;
+  lastRefresh: WorkerRun | null; // the latest Refresh latest run (job "refresh")
   telegramLinked: boolean;
   email: string | null;
   aiInsight: AiInsight | null;
@@ -66,6 +67,10 @@ export interface DataSource {
   readScreenshots(files: File[], known: string[]): Promise<{ holdings: ImportedRow[]; dropped: string[] }>;
   /** Which AI providers can read screenshots right now (free check, no tokens). */
   aiStatus(): Promise<AiStatus>;
+  /** Start the full refresh on the server (PSX data, filings, AI, blue chips). */
+  refreshAll(): Promise<RefreshReply>;
+  /** The latest refresh run, to follow its progress. */
+  refreshRun(): Promise<WorkerRun | null>;
 }
 
 let client: SupabaseClient | null = null;
@@ -180,6 +185,7 @@ export class LiveSource implements DataSource {
       announcements: anns as Announcement[],
       alerts: ok(alerts) as AlertLogRow[],
       lastRun: ((ok(run) as any[])[0] ?? null) as WorkerRun | null,
+      lastRefresh: await this.refreshRun().catch(() => null),
       telegramLinked: !!(ok(profile) as any)?.telegram_chat_id,
       email: this.email,
       aiInsight: insights[0] ? { holding_calls: [], suggestions: [], ...insights[0] } as AiInsight : null,
@@ -236,6 +242,11 @@ export class LiveSource implements DataSource {
     return readScreenshots(files, await this.token(), known);
   }
   async aiStatus() { return fetchAiStatus(await this.token()); }
+  async refreshAll() { return requestRefresh(await this.token()); }
+  async refreshRun() {
+    const rows = ok(await supabase().from('worker_runs').select('job, started_at, finished_at, ok').eq('job', 'refresh').order('started_at', { ascending: false }).limit(1)) as WorkerRun[];
+    return rows[0] ?? null;
+  }
   private async token() {
     const { data } = await supabase().auth.getSession();
     if (!data.session) throw new Error('Please sign in again.');
@@ -293,7 +304,7 @@ export class DemoSource implements DataSource {
       settings: { ...this.settings }, holdings: this.holdings.map((h) => ({ ...h })), watchlist: [...this.watch],
       prices: SEED_PRICES, index: SEED_INDEX, indexHistory: [SEED_INDEX], announcements: SEED_ANNOUNCEMENTS,
       alerts: [...this.alerts], telegramLinked: false, email: 'demo',
-      lastRun: { job: 'market', started_at: SEED_CAPTURED_AT, finished_at: SEED_CAPTURED_AT, ok: true },
+      lastRun: { job: 'market', started_at: SEED_CAPTURED_AT, finished_at: SEED_CAPTURED_AT, ok: true }, lastRefresh: null,
       aiInsight: null, // never show made-up AI text; real suggestions appear after the first signed-in run
       screen: SEED_SCREEN, transactions: [...this.txns], dividends: [], picks: { undervalued: null, dividend: null },
       receipts: [...this.receipts], indexDaily: [{ day: SEED_INDEX.ts.slice(0, 10), close: SEED_INDEX.kse100 }], portfolioDaily: [], earnings: [], bluechip: demoBluechip(),
@@ -320,4 +331,6 @@ export class DemoSource implements DataSource {
     throw new Error('Screenshot import needs an account. Sign in to use it.');
   }
   async aiStatus(): Promise<AiStatus> { return { providers: [], vision: [], ready: false, retry_at: null }; }
+  async refreshAll(): Promise<RefreshReply> { throw new Error('Refresh needs an account. Sign in to use it.'); }
+  async refreshRun() { return null; }
 }

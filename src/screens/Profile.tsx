@@ -11,6 +11,7 @@ import { previousTaxYears, taxYear } from '../../shared/tax.ts';
 import { pktDate } from '../../shared/time.ts';
 import { DEFAULT_RULES, type Settings } from '../../shared/types.ts';
 import { GrowthCard } from '../components/Growth.tsx';
+import { RefreshLatest } from '../components/RefreshLatest.tsx';
 import { Icon, type IconName } from '../components/Icon.tsx';
 import { Sheet } from '../components/Sheet.tsx';
 import { useToast } from '../components/Toast.tsx';
@@ -89,7 +90,7 @@ export function Profile({ data, source, reload, onExitDemo }: ScreenProps & { on
 
   return (
     <>
-      <header className="flex items-center gap-4">
+      <header className="flex items-center gap-4 lg:[column-span:all]">
         <span className="flex h-14 w-14 items-center justify-center rounded-full bg-gradient-to-br from-teal-500 to-emerald-600 text-xl font-bold text-white">{source.kind === 'demo' ? 'D' : initial}</span>
         <div className="min-w-0">
           <h1 className="truncate text-lg font-bold">{source.kind === 'demo' ? 'Demo account' : data.email}</h1>
@@ -98,6 +99,14 @@ export function Profile({ data, source, reload, onExitDemo }: ScreenProps & { on
           </p>
         </div>
       </header>
+
+      <Section title="Data">
+        <Card className="py-0">
+          {source.kind === 'demo'
+            ? <p className="py-3 text-sm text-slate-500 dark:text-slate-400">Refresh latest needs an account: the demo uses saved prices from Oct 5.</p>
+            : <RefreshLatest source={source} last={data.lastRefresh} reload={reload} />}
+        </Card>
+      </Section>
 
       <Section title="Appearance">
         <Segmented label="Appearance" value={theme} onChange={(v) => { setTheme(v); setThemePref(v); }}

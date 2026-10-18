@@ -50,3 +50,18 @@ export async function fetchAiStatus(accessToken: string): Promise<AiStatus> {
   if (!r.ok || !body.providers) throw new Error(body.error ?? `Status check failed (${r.status}).`);
   return { providers: body.providers, vision: body.vision ?? [], ready: !!body.ready, retry_at: body.retry_at ?? null, keys: body.keys };
 }
+
+export type RefreshReply =
+  | { status: 'started'; requested_at: string }
+  | { status: 'running'; started_at: string }
+  | { status: 'recent'; started_at: string; retry_in_min: number }
+  | { status: 'not_configured' | 'failed'; error: string };
+
+/** Ask the server to run the full refresh now (PSX data, filings, AI, blue chips). */
+export async function requestRefresh(accessToken: string): Promise<RefreshReply> {
+  const r = await fetch('/api/refresh', { method: 'POST', headers: { Authorization: `Bearer ${accessToken}` } });
+  const body = (await r.json().catch(() => ({}))) as RefreshReply & { error?: string };
+  if (r.status === 401) throw new Error(body.error ?? 'Please sign in again.');
+  if (!('status' in body)) throw new Error(`Refresh failed (HTTP ${r.status}).`);
+  return body;
+}

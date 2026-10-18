@@ -47,6 +47,7 @@ export const annualsFromPage = (symbol: string, rows: { year: number; profit_aft
 
 export async function runBluechip(o: {
   today: string; screen: ScreenRow[]; previousScreen: ScreenRow[]; userSymbols: string[]; newFilingSymbols: Set<string>; dividends: DividendEvent[];
+  force?: Set<string>; // recheck these now whatever the schedule says (the Refresh latest button: your own stocks)
 }, deps: BcRunDeps): Promise<{ checked: number; pages: number; changes: { added: string[]; removed: string[] } }> {
   const rules = deps.rules ?? DEFAULT_RULES;
   const c = bcConfig(rules);
@@ -63,11 +64,12 @@ export async function runBluechip(o: {
   const hash = configHash(rules);
   const triggerOf = (s: string): string | null => {
     const prev = states.get(s) ?? null;
+    if (o.force?.has(s)) return 'manual';
     if (!bcDue(prev, { today: o.today, newFiling: o.newFilingSymbols.has(s), membershipChanged: changed.has(s) }, rules)) return null;
     return !prev ? 'first' : prev.config_hash !== hash ? 'config' : changed.has(s) ? 'index_change' : o.newFilingSymbols.has(s) ? 'filing' : prev.checked_on <= addDays(o.today, -c.recheck_days) ? 'weekly' : 'annual_season';
   };
   const due = universe.map((s) => ({ s, trigger: triggerOf(s), last: states.get(s)?.checked_on ?? '' })).filter((x) => x.trigger)
-    .sort((a, b) => a.last.localeCompare(b.last) || a.s.localeCompare(b.s))
+    .sort((a, b) => Number(b.trigger === 'manual') - Number(a.trigger === 'manual') || a.last.localeCompare(b.last) || a.s.localeCompare(b.s))
     .slice(0, c.pages_per_night);
   if (!due.length) return { checked: 0, pages: 0, changes };
 

@@ -15,7 +15,7 @@ on:
       job:
         description: Job to run now
         type: choice
-        options: [market, night, test, telegram, aicheck, aistatus, diag]
+        options: [market, night, refresh, test, telegram, aicheck, aistatus, diag]
         default: market
       email:
         description: 'job=test only: account email to send a test crash alert to'

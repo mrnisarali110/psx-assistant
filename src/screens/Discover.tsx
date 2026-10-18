@@ -143,7 +143,7 @@ export function Discover({ data, source, reload }: ScreenProps) {
         {tab === 'upcoming' && <Chips label="Sort upcoming dividends by" options={UP_SORTS} value={sorts.up} onChange={(up) => setSorts((s) => ({ ...s, up }))} />}
       </header>
 
-      <div {...swipe} className="touch-pan-y space-y-3">
+      <div {...swipe} className="touch-pan-y space-y-3 lg:grid lg:grid-cols-2 lg:items-start lg:gap-4 lg:space-y-0 xl:grid-cols-3">
         {tab === 'undervalued' && (uv.length ? uv.map(({ r, chips }, i) => <UndervaluedCard key={r.symbol} r={r} i={i} chips={chips} by={sorts.uv} bc={data.bluechip[r.symbol]} watch={<WatchBtn symbol={r.symbol} />}
           ai={<AiWhy why={r.ai?.why} shown={{ pe: r.pe, sector_pe: r.sector_pe, discount: r.discount_pct, yield: r.dividend_yield_pct, price: r.price, change_1y: r.change_1y_pct }} />} />)
           : <Empty title={filters.loss || filters.bc || shariahOnly ? 'Nothing passes these filters' : 'No screen data yet'}>{filters.loss || filters.bc || shariahOnly ? 'Turn a filter off to see more.' : 'It fills after the next market check.'}</Empty>)}

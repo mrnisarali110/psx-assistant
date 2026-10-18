@@ -83,7 +83,7 @@ export function Home(props: ScreenProps) {
 
   return (
     <>
-      <header className="flex items-center justify-between">
+      <header className="flex items-center justify-between lg:[column-span:all]">
         <div>
           <p className="text-xs text-slate-500 dark:text-slate-400">{new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Karachi', weekday: 'long', month: 'short', day: 'numeric' }).format(now)}</p>
           <h1 className="text-xl font-bold tracking-tight">{greeting(now)}</h1>
@@ -94,7 +94,7 @@ export function Home(props: ScreenProps) {
         </span>
       </header>
 
-      <div className={`flex items-center gap-4 rounded-3xl bg-gradient-to-br px-4 py-3.5 ${hero.cls}`} role="status">
+      <div className={`flex items-center gap-4 rounded-3xl bg-gradient-to-br px-4 py-3.5 lg:[column-span:all] lg:px-6 lg:py-5 ${hero.cls}`} role="status">
         <div className="shrink-0">
           <p className="text-[10px] font-semibold tracking-wide uppercase opacity-80">Today</p>
           <p className="text-3xl leading-none font-extrabold tracking-tight">{hero.word}</p>

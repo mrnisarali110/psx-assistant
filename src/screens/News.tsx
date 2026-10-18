@@ -61,7 +61,7 @@ export function News({ data }: ScreenProps) {
                 </Card>
               ) : <Empty title="Nothing dated in the next 7 days">Book closures, last days to buy, results and board meetings for your stocks appear here as PSX announces them.</Empty>
             ) : news.length ? news.map((g) => (
-              <section key={g.label} className="space-y-2">
+              <section key={g.label} className="space-y-2 lg:grid lg:grid-cols-2 lg:items-start lg:gap-3 lg:space-y-0 lg:[&>h2]:col-span-2">
                 <h2 className="px-1 text-[13px] font-semibold text-slate-500 dark:text-slate-400">{g.label}</h2>
                 {g.items.map((a) => <NewsCard key={a.id} a={a} />)}
               </section>

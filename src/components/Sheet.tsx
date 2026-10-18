@@ -43,7 +43,7 @@ export function Sheet({ open, onClose, title, children }: { open: boolean; onClo
         className={`absolute inset-0 h-full w-full cursor-default bg-black/50 ${closing ? 'animate-fade-out' : 'animate-fade'}`} onClick={onClose} />
       <div ref={panel} role="dialog" aria-modal="true" aria-label={shown.title} aria-hidden={closing || undefined}
         onAnimationEnd={(e) => { if (closing && e.target === e.currentTarget) { setMounted(false); setDrag(0); } }}
-        className={`absolute inset-x-0 bottom-0 mx-auto max-h-[90dvh] max-w-md overflow-y-auto rounded-t-[28px] bg-white pb-[max(16px,env(safe-area-inset-bottom))] dark:bg-slate-900 ${closing ? 'animate-sheet-out' : 'animate-sheet'}`}
+        className={`absolute inset-x-0 bottom-0 mx-auto max-h-[90dvh] max-w-md overflow-y-auto rounded-t-[28px] lg:bottom-auto lg:top-[8vh] lg:max-h-[84dvh] lg:max-w-xl lg:rounded-[28px] lg:shadow-2xl bg-white pb-[max(16px,env(safe-area-inset-bottom))] dark:bg-slate-900 ${closing ? 'animate-sheet-out' : 'animate-sheet'}`}
         style={{ transform: drag && !closing ? `translateY(${drag}px)` : undefined, transition: drag ? 'none' : 'transform 200ms var(--ease-out-quint)', ['--from' as string]: `${drag}px` }}>
         <div className="sticky top-0 z-10 bg-white/95 px-5 pt-2 pb-2 backdrop-blur dark:bg-slate-900/95"
           onPointerDown={(e) => { start.current = e.clientY; (e.target as HTMLElement).setPointerCapture?.(e.pointerId); }}

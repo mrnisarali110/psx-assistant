@@ -248,3 +248,40 @@ describe('blue chips in AI text', () => {
     expect(bc.insight.suggestions.map((s) => s.symbol)).toEqual(['MARI', 'HUBC']);
   });
 });
+
+describe('Refresh latest endpoint', () => {
+  const env: Env = { ASSETS: { fetch: async () => new Response('asset') }, SUPABASE_URL: 'https://sb.example', SUPABASE_KEY: 'pk', GITHUB_DISPATCH_TOKEN: 'ghp' };
+  const post = (auth = 'Bearer good.token') => new Request('https://app/api/refresh', { method: 'POST', headers: { Authorization: auth } });
+  const NOW = new Date('2026-10-18T10:00:00Z');
+  const make = (lastRun: unknown[]) => {
+    const calls: string[] = [];
+    const f = (async (url: string, init?: RequestInit) => {
+      calls.push(String(url));
+      if (String(url).includes('/auth/v1/user')) return new Headers(init?.headers).get('Authorization') === 'Bearer good.token' ? new Response(JSON.stringify({ id: 'u1' })) : new Response('no', { status: 401 });
+      if (String(url).includes('/rest/v1/worker_runs')) return new Response(JSON.stringify(lastRun));
+      if (String(url).includes('api.github.com')) return new Response(null, { status: 204 });
+      return new Response('?', { status: 404 });
+    }) as unknown as typeof fetch;
+    return { f, calls };
+  };
+  it('needs a signed-in user and the dispatch token', async () => {
+    const { handleRefresh } = await import('../edge/index.ts');
+    expect((await handleRefresh(post('Bearer bad.token'), env, make([]).f, NOW)).status).toBe(401);
+    const r = await handleRefresh(post(), { ...env, GITHUB_DISPATCH_TOKEN: undefined }, make([]).f, NOW);
+    expect(r.status).toBe(503);
+    expect(await r.json()).toMatchObject({ status: 'not_configured' });
+  });
+  it('starts the GitHub job "refresh", but not twice: a run going is reported, a recent one asks to wait', async () => {
+    const { handleRefresh } = await import('../edge/index.ts');
+    const none = make([]);
+    const r = await handleRefresh(post(), env, none.f, NOW);
+    expect(r.status).toBe(202);
+    expect(none.calls.some((u) => u.includes('/actions/workflows/worker.yml/dispatches'))).toBe(true);
+    const running = await handleRefresh(post(), env, make([{ started_at: '2026-10-18T09:58:00Z', finished_at: null }]).f, NOW);
+    expect(await running.json()).toMatchObject({ status: 'running' });
+    const recent = await handleRefresh(post(), env, make([{ started_at: '2026-10-18T09:55:00Z', finished_at: '2026-10-18T09:58:00Z' }]).f, NOW);
+    expect(recent.status).toBe(429);
+    expect(await recent.json()).toMatchObject({ status: 'recent', retry_in_min: 5 });
+    expect((await handleRefresh(post(), env, make([{ started_at: '2026-10-18T09:40:00Z', finished_at: '2026-10-18T09:44:00Z' }]).f, NOW)).status).toBe(202);
+  });
+});

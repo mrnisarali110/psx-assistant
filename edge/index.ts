@@ -150,7 +150,7 @@ export async function handleStatus(req: Request, env: Env, fetchImpl: typeof fet
 // ran minutes ago, so GitHub's delayed cron, kept as a fallback, never doubles the work.
 // Crons (UTC) are in wrangler.jsonc: "15,45 4-11 * * 1-5" (market ticks) and "0 16 * * 1-5" (21:00 PKT night).
 // ---------------------------------------------------------------------------
-export type CronJob = 'market' | 'night';
+export type CronJob = 'market' | 'night' | 'refresh';
 
 /** Which worker job a tick should start: market only while PSX trades (plus 20 min after the close for closing prices). */
 export function jobForTick(now: Date, cron: string): CronJob | null {
@@ -182,6 +182,32 @@ export async function dispatchJob(env: Env, job: CronJob, fetchImpl: typeof fetc
   return { ok: r.status === 204, status: r.status };
 }
 
+/** Minimum gap between two manual refreshes (the full run takes a few minutes and spends free AI quota). */
+export const REFRESH_GAP_MIN = 10;
+
+/**
+ * POST /api/refresh: a signed-in user starts a full refresh (PSX prices and screen, company pages, filings read by the
+ * AI, AI suggestions, blue-chip recheck) right now, by starting the GitHub worker job "refresh". At most one every
+ * REFRESH_GAP_MIN minutes: a run already going is reported, not started twice. The last run is read from worker_runs
+ * with the caller's own session (signed-in users may read it).
+ */
+export async function handleRefresh(req: Request, env: Env, fetchImpl: typeof fetch = fetch, now = new Date()): Promise<Response> {
+  if (req.method !== 'POST') return json({ error: 'Use POST' }, 405);
+  if (!(await userFor(req, env, fetchImpl))) return json({ error: 'Please sign in again.' }, 401);
+  if (!env.GITHUB_DISPATCH_TOKEN) {
+    return json({ status: 'not_configured', error: 'Refresh needs the GITHUB_DISPATCH_TOKEN secret on the Worker (see README → Schedule).' }, 503);
+  }
+  const r = await fetchImpl(`${env.SUPABASE_URL}/rest/v1/worker_runs?select=started_at,finished_at,ok&job=eq.refresh&order=started_at.desc&limit=1`, {
+    headers: { apikey: env.SUPABASE_KEY, Authorization: req.headers.get('Authorization') ?? '' },
+  });
+  const last = r.ok ? ((await r.json()) as { started_at: string; finished_at: string | null }[])[0] : undefined;
+  const age = last ? (now.getTime() - Date.parse(last.started_at)) / 60000 : Infinity;
+  if (last && !last.finished_at && age < 30) return json({ status: 'running', started_at: last.started_at });
+  if (age < REFRESH_GAP_MIN) return json({ status: 'recent', started_at: last!.started_at, retry_in_min: Math.ceil(REFRESH_GAP_MIN - age) }, 429);
+  const d = await dispatchJob(env, 'refresh', fetchImpl);
+  return d.ok ? json({ status: 'started', requested_at: now.toISOString() }, 202) : json({ status: 'failed', error: `GitHub said HTTP ${d.status}` }, 502);
+}
+
 export async function handleTick(env: Env, scheduledTime: number, cron: string, fetchImpl: typeof fetch = fetch) {
   const job = jobForTick(new Date(scheduledTime), cron);
   if (!job) return null;
@@ -193,6 +219,7 @@ export default {
     const url = new URL(req.url);
     if (url.pathname === '/api/import') return handleImport(req, env);
     if (url.pathname === '/api/ai-status') return handleStatus(req, env);
+    if (url.pathname === '/api/refresh') return handleRefresh(req, env);
     if (url.pathname.startsWith('/api/')) return json({ error: 'Not found' }, 404);
     return env.ASSETS.fetch(req);
   },

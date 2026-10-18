@@ -96,7 +96,7 @@ export function Portfolio(props: ScreenProps) {
                 </div>
               </Empty>
             ) : (
-              <ul className="space-y-2">
+              <ul className="space-y-2 lg:grid lg:grid-cols-2 lg:gap-3 lg:space-y-0">
                 {view.rows.map((r) => (
                   <HoldingRow key={r.holding.id ?? r.holding.symbol} row={r} call={acts.callFor(r)} bc={data.bluechip[r.holding.symbol]} actions={{
                     onOpen: () => acts.open(r.holding.symbol), onMenu: () => acts.menu(r.holding.symbol),
@@ -145,7 +145,7 @@ function Watchlist({ data, source, reload, onOpen, onMenu }: ScreenProps & { onO
   }
   return (
     <Section title="Watchlist">
-      <ul className="space-y-2">
+      <ul className="space-y-2 lg:grid lg:grid-cols-2 lg:gap-3 lg:space-y-0">
         {data.watchlist.map((w) => <WatchRow key={w.id ?? w.symbol} symbol={w.symbol} p={data.prices[w.symbol]} bc={data.bluechip[w.symbol]} onOpen={() => onOpen(w.symbol)} onMenu={() => onMenu(w.symbol)} />)}
       </ul>
       <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); add(); }}>

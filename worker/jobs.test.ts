@@ -221,6 +221,20 @@ describe('night job', () => {
   });
 });
 
+describe('refresh job (the Refresh latest button)', () => {
+  it('gathers everything like the night run, makes fresh AI suggestions, rechecks your blue chips, and sends nothing', async () => {
+    const store = new MemoryStore([owner()], () => MON_1230);
+    const n = new ConsoleNotifier(quiet);
+    const r = await runJob('refresh', deps(store, n, MON_1230, { ai: fakeAi(), fetchPdf: async () => new Uint8Array([1]), fetchSnapshot: async (s: string[]) => snap(-2.5, AS_OF, s.length ? s : undefined) }));
+    expect(r.ok).toBe(true);
+    expect(store.insights).toHaveLength(1); // fresh AI suggestions, even if one was made minutes ago
+    expect(r.ai.picks).toBe(2); // Discover picks too
+    const mine = SEED_HOLDINGS.map((h) => h.symbol);
+    expect(mine.every((s) => store.bcHistory.some((h) => h.symbol === s && h.trigger === 'manual'))).toBe(true);
+    expect(n.sent).toEqual([]); // a dip day, buying chances: still no push from a manual refresh
+  });
+});
+
 describe('public logs', () => {
   it('never name your stocks in errors (the repo logs are public)', () => {
     const e = publicErrors(['SYS: GET https://dps.psx.com.pk/company/SYS failed: HTTP 503', 'MEBL: no price on company page', 'indices: GET / failed: HTTP 500'], ['SYS', 'MEBL']);

@@ -23,7 +23,9 @@ import { FetchError, isUsable, toPrice, toScreenRows, type Snapshot } from './fe
 import type { Notifier } from './notify.ts';
 import type { Store, UserCtx } from './store.ts';
 
-export type JobName = 'market' | 'night' | 'test';
+/** refresh: the owner's "Refresh latest" button: everything the night job gathers, plus fresh AI suggestions and a
+ *  blue-chip recheck of your own stocks, right now; it sends no notifications. */
+export type JobName = 'market' | 'night' | 'test' | 'refresh';
 
 export interface JobDeps {
   store: Store;
@@ -43,7 +45,7 @@ export interface RunReport {
 }
 
 /** A second start within this many minutes of a successful run is a duplicate tick (Cloudflare's cron and GitHub's late cron). */
-export const REPEAT_GUARD_MIN: Partial<Record<JobName, number>> = { market: 20, night: 360 };
+export const REPEAT_GUARD_MIN: Partial<Record<JobName, number>> = { market: 20, night: 360, refresh: 5 };
 
 const rules = DEFAULT_RULES;
 const fmt0 = (v: number) => Math.round(v).toLocaleString('en-PK');
@@ -87,7 +89,8 @@ export async function runJob(job: JobName, deps: JobDeps): Promise<RunReport> {
     let snap = await deps.fetchSnapshot(userSymbols);
     let screen = toScreenRows(snap.screener);
     let readSymbols = userSymbols;
-    if (job === 'night' && screen.length) {
+    const deep = job === 'night' || job === 'refresh'; // the full data pass
+    if (deep && screen.length) {
       // Also follow the top dividend payers, so Discover's dividend data fills up over time.
       const extra = dividendLeaders(screen, [], today).map((d) => d.symbol).filter((s) => !userSymbols.includes(s));
       if (extra.length) {
@@ -140,20 +143,20 @@ export async function runJob(job: JobName, deps: JobDeps): Promise<RunReport> {
     let newFilings = new Set<string>();
     // ---- AI reads filings (summaries + dividends) ---------------------
     if (deps.ai?.available && deps.fetchPdf) {
-      newFilings = await readFilings(readSymbols, today, job === 'night' ? rules.ai.announcements_per_night_run : rules.ai.announcements_per_market_run, deps, report);
+      newFilings = await readFilings(readSymbols, today, deep ? rules.ai.announcements_per_night_run : rules.ai.announcements_per_market_run, deps, report);
     }
     const news = await store.recentAnnouncements(userSymbols, addDays(today, -14)).catch(() => [] as Announcement[]);
     const dividends = await store.dividends(null, addDays(today, -1100)).catch(() => [] as DividendEvent[]);
     const earnings = await store.earnings(userSymbols, addDays(today, -1100)).catch(() => [] as QuarterEarnings[]);
 
     // ---- Discover picks (nightly, market-wide) ------------------------
-    if (job === 'night' && deps.ai?.available && screen.length) await refreshPicks(screen, dividends, today, deps, report);
+    if (deep && deps.ai?.available && screen.length) await refreshPicks(screen, dividends, today, deps, report);
 
     // ---- Blue-chip recheck (nightly; each company only when due) ------
-    if (job === 'night' && usable && screen.length) {
+    if (deep && usable && screen.length) {
       try {
         const bcDivs = await store.dividends(null, addDays(today, -365 * (rules.bluechip.dividend_years_window + 1))).catch(() => dividends);
-        const bc = await runBluechip({ today, screen, previousScreen, userSymbols, newFilingSymbols: newFilings, dividends: bcDivs }, { store, fetchSnapshot: deps.fetchSnapshot, log });
+        const bc = await runBluechip({ today, screen, previousScreen, userSymbols, newFilingSymbols: newFilings, dividends: bcDivs, force: job === 'refresh' ? new Set(userSymbols) : undefined }, { store, fetchSnapshot: deps.fetchSnapshot, log });
         log(`bluechip: checked ${bc.checked}, pages ${bc.pages}`);
       } catch (e) {
         report.errors.push(`bluechip: ${errMsg(e)}`);
@@ -271,13 +274,14 @@ async function processUser(u: UserCtx, c: RunCtx) {
   const view = buildPortfolio(u.holdings, c.prices, u.settings, rules, screenSectors(c.screen), { today: c.today, sectorPe: sectorPeMap(c.screen), dividends: c.dividends, earnings: c.earnings });
   const mine = new Set([...u.holdings.map((h) => h.symbol), ...u.watchlist.map((w) => w.symbol)]);
   const night = c.job === 'night';
+  const refresh = c.job === 'refresh';
   const cands: AlertCandidate[] = [];
 
   // ---- AI second opinion: every few hours in market, always before close and at night ----
   let insight: Insight | null = null;
-  if (c.deps.ai?.available && u.settings.ai_enabled && c.idx && c.aiBudget.left > 0 && (night || c.tradedToday)) {
+  if (c.deps.ai?.available && u.settings.ai_enabled && c.idx && c.aiBudget.left > 0 && (night || refresh || c.tradedToday)) {
     const last = await store.latestInsightAt(u.id).catch(() => null);
-    const due = night || c.preclose || !last || c.now.getTime() - Date.parse(last) >= rules.ai.insight_every_minutes * 60000;
+    const due = night || refresh || c.preclose || !last || c.now.getTime() - Date.parse(last) >= rules.ai.insight_every_minutes * 60000;
     if (due) {
       c.aiBudget.left--;
       try {
@@ -314,6 +318,7 @@ async function processUser(u: UserCtx, c: RunCtx) {
       .catch((e) => c.report.errors.push(`portfolio day: ${errMsg(e)}`));
   }
 
+  if (refresh) return; // a manual refresh updates the data and suggestions; it never pushes alerts
   const fresh = cands.filter((x, i) => !sentKeys.has(x.dedupe_key) && cands.findIndex((y) => y.dedupe_key === x.dedupe_key) === i);
   const todays = recent.filter((r) => pktDate(new Date(r.sent_at)) === c.today && r.batch_id && r.channel !== 'none');
   const digestBatches = new Set(todays.filter((r) => r.kind === 'night_digest').map((r) => r.batch_id));

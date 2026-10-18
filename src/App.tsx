@@ -129,7 +129,7 @@ export default function App() {
   const props = data ? { data, source, reload, go } : null;
   return (
     <ToastProvider>
-      <div ref={numberFade} className="mx-auto flex min-h-dvh max-w-md flex-col">
+      <div ref={numberFade} className="mx-auto flex min-h-dvh max-w-md flex-col lg:max-w-none lg:pl-60">
         {demo && (
           <div className="safe-top bg-amber-100 px-4 py-2 text-center text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200">
             Demo with your seed portfolio and PSX prices from Oct 5. <button className="cursor-pointer font-semibold underline" onClick={exitDemo}>Sign in</button>
@@ -140,7 +140,7 @@ export default function App() {
             <Icon name="refresh" className="h-4 w-4 text-teal-600" />
           </span>
         </div>
-        <main key={route} className={`stagger flex-1 space-y-4 px-4 pb-24 ${demo ? 'pt-3' : 'safe-top pt-3'}`}>
+        <main key={route} className={`stagger flex-1 space-y-4 px-4 pb-24 lg:mx-auto lg:w-full lg:px-8 lg:pt-8 lg:pb-12 ${DESKTOP[route]} ${demo ? 'pt-3' : 'safe-top pt-3'}`}>
           {error && !data && (
             <div className="space-y-3 pt-10 text-center">
               <p className="text-sm text-rose-700 dark:text-rose-400">Couldn't load your data: {error}</p>
@@ -155,6 +155,7 @@ export default function App() {
           {props && route === 'profile' && <Profile {...props} onExitDemo={exitDemo} />}
         </main>
         <TabBar route={route} go={go} unread={data ? countNew(data) : 0} />
+        <SideNav route={route} go={go} unread={data ? countNew(data) : 0} />
         {splash && <Splash leaving={!!data || !!error} onGone={hideSplash} />}
       </div>
     </ToastProvider>
@@ -186,9 +187,45 @@ const TABS: { route: Route; label: string; icon: IconName }[] = [
   { route: 'profile', label: 'Profile', icon: 'user' },
 ];
 
+/**
+ * Desktop (1024px and up): a page, not a stretched phone. Home and Profile flow their cards into two columns
+ * (each card stays whole); the list screens get a wider page whose lists form a grid (see each screen).
+ */
+const DESKTOP: Record<Route, string> = {
+  home: 'lg:max-w-6xl lg:block lg:columns-2 lg:gap-6 lg:space-y-0 lg:[&>*]:mb-5 lg:[&>*]:break-inside-avoid',
+  profile: 'lg:max-w-6xl lg:block lg:columns-2 lg:gap-6 lg:space-y-0 lg:[&>*]:mb-5 lg:[&>*]:break-inside-avoid',
+  portfolio: 'lg:max-w-6xl',
+  discover: 'lg:max-w-6xl',
+  news: 'lg:max-w-5xl',
+};
+
+/** The desktop navigation: the same five places as the phone's tab bar, as a fixed left sidebar. */
+function SideNav({ route, go, unread }: { route: Route; go: (r: Route) => void; unread: number }) {
+  return (
+    <nav aria-label="Main" className="fixed inset-y-0 left-0 z-30 hidden w-60 flex-col gap-1 border-r border-slate-200/80 bg-white/80 px-3 py-6 backdrop-blur-xl lg:flex dark:border-slate-800 dark:bg-black/70">
+      <div className="mb-6 flex items-center gap-2.5 px-3">
+        <img src="/favicon.svg" alt="" className="h-8 w-8 rounded-lg" />
+        <span className="text-base font-bold tracking-tight">PSX Assist</span>
+      </div>
+      {TABS.map((t) => {
+        const active = route === t.route;
+        return (
+          <button key={t.route} type="button" onClick={() => go(t.route)} aria-current={active ? 'page' : undefined}
+            className={`press relative flex min-h-11 cursor-pointer items-center gap-3 rounded-xl px-3 text-sm font-semibold transition-colors ${active ? 'bg-teal-50 text-teal-800 dark:bg-teal-950/60 dark:text-teal-200' : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800/70'}`}>
+            <Icon name={t.icon} className={`h-5 w-5 ${active ? 'stroke-[2.4]' : ''}`} />
+            {t.label}
+            {t.route === 'news' && unread > 0 && !active && <span className="ml-auto h-2 w-2 rounded-full bg-rose-500" aria-label={`${unread} new`} />}
+          </button>
+        );
+      })}
+      <p className="mt-auto px-3 text-[11px] leading-snug text-slate-400 dark:text-slate-500">Suggestions only, not licensed financial advice.</p>
+    </nav>
+  );
+}
+
 function TabBar({ route, go, unread }: { route: Route; go: (r: Route) => void; unread: number }) {
   return (
-    <nav className="safe-bottom fixed inset-x-0 bottom-0 z-30 border-t border-slate-200/80 bg-white/90 backdrop-blur-xl dark:border-slate-800 dark:bg-black/85">
+    <nav className="safe-bottom fixed inset-x-0 bottom-0 z-30 border-t lg:hidden border-slate-200/80 bg-white/90 backdrop-blur-xl dark:border-slate-800 dark:bg-black/85">
       <ul className="relative mx-auto flex max-w-md">
         <li aria-hidden="true" className="slide-indicator pointer-events-none absolute top-0 left-0 flex w-1/5 justify-center"
           style={{ transform: `translateX(${Math.max(0, TABS.findIndex((t) => t.route === route)) * 100}%)` }}>
