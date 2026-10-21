@@ -323,7 +323,9 @@ export class Fetcher {
         });
         this.lastCall = Date.now();
       } catch (e) {
-        lastErr = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+        // Node's "fetch failed" hides the real reason in `cause` (a reset, a timeout, DNS): keep its code in the log.
+        const cause = (e as { cause?: { code?: string; message?: string } })?.cause;
+        lastErr = e instanceof Error ? `${e.name}: ${e.message}${cause?.code ? ` (${cause.code})` : cause?.message ? ` (${cause.message})` : ''}` : String(e);
         continue;
       }
       if (resp.status === 200) return await resp.text();

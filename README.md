@@ -94,8 +94,10 @@ Cloudflare Worker carries the schedule (`triggers.crons` in `wrangler.jsonc`, UT
 through the API (`workflow_dispatch`). That needs one secret on the Worker: a fine-grained GitHub token for this repo
 with **Actions: Read and write** (github.com → Settings → Developer settings → Fine-grained tokens), stored with
 `npx wrangler secret put GITHUB_DISPATCH_TOKEN`. Tokens expire (a year at most): make a new one before then. GitHub's
-cron stays in `worker.yml` as a fallback; a job that finished fine within the last 20 minutes (night: 6 hours) skips
-a duplicate tick, so the two never double up. Market ticks start the job only while PSX trades, plus 20 minutes
+cron in `worker.yml` now only backs up the night digest (it ran market checks hours late); a job that finished fine
+within the last 20 minutes (night: 6 hours) skips a duplicate tick. **PSX unreadable:** the worker retries the whole
+read once after `data.retry_wait_seconds` (60); you are told "PSX data unavailable" only when two checks in a row
+fail while PSX is trading (one-off network blips between GitHub and PSX happen a few times a week). Market ticks start the job only while PSX trades, plus 20 minutes
 after the close for closing prices. The job map lives in `worker/run.ts` (`CRON_TO_JOB`). PSX hours are
 in `shared/rules.json` ([source](https://www.psx.com.pk/psx/exchange/general/trading-hours); Ramadan hours differ).
 Nothing repeats: every alert has a dedupe key; buying chances repeat at most weekly per stock; quiet-hours alerts wait.

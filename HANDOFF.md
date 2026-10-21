@@ -71,9 +71,12 @@ rule and the data sources in full; this file is about state, open items and how 
 
 ## Pending on Claude's side
 
-- **Confirm the Cloudflare schedule end to end on Monday 2026-10-19:** market ticks from 09:45 PKT should appear
-  in Actions as `workflow_dispatch` runs (`gh run list --workflow worker.yml`); the 21:00 night run should log a
-  `market:` line and send the digest.
+- **Cloudflare schedule: confirmed 2026-10-19..21** (every market tick 09:45–15:45 PKT and the 21:00 night run arrive
+  as `workflow_dispatch`). GitHub's market crons were removed from `worker.yml`; only the night fallback remains.
+- **"PSX data unavailable" (fixed 2026-10-21):** three runs in three days had every PSX request fail with "fetch
+  failed" (a network blip; the next run worked). Now the read is retried once after 60 s, the error log carries the
+  network code (`cause.code`), and the alert needs two failed checks in a row during trading hours. If it still
+  appears, read the code in the run log before assuming PSX blocked us.
 - **Phone check** of the new Market card and Market page on the owner's iPhone (checked at 375 px in the desktop
   browser, demo and live desktop only). After a deploy the PWA may need one reopen to pick up the new version.
 - **Data that only builds over time:** the 200-day average starts after 120 stored closes (9 so far); the PKR 30-day

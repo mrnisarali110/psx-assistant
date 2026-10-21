@@ -45,6 +45,8 @@ export interface JobDeps {
   now?: () => Date;
   log?: (m: string) => void;
   testEmail?: string;
+  /** Waits between a failed PSX read and the retry (tests pass a no-op). */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 export interface RunReport {
@@ -65,7 +67,7 @@ const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 interface RunCtx {
   job: JobName; deps: JobDeps; now: Date; today: string; prices: PriceMap; idx: IndexSnapshot | null;
-  usable: boolean; tradedToday: boolean; preclose: boolean; news: Announcement[]; dividends: DividendEvent[];
+  usable: boolean; outage: boolean; tradedToday: boolean; preclose: boolean; news: Announcement[]; dividends: DividendEvent[];
   screen: ScreenRow[]; report: RunReport; aiBudget: { left: number }; earnings: QuarterEarnings[]; bc: Record<string, string>;
   market: MarketNews;
 }
@@ -83,8 +85,8 @@ export async function runJob(job: JobName, deps: JobDeps): Promise<RunReport> {
   const { store } = deps;
   const report: RunReport = { ok: true, errors: [], notified: 0, suppressed: 0, users: 0, ai: { announcements_read: 0, dividends: 0, insights: 0, picks: 0, suggestions_dropped: 0 } };
   const guard = REPEAT_GUARD_MIN[job];
+  const last = await store.lastRun(job).catch(() => null);
   if (guard) {
-    const last = await store.lastRun(job).catch(() => null);
     const age = last ? now.getTime() - Date.parse(last.started_at) : NaN;
     if (last?.ok && age >= 0 && age < guard * 60_000) {
       log(`job=${job} already ran at ${last.started_at}: duplicate tick, nothing to do`);
@@ -104,6 +106,13 @@ export async function runJob(job: JobName, deps: JobDeps): Promise<RunReport> {
 
     // ---- refresh market data once for everyone ----------------------
     let snap = await deps.fetchSnapshot(userSymbols);
+    // A short network blip between GitHub's runners and PSX fails every request at once; one retry a minute later
+    // almost always works (seen 2026-10-19..21: the next run was fine each time).
+    if (!isUsable(snap)) {
+      log(`PSX unreadable on the first try; trying again in ${rules.data.retry_wait_seconds}s`);
+      await (deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms))))(rules.data.retry_wait_seconds * 1000);
+      snap = await deps.fetchSnapshot(userSymbols);
+    }
     let screen = toScreenRows(snap.screener);
     let readSymbols = userSymbols;
     const deep = job === 'night' || job === 'refresh'; // the full data pass
@@ -185,7 +194,9 @@ export async function runJob(job: JobName, deps: JobDeps): Promise<RunReport> {
 
     const bcMap = Object.fromEntries((await store.bluechipStates().catch(() => [])).map((b) => [b.symbol, b.status]));
     log(`job=${job} users=${users.length} symbols=${userSymbols.length}+${readSymbols.length - userSymbols.length} usable=${usable} tradedToday=${tradedToday} preclose=${preclose} aiRead=${report.ai.announcements_read}`);
-    const ctx: RunCtx = { job, deps, now, today, prices, idx, usable, tradedToday, preclose, news, dividends, screen, report, aiBudget: { left: rules.ai.max_users_per_run }, earnings, bc: bcMap, market };
+    // Tell people only when PSX stays unreadable: this run and the one before failed, while PSX is trading.
+    const outage = !usable && last?.ok === false && isMarketOpen(now, rules.market_hours_pkt);
+    const ctx: RunCtx = { job, deps, now, today, prices, idx, usable, outage, tradedToday, preclose, news, dividends, screen, report, aiBudget: { left: rules.ai.max_users_per_run }, earnings, bc: bcMap, market };
     for (const u of users) {
       try {
         await processUser(u, ctx);
@@ -383,10 +394,10 @@ async function processUser(u: UserCtx, c: RunCtx) {
     }
   }
 
-  if (!c.usable) {
+  if (c.outage) {
     cands.push({
       kind: 'data_unavailable', symbol: null, level: 'market', url: '/#/home', dedupe_key: `nodata:${c.today}`,
-      title: 'PSX data unavailable', message: "Couldn't read PSX prices. Check live prices in your broker app; the app shows the last good data.",
+      title: 'PSX data unavailable', message: "Couldn't read PSX prices for the last two checks. Check live prices in your broker app; the app shows the last good data.",
     });
   }
   if (c.tradedToday && !night) {

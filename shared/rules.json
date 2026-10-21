@@ -52,7 +52,8 @@
     }
   },
   "data": {
-    "stale_minutes": 30
+    "stale_minutes": 30,
+    "retry_wait_seconds": 60
   },
   "market_hours_pkt": {
     "source": "https://www.psx.com.pk/psx/exchange/general/trading-hours (checked 2026-10-06; Ramadan hours differ)",

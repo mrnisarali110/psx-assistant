@@ -61,7 +61,7 @@ function fakeAi(fail = false, oldNotice = false): LlmRouter & { calls: string[] 
 }
 
 const deps = (store: MemoryStore, n: ConsoleNotifier, now: Date, extra: Record<string, unknown> = {}) =>
-  ({ store, notifier: n, fetchSnapshot: async () => snap(), now: () => now, log: quiet, ...extra });
+  ({ store, notifier: n, fetchSnapshot: async () => snap(), now: () => now, log: quiet, sleep: async () => {}, ...extra });
 
 describe('market job', () => {
   it('writes prices, index, screen and filings, and a heartbeat row', async () => {
@@ -133,6 +133,21 @@ describe('market job', () => {
     await runJob('market', deps(store, n, new Date('2026-10-05T08:30:00Z'), { fetchSnapshot: broken }));
     expect(n.sent.filter((s) => s.n.alerts.some((a) => a.kind === 'data_unavailable'))).toHaveLength(1);
     expect(store.runs.every((x) => x.ok === false)).toBe(true);
+  });
+
+  it('a one-off network blip sends nothing: the read is retried, and only two failed checks in a row alert', async () => {
+    const store = new MemoryStore([owner(false)]);
+    const n = new ConsoleNotifier(quiet);
+    let calls = 0;
+    const blip = async (s: string[]) => (++calls === 1 ? broken() : snap(-1.36, AS_OF, s.length ? s : undefined));
+    const waits: number[] = [];
+    const r = await runJob('market', deps(store, n, MON_1230, { fetchSnapshot: blip, sleep: async (ms: number) => { waits.push(ms); } }));
+    expect(waits).toEqual([60_000]);
+    expect(r.ok).toBe(true); // the retry read PSX fine
+    const store2 = new MemoryStore([owner(false)]);
+    const n2 = new ConsoleNotifier(quiet);
+    await runJob('market', deps(store2, n2, MON_1230, { fetchSnapshot: broken }));
+    expect(n2.sent.some((s) => s.n.alerts.some((a) => a.kind === 'data_unavailable'))).toBe(false); // first failed check: quiet
   });
 
   it('stays quiet on a day PSX did not trade', async () => {

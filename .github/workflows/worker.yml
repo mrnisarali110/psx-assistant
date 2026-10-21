@@ -6,9 +6,8 @@ name: PSX worker
 # for 60 days; the night run makes a keep-alive commit when needed.
 on:
   schedule:
-    - cron: '45 4-10 * * 1-5'   # 09:45 ... 15:45 PKT
-    - cron: '15 5-10 * * 1-5'   # 10:15 ... 15:15 PKT (before close Mon-Thu)
-    - cron: '15,45 11 * * 5'    # Friday 16:15 (before close) and 16:45 PKT
+    # Market checks run on the Cloudflare Worker's schedule (proven 2026-10-19..21); GitHub's own cron ran them hours
+    # late, so only the night digest keeps a GitHub fallback (the repeat guard skips it when Cloudflare already ran).
     - cron: '0 16 * * 1-5'      # 21:00 PKT night digest
   workflow_dispatch:
     inputs:
