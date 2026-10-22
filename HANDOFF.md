@@ -24,9 +24,10 @@ Design `docs/superpowers/specs/2026-10-23-review-fixes-and-redesign-design.md`, 
   `announcements.ai_metrics`, `settings.inflation_pct/onboarded`. History (stock charts, sparklines, 1D) builds from
   2026-10-23; PSX's timeseries stays unused (bot-checked). Dev check of charts: `?demo=1&sample=1` (sample series,
   plain demo shows the empty states).
-- **Open for the owner:** custom domain (skipped for now); whether to tighten `undervalued.sector_max_iqr_ratio`
-  (MUREB still shows ~61% below a food median of 16.6 because it is far below all 6 peers); VERIFY the re-based
-  `compass.spread_shares_above` 2 and `growth.inflation_pct` 10.
+- **Sector comparison:** owner set `undervalued.sector_max_iqr_ratio` to 0.4 (commit ab9cd58, Worker e951ed44), so mixed
+  sectors (food, autos on the Oct 5 data) are not compared; banks, cement and pharma still are.
+- **Open for the owner:** custom domain (skipped for now); VERIFY the re-based `compass.spread_shares_above` 2 and
+  `growth.inflation_pct` 10.
 
 ## Where everything is
 
