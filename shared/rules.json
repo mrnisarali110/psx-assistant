@@ -33,6 +33,10 @@
     "sector_max_iqr_ratio": 1,
     "sector_note": "Sector P/E = median of peers with a trusted P/E; skipped when fewer than sector_min_peers or when the interquartile range is wider than sector_max_iqr_ratio x the median (sector too mixed to compare)."
   },
+  "valuation": {
+    "eps_max_age_months": 15,
+    "eps_max_age_note": "A filing EPS basis (consolidated, unconsolidated, not stated) whose newest full-year figure ends more than this many months ago is skipped for the next basis, then PSX's screener P/E. 15 = a year plus a margin while the next results are published (owner review 2026-10-23)."
+  },
   "dividends": {
     "min_yield_pct": 6,
     "candidates": 12,
@@ -56,11 +60,15 @@
       "max_days_after_filing": 365
     },
     "eps_backfill_per_night": 4,
-    "eps_backfill_note": "Old results filings (latest annual + up to 3 quarters) read per night for held and watched stocks with no stored EPS."
+    "eps_backfill_note": "Old results filings (latest annual + up to 3 quarters) read per night for held and watched stocks with no stored EPS.",
+    "results_fact_days": 400,
+    "results_fact_days_note": "A results filing older than this no longer counts as a company's latest results in the AI facts."
   },
   "data": {
     "stale_minutes": 30,
-    "retry_wait_seconds": 60
+    "retry_wait_seconds": 60,
+    "ticks_keep_days": 10,
+    "ticks_keep_days_note": "Intraday portfolio values kept for Home's 1D chart."
   },
   "market_hours_pkt": {
     "source": "https://www.psx.com.pk/psx/exchange/general/trading-hours (checked 2026-10-06; Ramadan hours differ)",

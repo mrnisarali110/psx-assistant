@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  aiTextMatches, dividendCut, impliedEps, isSpecial, missingNum, payoutFrequency, payoutRatio, peOutlier, qualityChips, regularDividend, todayState,
+  aiTextMatches, dividendCut, impliedEps, isSpecial, missingNum, oneOffYield, payoutFrequency, payoutOf, payoutRatio, peOutlier, qualityChips, regularDividend, todayState,
 } from './quality.ts';
-import { DEFAULT_RULES, type DividendEvent, type Rules } from './types.ts';
+import { DEFAULT_RULES, type DividendEvent, type QuarterEarnings, type Rules } from './types.ts';
 
 const TODAY = '2026-10-15';
 const ev = (id: string, symbol: string, announced_on: string, dps: number | null, dividend_type: DividendEvent['dividend_type'] = 'interim'): DividendEvent =>
@@ -67,6 +67,20 @@ describe('implied EPS and payout ratio', () => {
     expect(payoutRatio(10, 10)).toEqual({ pct: 100, unsustainable: false });
     expect(payoutRatio(1, 3)).toEqual({ pct: 33.3, unsustainable: false }); // 33.333.. to 1 dp
   });
+  it('one payout figure for every screen: the last 12 months of filings first, then PSX yield x price; EPS from peFor when given', () => {
+    const filings = [ev('i1', 'F', '2026-08-01', 3), ev('i2', 'F', '2026-02-01', 3)];
+    // Filings: regular 6 a share against earnings 100 / 10 = 10, whatever PSX's yield says.
+    expect(payoutOf('F', filings, TODAY, { price: 100, psxYieldPct: 12, pe: 10 })).toEqual({ pct: 60, unsustainable: false, dps: 6, from: 'filings', suspect: false });
+    // No filings: PSX's 16% yield x Rs 100 = Rs 16 against 10 is 160%, over the suspect line with nothing to explain it.
+    expect(payoutOf('F', [], TODAY, { price: 100, psxYieldPct: 16, pe: 10 })).toEqual({ pct: 160, unsustainable: true, dps: 16, from: 'psx', suspect: true });
+    // The filing-based EPS (valuation.peFor) wins over price / P/E; null there (a loss) means no payout, never price / P/E.
+    expect(payoutOf('F', filings, TODAY, { price: 100, psxYieldPct: 12, pe: 10, eps: 4 }).pct).toBe(150);
+    expect(payoutOf('F', filings, TODAY, { price: 100, psxYieldPct: 12, pe: 10, eps: null }).pct).toBeNull();
+    // Nothing to go on.
+    expect(payoutOf('F', [], TODAY, { price: null, psxYieldPct: 12, pe: 10 })).toMatchObject({ pct: null, dps: null, from: null, suspect: false });
+    expect(payoutOf(null, filings, TODAY, { price: 100, psxYieldPct: 12, pe: 10 })).toMatchObject({ pct: 120, from: 'psx' }); // no company named: filings unused
+  });
+
   it('payout is null without a dps or without earnings; a dps of 0 is a real 0%', () => {
     expect(payoutRatio(null, 10)).toEqual({ pct: null, unsustainable: false });
     expect(payoutRatio(6, 0)).toEqual({ pct: null, unsustainable: false });
@@ -240,8 +254,21 @@ describe('quality chips', () => {
   });
   it('payout from PSX figures when there are no filings: yield 12% x P/E 10 = 120% of profit', () => {
     const chips = qualityChips({ pe: 10, price: 100, dividend_yield_pct: 12 }, [], TODAY);
-    expect(chips).toEqual([{ key: 'payout', label: 'Pays out 120% of profit', tone: 'amber' }]);
+    expect(chips).toEqual([{ key: 'payout', label: 'High payout — may not last', tone: 'amber' }]);
     expect(qualityChips({ pe: 10, price: 100, dividend_yield_pct: 9 }, [], TODAY)).toEqual([]); // 90%
+  });
+  it('payout over 90 caution', () => {
+    // 9.5% yield x P/E 10 = 95% of profit: over the 90% setting, under the 150% "suspect" line.
+    expect(qualityChips({ pe: 10, price: 100, dividend_yield_pct: 9.5 }, [], TODAY)).toEqual([{ key: 'payout', label: 'High payout — may not last', tone: 'amber' }]);
+    // Over 150% the figure itself is shown: it is more than the company earns.
+    expect(qualityChips({ pe: 10, price: 100, dividend_yield_pct: 16 }, [], TODAY)).toEqual([{ key: 'payout', label: 'Pays out 160% of profit', tone: 'amber' }]);
+    // The setting decides.
+    const rules: Rules = { ...DEFAULT_RULES, holding: { ...DEFAULT_RULES.holding, payout_warn_pct: 96 } };
+    expect(qualityChips({ pe: 10, price: 100, dividend_yield_pct: 9.5 }, [], TODAY, rules)).toEqual([]);
+    // The EPS shown (filing-based) is the one used: dps 9.5 / EPS 20 = 47.5%, no chip although PSX's P/E says 95%.
+    expect(qualityChips({ pe: 10, price: 100, dividend_yield_pct: 9.5, eps: 20 }, [], TODAY)).toEqual([]);
+    // A loss on the filing basis: no payout figure, a loss chip.
+    expect(qualityChips({ pe: 10, price: 100, dividend_yield_pct: 9.5, eps: -1, loss: true }, [], TODAY)).toEqual([{ key: 'loss', label: 'Loss-making', tone: 'red' }]);
   });
   it('filings beat PSX\'s yield for the payout, and a one-off in the last year gets a special chip', () => {
     // Regular 3 + 3 = 6 a share against earnings 100 / 10 = 10: 60%, so no payout chip even though PSX says 12% yield
@@ -272,6 +299,26 @@ describe('quality chips', () => {
     expect(qualityChips({ pe: 8, price: 100, dividend_yield_pct: 5, change_1y_pct: 10.4 }, [], TODAY)).toEqual([{ key: 'trend', label: '1y +10%', tone: 'green' }]);
     expect(qualityChips({ pe: 8, price: 100, dividend_yield_pct: 5, change_1y_pct: 0 }, [], TODAY)[0]).toMatchObject({ label: '1y 0%', tone: 'slate' });
     expect(qualityChips({ pe: 8, price: 100, dividend_yield_pct: 5 }, [], TODAY)).toEqual([]);
+  });
+});
+
+describe('one-off yield', () => {
+  const er = (id: string, symbol: string, period_end: string, period_months: number | null): QuarterEarnings =>
+    ({ id, symbol, period_end, profit_after_tax: 1e6, verified: true, eps: 1, eps_basis: 'consolidated', period_months });
+  it('one-off yield special', () => {
+    expect(oneOffYield('ABC', ABC, TODAY)).toBe(true); // c: a special inside the trailing year
+    expect(oneOffYield('ABC', ABC, '2027-07-01')).toBe(false); // a year on, the special has dropped out (no filings left in the window)
+    const regular = [ev('r1', 'R', '2026-08-01', 3), ev('r2', 'R', '2026-02-01', 3, 'final')];
+    expect(oneOffYield('R', regular, TODAY)).toBe(false);
+  });
+  it('latest full-year results declared no dividend: one-off; a dividend declared after the year end is not', () => {
+    const regular = [ev('r1', 'R', '2026-02-01', 3, 'interim'), ev('r2', 'R', '2025-09-01', 5, 'final')];
+    const yearEnd = er('res', 'R', '2026-06-30', 12);
+    expect(oneOffYield('R', regular, TODAY, [yearEnd])).toBe(true);
+    expect(oneOffYield('R', [...regular, ev('res', 'R', '2026-09-10', 4, 'final')], TODAY, [yearEnd])).toBe(false); // same filing
+    expect(oneOffYield('R', [...regular, ev('fin', 'R', '2026-09-12', 4, 'final')], TODAY, [yearEnd])).toBe(false); // own notice after the year end
+    // A quarter without a dividend says nothing: many companies pay once a year.
+    expect(oneOffYield('R', regular, TODAY, [er('q', 'R', '2026-09-30', 3)])).toBe(false);
   });
 });
 

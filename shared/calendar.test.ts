@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  buyByDate, dateSane, dateVerdict, datesIn, isTradingDay, nextTradingDay, parseLooseDate, tradingCalendar, weekAhead, workingDaysBefore,
+  bookClosureDate, buyByDate, dateSane, dateVerdict, datesIn, isTradingDay, nextTradingDay, parseLooseDate, tradingCalendar, weekAhead, workingDaysBefore,
 } from './calendar.ts';
 import { workingDaysBefore as oldWorkingDaysBefore } from './discover.ts';
 import { daysBetween } from './time.ts';
@@ -170,9 +170,9 @@ describe('this week', () => {
     ]);
     expect(events.map((e) => e.mine)).toEqual([true, true, false, true, false, true, true]);
     const by = (kind: string, symbol: string) => events.find((e) => e.kind === kind && e.symbol === symbol)!;
-    expect(by('buy_by', 'DCR')).toMatchObject({ title: 'Last day to buy for Rs 2/share', detail: 'Book closure Sat, Oct 17 to Thu, Oct 22', source_id: 'd-dcr' });
-    expect(by('book_closure', 'DCR')).toMatchObject({ title: 'Book closure starts (Rs 2/share)', detail: 'Buy by Thu, Oct 15' });
-    expect(by('book_closure', 'HUBC')).toMatchObject({ title: 'Book closure starts (Rs 7.5/share)', detail: 'Last day to buy was Wed, Oct 14' });
+    expect(by('buy_by', 'DCR')).toMatchObject({ title: 'Last day to buy for Rs 2/share', detail: 'Book closure Sat to Oct 22', source_id: 'd-dcr' });
+    expect(by('book_closure', 'DCR')).toMatchObject({ title: 'Book closure starts (Rs 2/share)', detail: 'Buy by today' });
+    expect(by('book_closure', 'HUBC')).toMatchObject({ title: 'Book closure starts (Rs 7.5/share)', detail: 'Last day to buy was yesterday' });
     expect(events.filter((e) => e.symbol === 'HUBC' && e.kind === 'buy_by')).toEqual([]);
     expect(by('board_meeting', 'UBL')).toMatchObject({ title: 'Board meeting', source_id: 'a-ubl2' }); // one row for the re-filed notice, the newer one
     expect(by('board_meeting', 'EFERT')).toMatchObject({ title: 'Board meeting', detail: expect.stringMatching(/^Notice of Board Meeting/) });
@@ -241,11 +241,35 @@ describe('this week', () => {
     const t3: Rules = { ...DEFAULT_RULES, dividends: { ...DEFAULT_RULES.dividends, buy_by_working_days: 3 } };
     const r = weekAhead({ ...base, rules: t3, dividends: [div('d', 'DCR', null, '2026-10-20', null, false)] });
     expect(r.events.filter((e) => e.symbol === 'DCR').map((e) => `${e.date} ${e.kind}`)).toEqual(['2026-10-15 buy_by', '2026-10-20 book_closure']); // Tue 20 -> Mon 19, Fri 16, Thu 15
-    expect(r.events[0]).toMatchObject({ title: 'Last day to buy for the dividend', detail: 'Book closure starts Tue, Oct 20 (unverified)' });
+    expect(r.events[0]).toMatchObject({ title: 'Last day to buy for the dividend', detail: 'Book closure starts Tue (unverified)' });
+  });
+
+  it('takes a dividend\'s book closure from its notice when the dividend row has none, as Expected does', () => {
+    const notice = ann('d-dcr-old', 'DCR', 'dividend', '2026-10-08', 'Cash dividend; book closure from October 17, 2026 to October 22, 2026');
+    const r = weekAhead({ ...base, dividends: [div('d-dcr-old', 'DCR', 1.5, null)], holdings: [], announcements: [notice] });
+    expect(r.events.map((e) => `${e.date} ${e.kind} ${e.symbol} ${e.title} ${e.source_id}`)).toEqual([
+      '2026-10-15 buy_by DCR Last day to buy for Rs 1.5/share d-dcr-old',
+      '2026-10-17 book_closure DCR Book closure starts (Rs 1.5/share) d-dcr-old', // one row: the notice's own book closure row is the same event
+    ]);
   });
 
   it('returns nothing for empty input', () => {
     expect(weekAhead({ today: TODAY, held: [], watched: [], dividends: [], announcements: [], holdings: [], cal })).toEqual({ events: [], more: 0 });
     expect(weekAhead({ ...base, held: [], watched: [] })).toEqual({ events: [], more: 0 });
+  });
+});
+
+describe('bookClosureDate', () => {
+  const ann = (title: string, figures?: { label: string; value: string }[], published_at = '2026-10-08'): Announcement =>
+    ({ id: 'a', symbol: 'DCR', kind: 'dividend', published_at, title, pdf_url: null, ai_figures: figures?.map((f) => ({ ...f, verified: true })) ?? null });
+  it('reads the start of book closure the way This week does: AI figures, then the title', () => {
+    expect(bookClosureDate(ann('Cash dividend; book closure from October 17, 2026 to October 22, 2026'))).toBe('2026-10-17');
+    expect(bookClosureDate(ann('Dividend declared', [{ label: 'Book closure dates', value: '17-10-2026 to 22-10-2026' }]))).toBe('2026-10-17');
+    // the earliest book closure date wins when a notice names the start and the end separately
+    expect(bookClosureDate(ann('Dividend declared', [{ label: 'Book closure to', value: '22-10-2026' }, { label: 'Book closure from', value: '17-10-2026' }]))).toBe('2026-10-17');
+    expect(bookClosureDate(ann('Dividend declared', [{ label: 'Payment date', value: 'October 30, 2026' }]))).toBeNull();
+    expect(bookClosureDate(ann('Board meeting on October 17, 2026'))).toBeNull();
+    expect(bookClosureDate(ann('Book closure from October 17, 2020'))).toBeNull(); // not plausible for a 2026 filing
+    expect(bookClosureDate(undefined)).toBeNull();
   });
 });

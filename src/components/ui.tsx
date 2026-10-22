@@ -4,7 +4,7 @@ import { Icon } from './Icon.tsx';
 import { Sheet } from './Sheet.tsx';
 
 export function Card({ children, className = '', onClick }: { children: ReactNode; className?: string; onClick?: () => void }) {
-  const base = `rounded-3xl bg-white p-4 ring-1 ring-slate-200/80 dark:bg-slate-900 dark:ring-slate-800 ${className}`;
+  const base = `rounded-card bg-surface p-4 ring-1 ring-line ${className}`;
   return onClick
     ? <button type="button" onClick={() => { haptic(); onClick(); }} className={`press block w-full cursor-pointer text-left ${base}`}>{children}</button>
     : <div className={base}>{children}</div>;
@@ -104,7 +104,7 @@ export function Segmented<T extends string>({ options, value, onChange, label }:
       )}
       {options.map((o) => (
         <button key={o.value} type="button" role="tab" aria-selected={value === o.value} onClick={() => { haptic(); onChange(o.value); }}
-          className={`press relative min-h-10 flex-1 cursor-pointer rounded-xl px-2 text-sm font-semibold ${value === o.value ? 'text-slate-900 dark:text-white' : 'text-slate-500 dark:text-slate-400'}`}>
+          className={`press relative min-h-11 flex-1 cursor-pointer rounded-xl px-2 text-sm font-semibold ${value === o.value ? 'text-slate-900 dark:text-white' : 'text-slate-500 dark:text-slate-400'}`}>
           {o.label}
         </button>
       ))}
@@ -143,7 +143,7 @@ export function Chips<T extends string>({ options, value, onChange, label }: {
 export function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
   return (
     <button type="button" role="switch" aria-checked={checked} aria-label={label} onClick={() => { haptic(); onChange(!checked); }}
-      className={`relative h-8 w-13 shrink-0 cursor-pointer rounded-full transition-colors ${checked ? 'bg-teal-600' : 'bg-slate-300 dark:bg-slate-700'}`}>
+      className={`relative h-8 w-13 shrink-0 cursor-pointer rounded-full transition-colors before:absolute before:-inset-x-1 before:-inset-y-1.5 before:content-[''] ${checked ? 'bg-teal-600' : 'bg-slate-300 dark:bg-slate-700'}`}>
       <span className={`absolute top-1 left-1 h-6 w-6 rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-5' : ''}`} />
     </button>
   );
@@ -162,10 +162,6 @@ export function Empty({ title, children, className = '' }: { title: string; chil
   );
 }
 
-export function Disclaimer() {
-  return <p className="px-1 text-xs text-slate-500 dark:text-slate-400">Suggestions only, not licensed financial advice. Check live prices in your broker app.</p>;
-}
-
 export function ErrorNote({ error }: { error: string | null }) {
   if (!error) return null;
   return <p role="alert" className="rounded-2xl bg-rose-50 p-3 text-sm text-rose-800 dark:bg-rose-950 dark:text-rose-300">{error}</p>;
@@ -180,7 +176,7 @@ export function Sparkline({ values, className = '' }: { values: number[]; classN
   const pts = values.map((v, i) => `${(i / (values.length - 1)) * w},${h - 2 - ((v - min) / span) * (h - 4)}`).join(' ');
   const up = values[values.length - 1] >= values[0];
   return (
-    <svg viewBox={`0 0 ${w} ${h}`} className={`h-9 w-28 ${up ? 'text-emerald-500' : 'text-rose-500'} ${className}`} aria-hidden="true">
+    <svg viewBox={`0 0 ${w} ${h}`} className={`h-9 w-28 ${up ? 'text-up' : 'text-down'} ${className}`} aria-hidden="true">
       <polyline points={pts} fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
     </svg>
   );
@@ -228,9 +224,9 @@ const CHIP: Record<ChipKind, { label: string; cls: string }> = {
   shariah: { label: 'Shariah', cls: 'bg-surface-2 text-ink' },
   exdiv: { label: 'Ex-dividend', cls: 'bg-surface-2 text-ink' },
   ai: { label: 'AI', cls: 'bg-violet-500/10 text-violet-700 dark:text-violet-300' },
-  caution: { label: 'Check', cls: 'bg-caution/10 text-caution' },
+  caution: { label: 'Check', cls: 'bg-caution/5 text-caution ring-1 ring-caution/30' },
   estimate: { label: 'Estimate', cls: 'bg-surface-2 text-muted' },
-  provisional: { label: 'Provisional', cls: 'bg-caution/10 text-caution' },
+  provisional: { label: 'Provisional', cls: 'bg-caution/5 text-caution ring-1 ring-caution/30' },
   neutral: { label: '', cls: 'bg-surface-2 text-muted' },
 };
 /** The fixed set of chips. Children override the label (e.g. a caution chip "High payout, may not last"). */
@@ -246,7 +242,7 @@ export function Chip({ kind, children, title }: { kind: ChipKind; children?: Rea
 }
 
 /** Sector colours for company marks: calm hues that never mean up / down / caution. */
-const SECTOR_HUES = ['#4f46e5', '#0284c7', '#7c3aed', '#0891b2', '#475569', '#9333ea', '#2563eb', '#0e7490', '#6d28d9', '#334155'];
+const SECTOR_HUES = ['#4f46e5', '#0369a1', '#7c3aed', '#155e75', '#475569', '#9333ea', '#2563eb', '#0e7490', '#6d28d9', '#334155']; // all >= 4.5:1 with white
 export function sectorColor(sector: string | null | undefined): string {
   if (!sector) return '#64748b';
   let h = 0;
@@ -278,8 +274,8 @@ export function InfoTip({ text, label = 'More information' }: { text: string; la
   return (
     <span ref={box} className="relative inline-flex align-middle" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
       <button type="button" aria-label={label} aria-describedby={open ? id : undefined} aria-expanded={open}
-        onClick={() => setOpen((v) => !v)} onFocus={() => setOpen(true)} onBlur={() => setOpen(false)}
-        className="inline-flex h-6 w-6 cursor-pointer items-center justify-center rounded-full text-muted hover:text-ink">
+        onClick={() => setOpen(true)} onFocus={() => setOpen(true)} onBlur={() => setOpen(false)}
+        className="relative inline-flex h-6 w-6 cursor-pointer items-center justify-center rounded-full text-muted after:absolute after:-inset-2.5 after:content-[''] hover:text-ink">
         <Icon name="info" className="h-4 w-4" />
       </button>
       {open && (

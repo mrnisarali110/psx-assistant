@@ -1,6 +1,6 @@
 /**
  * Allocation tab: where the money is. By sector (the donut, with any sector over your limit called out) and
- * per stock (one bar per holding against your position cap, biggest first). Tap a stock for its details;
+ * per stock (one bar per holding against your position cap, biggest first). Tap a stock for its page;
  * "Show more" opens the full sector breakdown. Colour is never the only cue: every bar has its number and
  * anything over a limit carries a label.
  */
@@ -13,7 +13,7 @@ import { blueChipShare } from './BcBadge.tsx';
 import { BreakdownSheet } from './Breakdown.tsx';
 import { Donut } from './Donut.tsx';
 import { Icon } from './Icon.tsx';
-import { Button, Card, Empty, Section, SymbolAvatar, Tag } from './ui.tsx';
+import { Button, Card, Chip, CompanyMark, Empty, Section } from './ui.tsx';
 
 export function AllocationTab({ view, maxPositionPct, onOpenStock, bc = {} }: { view: PortfolioView; maxPositionPct: number; onOpenStock: (symbol: string) => void; bc?: Record<string, BcState> }) {
   const blue = blueChipShare(view.rows, bc, view.total_value);
@@ -42,17 +42,17 @@ export function AllocationTab({ view, maxPositionPct, onOpenStock, bc = {} }: { 
     <div className="space-y-4 lg:grid lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:grid-rows-[auto_auto_1fr] lg:items-start lg:gap-6 lg:space-y-0">
       <Card>
         {slices.length > 0 ? (
-          <Donut slices={slices} total={view.total_value} caption={`${sectorCount} sector${sectorCount === 1 ? '' : 's'}`} />
+          <Donut slices={slices} total={view.total_value} limit={limit} caption={`${sectorCount} sector${sectorCount === 1 ? '' : 's'}`} />
         ) : (
-          <p className="text-sm text-slate-500 dark:text-slate-400">No prices yet. The split by sector appears after the next market check.</p>
+          <p className="text-14 text-muted">No prices yet. The split by sector appears after the next market check.</p>
         )}
         {overSectors.length > 0 && (
           <ul className="mt-3 space-y-1.5" aria-label={`Sectors over your ${limit}% limit`}>
             {overSectors.map((w) => (
-              <li key={w.sector} className="flex items-center gap-2 text-sm">
-                <Tag tone="amber">over {limit}%</Tag>
+              <li key={w.sector} className="flex items-center gap-2 text-14">
+                <Chip kind="caution">Over {limit}%</Chip>
                 <span className="min-w-0 flex-1 truncate font-medium">{sectorLabel(w.sector)}</span>
-                <span className="num shrink-0 text-slate-500 dark:text-slate-400">{w.pct.toFixed(0)}% · {rs(w.value)}</span>
+                <span className="num shrink-0 text-muted">{w.pct.toFixed(0)}% · {rs(w.value)}</span>
               </li>
             ))}
           </ul>
@@ -66,10 +66,10 @@ export function AllocationTab({ view, maxPositionPct, onOpenStock, bc = {} }: { 
           <div className="flex items-end gap-3 px-1">
             <span className="w-10 shrink-0" aria-hidden="true" />
             <div className="relative h-6 flex-1">
-              <span className="absolute bottom-0 flex flex-col items-center text-[11px] font-medium whitespace-nowrap text-slate-500 dark:text-slate-400"
+              <span className="absolute bottom-0 flex flex-col items-center text-12 font-medium whitespace-nowrap text-muted"
                 style={{ left: `${capPos}%`, transform: capShift }}>
                 cap {maxPositionPct}%
-                <span className="mt-0.5 h-1.5 w-0.5 rounded-full bg-slate-400 dark:bg-slate-500" aria-hidden="true" />
+                <span className="mt-0.5 h-1.5 w-0.5 rounded-full bg-muted" aria-hidden="true" />
               </span>
             </div>
           </div>
@@ -81,24 +81,25 @@ export function AllocationTab({ view, maxPositionPct, onOpenStock, bc = {} }: { 
               return (
                 <li key={r.holding.id ?? symbol}>
                   <button type="button" onClick={() => { haptic(); onOpenStock(symbol); }}
-                    className="flex min-h-14 w-full cursor-pointer items-center gap-3 rounded-2xl px-1 py-1.5 text-left transition active:bg-slate-100 dark:active:bg-slate-800">
-                    <SymbolAvatar symbol={symbol} change={r.price?.change_pct} size="h-10 w-10" />
+                    aria-label={`${symbol}: ${w == null ? 'no price yet' : `${w.toFixed(1)}% of your portfolio`}${over ? `, over your ${maxPositionPct}% cap` : ''}`}
+                    className="press flex min-h-14 w-full cursor-pointer items-center gap-3 rounded-control px-1 py-1.5 text-left active:bg-surface-2">
+                    <CompanyMark symbol={symbol} sector={r.sector} />
                     <span className="min-w-0 flex-1">
                       <span className="flex items-center gap-2">
                         <span className="truncate font-semibold">{symbol}</span>
-                        {over && <Tag tone="amber">over cap</Tag>}
-                        {w != null && <span className="num ml-auto shrink-0 text-xs text-slate-500 dark:text-slate-400">{rs(r.value)}</span>}
-                        <span className={`num shrink-0 text-base font-bold ${w == null ? 'ml-auto text-slate-500 dark:text-slate-400' : over ? 'text-amber-600 dark:text-amber-400' : ''}`}>
+                        {over && <Chip kind="caution">Over cap</Chip>}
+                        {w != null && <span className="num ml-auto shrink-0 text-12 text-muted">{rs(r.value)}</span>}
+                        <span className={`num shrink-0 text-16 font-bold ${w == null ? 'ml-auto text-muted' : over ? 'text-caution' : ''}`}>
                           {w == null ? 'n/a' : `${w.toFixed(1)}%`}
                         </span>
                       </span>
                       {w == null ? (
-                        <span className="block text-xs text-slate-500 dark:text-slate-400">no price yet</span>
+                        <span className="block text-12 text-muted">no price yet</span>
                       ) : (
-                        <span className="relative mt-2 block h-2 rounded-full bg-slate-100 dark:bg-slate-800" aria-hidden="true">
-                          <span className={`absolute inset-y-0 left-0 rounded-full transition-[width] duration-500 ${over ? 'bg-amber-500' : 'bg-teal-600 dark:bg-teal-500'}`}
+                        <span className="relative mt-2 block h-2 rounded-full bg-surface-2" aria-hidden="true">
+                          <span className={`absolute inset-y-0 left-0 rounded-full transition-[width] duration-500 ${over ? 'bg-caution' : 'bg-info'}`}
                             style={{ width: `${Math.min(100, Math.max(0, w))}%` }} />
-                          <span className="absolute -top-1 -bottom-1 w-0.5 rounded-full bg-slate-400 dark:bg-slate-500" style={{ left: `${capPos}%`, transform: 'translateX(-50%)' }} />
+                          <span className="absolute -top-1 -bottom-1 w-0.5 rounded-full bg-muted" style={{ left: `${capPos}%`, transform: 'translateX(-50%)' }} />
                         </span>
                       )}
                     </span>
@@ -110,11 +111,11 @@ export function AllocationTab({ view, maxPositionPct, onOpenStock, bc = {} }: { 
         </div>
       </Section></div>
 
-      <p className="num px-1 text-sm font-medium lg:col-start-1">
+      <p className="num px-1 text-14 font-medium lg:col-start-1">
         Blue chips: {blue.pct == null ? 'n/a' : `${blue.pct.toFixed(0)}% of my portfolio`}
-        {blue.unchecked > 0 && <span className="block text-xs font-normal text-slate-500 dark:text-slate-400">{blue.unchecked} holding{blue.unchecked === 1 ? '' : 's'} not checked yet or without enough data</span>}
+        {blue.unchecked > 0 && <span className="block text-12 font-normal text-muted">{blue.unchecked} holding{blue.unchecked === 1 ? '' : 's'} not checked yet or without enough data</span>}
       </p>
-      <p className="max-w-2xl px-1 text-xs text-slate-500 lg:col-start-1 dark:text-slate-400">
+      <p className="max-w-2xl px-1 text-12 text-muted lg:col-start-1">
         New money goes where it keeps every stock under {maxPositionPct}% and every sector under {limit}%.
       </p>
 

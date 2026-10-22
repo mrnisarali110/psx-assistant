@@ -6,7 +6,7 @@
 import type { Announcement, DividendEvent, Holding, IndexDay, Rules } from './types.ts';
 import { DEFAULT_RULES } from './types.ts';
 import { addDays, daysBetween } from './time.ts';
-import { dateLabel } from './format.ts';
+import { day } from './format.ts';
 
 // ---------------------------------------------------------------------------
 // Trading days
@@ -235,9 +235,39 @@ function eventDates(title: string): string[] {
 }
 
 /**
+ * The event dates an announcement names, as "This week" reads them: first its AI figures (labels matching
+ * meeting/date/result/pay/credit/closure whose value parses as a date; the kind from the label, else from the
+ * notice), then its title when the title says what the date is for (eventDates). Dates that are not plausible for
+ * the filing date (dateSane) are left out. In order of appearance; the same date may come twice.
+ */
+export function announcementDates(a: Announcement, rules: Rules = DEFAULT_RULES): { date: string; kind: WeekEventKind; detail: string }[] {
+  const out: { date: string; kind: WeekEventKind; detail: string }[] = [];
+  for (const f of a.ai_figures ?? []) {
+    if (!DATED_LABEL_RE.test(f.label)) continue;
+    const date = parseLooseDate(f.value);
+    const kind = kindFromText(f.label) ?? announcementKind(a);
+    if (date && kind && dateSane(date, a.published_at, rules)) out.push({ date, kind, detail: `${f.label}: ${f.value}` });
+  }
+  const kind = announcementKind(a);
+  if (kind) for (const date of eventDates(a.title)) if (dateSane(date, a.published_at, rules)) out.push({ date, kind, detail: a.title });
+  return out;
+}
+
+/**
+ * The day book closure starts according to the notice itself (the earliest book-closure date announcementDates()
+ * finds), else null. Expected dividends and "This week" use it when a dividend row has no book_closure_from yet.
+ */
+export function bookClosureDate(a: Announcement | undefined, rules: Rules = DEFAULT_RULES): string | null {
+  if (!a) return null;
+  const dates = announcementDates(a, rules).filter((d) => d.kind === 'book_closure').map((d) => d.date).sort();
+  return dates[0] ?? null;
+}
+
+/**
  * Everything dated in the next `days` (default 7) days for the given symbols, soonest first, at most `max` rows
  * (the surplus is returned as `more`): last day to buy and book closure start from dividend events (a buy-by day
- * already gone is left out; the book closure row says so); results / board meeting / payment dates from
+ * already gone is left out; the book closure row says so; a dividend without book_closure_from takes the date its
+ * notice names, bookClosureDate()); results / board meeting / payment dates from
  * announcements' AI figures (labels matching meeting/date/result/pay/credit/closure whose value parses as a date)
  * and from titles that contain an event date; thesis review dates from holdings (`review_on`). Today counts as
  * 0 days and the window runs through today + `days` inclusive. One row per symbol, kind and date.
@@ -259,36 +289,30 @@ export function weekAhead(o: WeekAheadInput): { events: WeekEvent[]; more: numbe
     all.push({ ...e, symbol, days: daysBetween(o.today, e.date), mine: held.has(symbol) });
   };
 
+  // "today", "Sat", "Oct 22" as seen from o.today (PKT noon of that day)
+  const now = new Date(o.today + 'T12:00:00+05:00');
+  const on = (date: string) => day(date, now).replace(/^(Today|Tomorrow|Yesterday)$/, (w) => w.toLowerCase());
+  const byId = new Map(o.announcements.map((a) => [a.id, a]));
+
   for (const d of o.dividends) {
-    if (!validIso(d.book_closure_from) || !wanted(d.symbol)) continue;
-    const from = d.book_closure_from;
+    const from = validIso(d.book_closure_from) ? d.book_closure_from : bookClosureDate(byId.get(d.id), rules);
+    if (!from || !wanted(d.symbol)) continue;
     const buyBy = buyByDate(from, o.cal, rules);
     const dps = d.dps != null ? rsPerShare(d.dps) : null;
     const note = d.verified ? '' : ' (unverified)';
-    const closure = validIso(d.book_closure_to) ? `Book closure ${dateLabel(from)} to ${dateLabel(d.book_closure_to)}` : `Book closure starts ${dateLabel(from)}`;
+    const closure = validIso(d.book_closure_to) ? `Book closure ${on(from)} to ${on(d.book_closure_to)}` : `Book closure starts ${on(from)}`;
     if (buyBy >= o.today) {
       push({ date: buyBy, kind: 'buy_by', symbol: d.symbol, title: dps ? `Last day to buy for ${dps}` : 'Last day to buy for the dividend', detail: closure + note, source_id: d.id });
     }
     push({
       date: from, kind: 'book_closure', symbol: d.symbol, title: dps ? `Book closure starts (${dps})` : TITLES.book_closure,
-      detail: (buyBy >= o.today ? `Buy by ${dateLabel(buyBy)}` : `Last day to buy was ${dateLabel(buyBy)}`) + note, source_id: d.id,
+      detail: (buyBy >= o.today ? `Buy by ${on(buyBy)}` : `Last day to buy was ${on(buyBy)}`) + note, source_id: d.id,
     });
   }
 
   const anns = o.announcements.filter((a) => wanted(a.symbol)).sort((a, b) => b.published_at.localeCompare(a.published_at)); // newest notice wins a tie
   for (const a of anns) {
-    for (const f of a.ai_figures ?? []) {
-      if (!DATED_LABEL_RE.test(f.label)) continue;
-      const date = parseLooseDate(f.value);
-      const kind = kindFromText(f.label) ?? announcementKind(a);
-      if (!date || !kind || !dateSane(date, a.published_at, rules)) continue;
-      push({ date, kind, symbol: a.symbol, title: TITLES[kind], detail: `${f.label}: ${f.value}`, source_id: a.id });
-    }
-    const kind = announcementKind(a);
-    if (!kind) continue;
-    for (const date of eventDates(a.title)) {
-      if (dateSane(date, a.published_at, rules)) push({ date, kind, symbol: a.symbol, title: TITLES[kind], detail: a.title, source_id: a.id });
-    }
+    for (const e of announcementDates(a, rules)) push({ ...e, symbol: a.symbol, title: TITLES[e.kind], source_id: a.id });
   }
 
   for (const h of o.holdings) {

@@ -65,7 +65,7 @@ describe('bull market ON/OFF', () => {
     expect(t.on).toBe(true);
     expect(t.ma).toBeNull();
     expect(t.reasons.join(' ')).toMatch(/\+41\.0% on a year/);
-    expect(t.reasons.join(' ')).toMatch(/needs 120 days/);
+    expect(t.reasons).toContain('200-day average (needs 120 stored closes; 2 so far)');
   });
 
   it('keeps its state in between (no flicker), turns OFF after a 20% fall from the high', () => {

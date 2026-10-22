@@ -2,6 +2,9 @@
  * Wealth growth projection: today's portfolio plus a monthly SIP, compounded monthly at an assumed
  * yearly return. An illustration of the arithmetic, not a forecast: real PSX returns vary a lot year to year.
  */
+import type { Settings } from './types.ts';
+import { DEFAULT_SETTINGS } from './types.ts';
+
 export interface GrowthPoint { year: number; value: number; invested: number }
 
 export interface Growth { points: GrowthPoint[]; final: number; invested: number; gain: number }
@@ -33,3 +36,23 @@ export function projectWealth(o: { start: number; monthly: number; annualReturnP
 
 /** Value in today's rupees after `years` of inflation. */
 export const realValue = (nominal: number, inflationPct: number, years: number) => Math.round(nominal / Math.pow(1 + inflationPct / 100, years));
+
+/** The yearly return projection() assumes when none is given: the Steady scenario. */
+const STEADY_PCT = GROWTH_SCENARIOS.find((g) => g.id === 'steady')!.rate;
+
+/**
+ * Where `start` plus the monthly investment (rising by sip_step_up_pct a year) could be in `years`, in future
+ * rupees and in today's money at settings.inflation_pct (the rules.json default when the setting is missing).
+ * The yearly return defaults to the Steady scenario.
+ */
+export function projection(settings: Settings, start: number, years: number, annualReturnPct: number = STEADY_PCT):
+  { nominal: number; today_money: number; inflation_pct: number } {
+  const ok = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+  const inflation_pct = ok(settings.inflation_pct) ? settings.inflation_pct : DEFAULT_SETTINGS.inflation_pct;
+  const g = projectWealth({
+    start, monthly: ok(settings.monthly_budget_pkr) ? settings.monthly_budget_pkr : 0, annualReturnPct, years,
+    stepUpPct: ok(settings.sip_step_up_pct) ? settings.sip_step_up_pct : 0,
+  });
+  const span = g.points.length - 1; // projectWealth keeps years within 1..40
+  return { nominal: g.final, today_money: realValue(g.final, inflation_pct, span), inflation_pct };
+}

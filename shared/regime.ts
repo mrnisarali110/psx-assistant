@@ -153,7 +153,7 @@ export function evaluateTrend(f: TrendFacts, prevOn: boolean | null, rules: Rule
   const reasons: string[] = [];
   if (y != null) reasons.push(`KSE-100 stocks ${fmt(y)} on a year (PSX, by market cap)`);
   if (ma != null) reasons.push(`${close >= ma ? 'Above' : 'Below'} its ${lastN.length}-day average (${Math.round(ma).toLocaleString('en-PK')})`);
-  else reasons.push(`Average needs ${c.min_days_for_ma} days of closes (${closes.length} stored)`);
+  else reasons.push(`${c.ma_days}-day average (needs ${c.min_days_for_ma} stored closes; ${closes.length} so far)`);
   if (longEnough) reasons.push(`${fmt(drawdown)} from the 12-month high, ${fmt(rise)} from the low`);
   if (!offSignal && !onSignal) reasons.push(`No clear signal: keeps its last state`);
   return { on, flipped: prevOn != null && on !== prevOn, reasons, ma: ma == null ? null : r2(ma), ma_days: ma == null ? 0 : lastN.length, high, low, drawdown_pct: longEnough ? drawdown : null, rise_pct: longEnough ? rise : null };

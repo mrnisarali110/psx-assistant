@@ -3,7 +3,9 @@
  *   market: every 30 minutes while PSX trades. Refresh prices; send actionable alerts only (crash, dip,
  *           buy chances below your last buy, AI buy/trim calls, big moves). The last run before the
  *           close is labelled "Before close". AI suggestions refresh every few hours.
- *   night:  21:00 PKT. AI reads new filings (summaries + dividends), refreshes Discover picks, and sends
+ *           Each check also stores your portfolio's value (the 1D chart; 10 days kept).
+ *   night:  21:00 PKT. AI reads new filings (summaries, dividends, EPS) and a few older results filings of your stocks
+ *           that have no EPS yet, refreshes Discover picks, stores each stock's close for the day, and sends
  *           one night digest: close, your portfolio, news, upcoming dividends, rebalance notes.
  *           Also the Market Compass (value, shares vs safe yield, trend; SBP/PBS/PSX figures) with alerts when its
  *           advice or the trend changes, or the State Bank moves its rate.
@@ -16,14 +18,16 @@ import { investedThisMonth } from '../shared/changes.ts';
 import { dedupeFilings, tidyTitle } from '../shared/news.ts';
 import type { LlmRouter } from '../shared/llm.ts';
 import { buildPortfolio, screenSectors, sectorPeMap, type PortfolioView } from '../shared/portfolio.ts';
+import { peFor, peMap, type PeFigure } from '../shared/valuation.ts';
+import { dividendCut, missingNum, oneOffYield, payoutOf } from '../shared/quality.ts';
 import { holdingAlerts, marketAlerts, planDelivery, todayBanner, type AlertCandidate, type AlertLevel } from '../shared/signals.ts';
 import { addDays, daysBetween, isMarketOpen, isoWeek, minutesToClose, pktDate } from '../shared/time.ts';
-import { DEFAULT_RULES, type Announcement, type DividendEvent, type IndexSnapshot, type PriceMap, type QuarterEarnings } from '../shared/types.ts';
+import { DEFAULT_RULES, type Announcement, type DividendEvent, type IndexSnapshot, type PriceDay, type PriceMap, type QuarterEarnings } from '../shared/types.ts';
 import { marketBreadth, rateState, type PolicyRate, type RegimeDay } from '../shared/regime.ts';
-import { compass } from '../shared/compass.ts';
+import { compass, type Compass } from '../shared/compass.ts';
 import type { MacroReading } from './macro.ts';
 import { annualsFromPage, auditOpinion, reportYear, runBluechip } from './bluechip.ts';
-import { discoverPicks, pdfText, portfolioInsight, readAnnouncement, type GuardContext, type Insight, type InsightFacts } from './ai.ts';
+import { discoverPicks, NO_METRICS, pdfText, portfolioInsight, readAnnouncement, type AnnouncementDigest, type GuardContext, type Insight, type InsightFacts, type PickCandidate } from './ai.ts';
 import { FetchError, isUsable, toPrice, toScreenRows, type Snapshot } from './feed.ts';
 import type { Notifier } from './notify.ts';
 import type { Store, UserCtx } from './store.ts';
@@ -51,7 +55,7 @@ export interface JobDeps {
 
 export interface RunReport {
   ok: boolean; errors: string[]; notified: number; suppressed: number; users: number;
-  ai: { announcements_read: number; dividends: number; insights: number; picks: number; suggestions_dropped: number };
+  ai: { announcements_read: number; dividends: number; insights: number; picks: number; suggestions_dropped: number; eps_backfill: number };
   skipped?: true; // the same job finished fine minutes ago (a duplicate tick), so nothing was done
 }
 
@@ -64,18 +68,27 @@ const sign = (v: number) => (v > 0 ? '+' : v < 0 ? '-' : '');
 const r1 = (v: number | null | undefined) => (v == null ? null : Math.round(v * 10) / 10);
 const r2 = (v: number | null | undefined) => (v == null ? null : Math.round(v * 100) / 100);
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
+/** Days of intraday portfolio values kept for the 1D chart (migration 0012). */
+const TICKS_KEEP_DAYS = (rules.data as { ticks_keep_days?: number }).ticks_keep_days ?? 10;
+/** How old a results filing may be and still count as a company's "latest results" for the AI. */
+const RESULTS_FACT_DAYS = (rules.ai as { results_fact_days?: number }).results_fact_days ?? 400;
+
+/** The latest results filing read per company: its date and profit change vs a year earlier (from the News card figures). */
+export type ResultsMap = Record<string, { on: string; profit_change_pct: number | null }>;
 
 interface RunCtx {
   job: JobName; deps: JobDeps; now: Date; today: string; prices: PriceMap; idx: IndexSnapshot | null;
   usable: boolean; outage: boolean; tradedToday: boolean; preclose: boolean; news: Announcement[]; dividends: DividendEvent[];
   screen: ScreenRow[]; report: RunReport; aiBudget: { left: number }; earnings: QuarterEarnings[]; bc: Record<string, string>;
   market: MarketNews;
+  /** The P/E the app shows for each stock (rulesPe), the sector medians built from it, and the latest results per company. */
+  pe: Record<string, PeFigure>; sectorPe: Record<string, number>; results: ResultsMap;
 }
 
 /** What changed tonight in the market-wide readings (each sends one alert to everyone). */
 interface MarketNews {
   trend: { from: string; to: string; day: string; reasons: string[] } | null;
-  action: { key: string; title: string; detail: string; day: string } | null;
+  action: { key: string; title: string; detail: string; day: string; gap: string | null } | null;
   rate: { from: number; to: number; on: string } | null;
 }
 
@@ -83,7 +96,7 @@ export async function runJob(job: JobName, deps: JobDeps): Promise<RunReport> {
   const now = deps.now?.() ?? new Date();
   const log = deps.log ?? console.log;
   const { store } = deps;
-  const report: RunReport = { ok: true, errors: [], notified: 0, suppressed: 0, users: 0, ai: { announcements_read: 0, dividends: 0, insights: 0, picks: 0, suggestions_dropped: 0 } };
+  const report: RunReport = { ok: true, errors: [], notified: 0, suppressed: 0, users: 0, ai: { announcements_read: 0, dividends: 0, insights: 0, picks: 0, suggestions_dropped: 0, eps_backfill: 0 } };
   const guard = REPEAT_GUARD_MIN[job];
   const last = await store.lastRun(job).catch(() => null);
   if (guard) {
@@ -146,6 +159,8 @@ export async function runJob(job: JobName, deps: JobDeps): Promise<RunReport> {
       if (screen.length) await store.saveScreen(screen).catch((e) => report.errors.push(`screen: ${errMsg(e)}`));
       // PSX's annual profit table from the company pages fetched anyway (blue-chip profit check).
       await store.saveAnnuals(Object.values(snap.quotes).flatMap((q) => annualsFromPage(q.symbol, q.annual_profits))).catch((e) => report.errors.push(`annuals: ${errMsg(e)}`));
+      // Each stock's close for the trading day (stock page chart, sparklines); history builds from now on.
+      if (deep) await store.savePriceDays(priceDays(screen, snap.quotes, pktDate(new Date(idx.ts)))).catch((e) => report.errors.push(`price days: ${errMsg(e)}`));
     } else {
       report.ok = false;
       prices = await store.latestPrices(userSymbols);
@@ -170,13 +185,23 @@ export async function runJob(job: JobName, deps: JobDeps): Promise<RunReport> {
     // ---- AI reads filings (summaries + dividends) ---------------------
     if (deps.ai?.available && deps.fetchPdf) {
       newFilings = await readFilings(readSymbols, today, deep ? rules.ai.announcements_per_night_run : rules.ai.announcements_per_market_run, deps, report);
+      // Older results filings of your stocks that have no EPS yet: a few a night, inside the night's filing budget.
+      const room = Math.min(rules.ai.eps_backfill_per_night, rules.ai.announcements_per_night_run - report.ai.announcements_read);
+      if (job === 'night' && room > 0) await backfillEps(userSymbols, today, room, deps, report, log);
     }
     const news = await store.recentAnnouncements(userSymbols, addDays(today, -14)).catch(() => [] as Announcement[]);
     const dividends = await store.dividends(null, addDays(today, -1100)).catch(() => [] as DividendEvent[]);
     const earnings = await store.earnings(userSymbols, addDays(today, -1100)).catch(() => [] as QuarterEarnings[]);
+    // One P/E per stock, the one the app shows: the rules, the alerts and the AI all use it (owner decision, A2).
+    const pe = rulesPe(screen, prices, earnings, today);
+    const sectorPe = sectorPeMap(screen, rules, pe);
+    const results = latestResults(await store.resultsFilings([...new Set([...readSymbols, ...screen.map((r) => r.symbol)])], addDays(today, -RESULTS_FACT_DAYS)).catch(() => []));
+    if (job === 'market') {
+      await store.prunePortfolioTicks(new Date(now.getTime() - TICKS_KEEP_DAYS * 86400000).toISOString()).catch((e) => report.errors.push(`ticks: ${errMsg(e)}`));
+    }
 
     // ---- Discover picks (nightly, market-wide) ------------------------
-    if (deep && deps.ai?.available && screen.length) await refreshPicks(screen, dividends, today, deps, report);
+    if (deep && deps.ai?.available && screen.length) await refreshPicks(screen, deps, report, { today, pe, earnings, dividends, results });
 
     // ---- Blue-chip recheck (nightly; each company only when due) ------
     if (deep && usable && screen.length) {
@@ -196,7 +221,10 @@ export async function runJob(job: JobName, deps: JobDeps): Promise<RunReport> {
     log(`job=${job} users=${users.length} symbols=${userSymbols.length}+${readSymbols.length - userSymbols.length} usable=${usable} tradedToday=${tradedToday} preclose=${preclose} aiRead=${report.ai.announcements_read}`);
     // Tell people only when PSX stays unreadable: this run and the one before failed, while PSX is trading.
     const outage = !usable && last?.ok === false && isMarketOpen(now, rules.market_hours_pkt);
-    const ctx: RunCtx = { job, deps, now, today, prices, idx, usable, outage, tradedToday, preclose, news, dividends, screen, report, aiBudget: { left: rules.ai.max_users_per_run }, earnings, bc: bcMap, market };
+    const ctx: RunCtx = {
+      job, deps, now, today, prices, idx, usable, outage, tradedToday, preclose, news, dividends, screen, report, aiBudget: { left: rules.ai.max_users_per_run },
+      earnings, bc: bcMap, market, pe, sectorPe, results,
+    };
     for (const u of users) {
       try {
         await processUser(u, ctx);
@@ -254,11 +282,8 @@ async function readFilings(symbols: string[], today: string, limit: number, deps
     try {
       const d = await readAnnouncement(deps.ai!, pdf, { symbol: a.symbol, title: a.title, published_at: a.published_at });
       if (a.kind === 'results' || a.kind === 'dividend') read.add(a.symbol);
-      if (d.annual) {
-        await deps.store.saveAnnuals([{ symbol: a.symbol, year: d.annual.year, profit_after_tax: d.annual.profit_after_tax, consolidated: d.annual.consolidated, source: 'filing', filing_id: a.id }])
-          .catch((e) => report.errors.push(`annuals: ${errMsg(e)}`));
-      }
-      await deps.store.saveAnnouncementDigest(a.id, { summary: d.summary, figures: d.figures, verified: d.verified, date_note: d.date_note });
+      await saveResults(a, d, deps, report);
+      await deps.store.saveAnnouncementDigest(a.id, { summary: d.summary, figures: d.figures, verified: d.verified, date_note: d.date_note, metrics: d.metrics });
       report.ai.announcements_read++;
       if (d.dividend) {
         await deps.store.saveDividend({
@@ -267,15 +292,130 @@ async function readFilings(symbols: string[], today: string, limit: number, deps
         });
         report.ai.dividends++;
       }
-      if (d.earnings) {
-        await deps.store.saveEarnings({ id: a.id, symbol: a.symbol, ...d.earnings, pdf_url: a.pdf_url }).catch((e) => report.errors.push(`earnings: ${errMsg(e)}`));
-      }
     } catch (e) {
       report.errors.push(`ai: filing ${a.id}: ${errMsg(e)}`);
       if (/AI unavailable/.test(errMsg(e))) break; // both providers down or rate limited: try next run
     }
   }
   return read;
+}
+
+/** A results filing's profit and EPS rows: the quarter's (3 months), and the year's (12 months) when it reports a full year. */
+export function filingEarnings(a: Announcement, d: Pick<AnnouncementDigest, 'earnings' | 'annual'>): QuarterEarnings[] {
+  const rows: QuarterEarnings[] = [];
+  if (d.earnings) rows.push({ id: a.id, symbol: a.symbol, ...d.earnings, pdf_url: a.pdf_url });
+  if (d.annual) {
+    const y = d.annual;
+    // One row per filing id; a filing that also reports its last quarter keeps that row under the plain id.
+    rows.push({ id: d.earnings ? `${a.id}:fy` : a.id, symbol: a.symbol, period_end: y.period_end, profit_after_tax: y.profit_after_tax, verified: y.verified, pdf_url: a.pdf_url, eps: y.eps, eps_basis: y.eps_basis, period_months: 12 });
+  }
+  return rows;
+}
+
+/** Store what a results filing says about profit: the year (blue-chip profit check) and the earnings rows with EPS (P/E). */
+async function saveResults(a: Announcement, d: AnnouncementDigest, deps: JobDeps, report: RunReport) {
+  if (d.annual) {
+    await deps.store.saveAnnuals([{ symbol: a.symbol, year: d.annual.year, profit_after_tax: d.annual.profit_after_tax, consolidated: d.annual.consolidated, source: 'filing', filing_id: a.id }])
+      .catch((e) => report.errors.push(`annuals: ${errMsg(e)}`));
+  }
+  for (const e of filingEarnings(a, d)) await deps.store.saveEarnings(e).catch((err) => report.errors.push(`earnings: ${errMsg(err)}`));
+}
+
+/** "Financial Results for the Year Ended ..." (not the half year), or an annual/full-year result. */
+const FULL_YEAR = /(?<!half[- ])year ended|\bannual\b|full[- ]year/i;
+
+/**
+ * Which older results filings to read for EPS (owner review A2): for each company in turn, its latest full-year result
+ * and its 3 newest other results, the ones read before EPS was stored (checked, no figures yet), up to `limit` in all.
+ * An annual report is long and has no AI read; older filings are not worth one.
+ */
+export function epsBackfillPlan(filings: (Announcement & { ai_checked_at?: string | null })[], symbols: string[], limit: number): Announcement[] {
+  const out: Announcement[] = [];
+  for (const sym of symbols) {
+    const mine = filings.filter((a) => a.symbol === sym && a.kind === 'results' && a.pdf_url && !/annual report/i.test(a.title))
+      .sort((a, b) => b.published_at.localeCompare(a.published_at));
+    const year = mine.find((a) => FULL_YEAR.test(a.title));
+    const quarters = mine.filter((a) => !FULL_YEAR.test(a.title)).slice(0, 3);
+    for (const a of [year, ...quarters]) if (a && a.ai_checked_at && a.ai_metrics == null && out.length < limit) out.push(a);
+  }
+  return out;
+}
+
+/** Reads the planned older results filings for EPS; keeps the summary people already saw. Never throws. */
+async function backfillEps(symbols: string[], today: string, limit: number, deps: JobDeps, report: RunReport, log: (m: string) => void) {
+  const { store } = deps;
+  try {
+    const since = addDays(today, -rules.ai.announcement_max_age_days);
+    // A company needs older filings until its P/E comes from them (a full year, recent enough): one stored quarter is not.
+    const stored = await store.earnings(symbols, since);
+    const need = symbols.filter((s) => peFor(s, null, stored.filter((e) => e.symbol === s), null, rules, today).basis === 'psx');
+    if (!need.length) return;
+    const plan = epsBackfillPlan(await store.resultsFilings(need, since), need, limit);
+    for (const a of plan) {
+      let pdf: Uint8Array;
+      try {
+        pdf = await deps.fetchPdf!(a.pdf_url!);
+      } catch (e) {
+        if (e instanceof FetchError) await store.saveAnnouncementMetrics(a.id, NO_METRICS).catch(() => {}); // gone: do not try again
+        report.errors.push(`ai: eps backfill ${a.id} pdf: ${errMsg(e)}`);
+        continue;
+      }
+      try {
+        const d = await readAnnouncement(deps.ai!, pdf, { symbol: a.symbol, title: a.title, published_at: a.published_at });
+        await saveResults(a, d, deps, report);
+        await store.saveAnnouncementMetrics(a.id, d.metrics);
+        report.ai.eps_backfill++;
+      } catch (e) {
+        report.errors.push(`ai: eps backfill ${a.id}: ${errMsg(e)}`);
+        if (/AI unavailable/.test(errMsg(e))) break; // both providers down or rate limited: this filing is tried again
+        // The filing itself cannot be read: mark it, so it does not take one of the night's few slots every night.
+        await store.saveAnnouncementMetrics(a.id, NO_METRICS).catch(() => {});
+      }
+    }
+    if (plan.length) log(`eps backfill: read ${report.ai.eps_backfill} of ${plan.length} older filing(s)`); // no symbols: logs are public
+  } catch (e) {
+    report.errors.push(`eps backfill: ${errMsg(e)}`);
+  }
+}
+
+/**
+ * One close per stock for the trading day `day`: the KSE-100 screener rows, then the company pages read this run (held,
+ * watched, followed), which win. A page whose price is from another day is left out.
+ */
+export function priceDays(screen: ScreenRow[], quotes: Snapshot['quotes'], day: string): PriceDay[] {
+  const out = new Map<string, PriceDay>();
+  for (const r of screen) if (!missingNum(r.price)) out.set(r.symbol, { symbol: r.symbol, day, close: r.price as number, change_pct: r.change_pct ?? null });
+  for (const q of Object.values(quotes)) {
+    if (missingNum(q.price) || (q.as_of && pktDate(new Date(q.as_of)) !== day)) continue;
+    out.set(q.symbol, { symbol: q.symbol, day, close: q.price as number, change_pct: q.change_pct ?? null });
+  }
+  return [...out.values()];
+}
+
+/**
+ * One P/E per stock, built the way the app builds it (src/components/HoldingActions.tsx): the screen's rows, with live
+ * prices winning for the stocks you hold or watch, through valuation.peMap on the stored results filings.
+ */
+export function rulesPe(screen: ScreenRow[], prices: PriceMap, earnings: QuarterEarnings[], today?: string): Record<string, PeFigure> {
+  const rows = new Map(screen.map((r) => [r.symbol, { symbol: r.symbol, price: r.price, pe: r.pe }]));
+  for (const p of Object.values(prices)) rows.set(p.symbol, { symbol: p.symbol, price: p.price, pe: p.pe ?? rows.get(p.symbol)?.pe ?? null });
+  return peMap([...rows.values()], earnings, rules, today);
+}
+
+/** Metrics with no figure at all (NO_METRICS: the PDF is gone, or nothing could be read from it). */
+const noFigures = (m: Announcement['ai_metrics']) => !m || Object.values(m).every((v) => v == null);
+
+/**
+ * The newest results filing with News card figures per company. A filing with no figures at all (NO_METRICS) is
+ * skipped, so a filing whose PDF is gone does not hide an older filing's profit change.
+ */
+export function latestResults(filings: Announcement[]): ResultsMap {
+  const out: ResultsMap = {};
+  for (const a of [...filings].sort((x, y) => y.published_at.localeCompare(x.published_at))) {
+    if (a.kind !== 'results' || noFigures(a.ai_metrics) || out[a.symbol]) continue;
+    out[a.symbol] = { on: a.published_at, profit_change_pct: a.ai_metrics?.profit_change_pct ?? null };
+  }
+  return out;
 }
 
 /**
@@ -327,13 +467,15 @@ async function updateMarket(o: { today: string; idx: IndexSnapshot | null; scree
       compass: {
         spread_pct: k.gap.spread_pct, gap: k.gap.state, pib_10y: k.gap.pib_10y?.value ?? null, tbill_3m: k.gap.tbill_3m?.value ?? null,
         cpi: k.rates.cpi?.value ?? null, real_rate_pct: k.rates.real_rate_pct, money_market_pct: k.rates.money_market_pct, title: k.action.title,
+        // What the gap compares with (owner decision A7); rows saved before it have none and read "vs 10-year bond".
+        gap_basis: k.gap.basis, pib_spread_pct: k.gap.pib_spread_pct,
       },
     };
     await store.saveRegimeDay(day);
     // Older rows (before the compass) only know ON/OFF: ON was "up", OFF compares as "not up".
     const prevTrend = prev?.trend ?? (prev ? (prev.bull ? 'up' : null) : null);
     if (prev && prevTrend && prevTrend !== k.trend.state) out.trend = { from: prevTrend, to: k.trend.state, day: mday, reasons: k.trend.reasons };
-    if (prev?.action && prev.action !== k.action.key) out.action = { key: k.action.key, title: k.action.title, detail: k.action.detail, day: mday };
+    if (prev?.action && prev.action !== k.action.key) out.action = { key: k.action.key, title: k.action.title, detail: k.action.detail, day: mday, gap: gapLine(k) };
     o.log(`market: trend=${k.trend.state} value=${k.value.state ?? 'n/a'} pe=${k.value.pe ?? 'n/a'} gap=${k.gap.spread_pct ?? 'n/a'} action=${k.action.key} rate=${k.rates.policy?.rate ?? 'n/a'} cpi=${k.rates.cpi?.value ?? 'n/a'}${out.trend ? ' (trend changed)' : ''}${out.action ? ' (action changed)' : ''}`);
   } catch (e) {
     o.report.errors.push(`market compass: ${errMsg(e)}`);
@@ -341,13 +483,64 @@ async function updateMarket(o: { today: string; idx: IndexSnapshot | null; scree
   return out;
 }
 
-async function refreshPicks(screen: ScreenRow[], dividends: DividendEvent[], today: string, deps: JobDeps, report: RunReport) {
-  const uv = undervalued(screen).map((r) => ({ symbol: r.symbol, sector: r.sector, price: r.price, pe: r.pe, sector_pe: r.sector_pe, pe_discount_pct: r.discount_pct, dividend_yield_pct: r.dividend_yield_pct, change_1y_pct: r.change_1y_pct, shariah: r.is_shariah }));
-  const dv = dividendLeaders(screen, dividends, today).map((d) => ({
-    symbol: d.symbol, sector: d.sector, price: d.price, dividend_yield_pct: d.dividend_yield_pct, annual_dividend_per_share: d.annual_dps,
-    last_declared_dps: d.last?.dps ?? null, last_declared_on: d.last?.announced_on ?? null, frequency_from_filings: d.frequency, shariah: d.is_shariah,
+/** "Shares earn 9.1% on their price against about 10.5% in a money-market fund (estimate)." The gap the advice acts on. */
+export function gapLine(k: Pick<Compass, 'value' | 'gap' | 'rates'>): string | null {
+  const ey = k.value.earnings_yield_pct;
+  if (ey == null || k.gap.spread_pct == null) return null;
+  const vs = k.gap.basis === 'pib' ? `${k.gap.pib_10y?.value.toFixed(2)}% on the 10-year government bond`
+    : `about ${k.rates.money_market_pct}% in a money-market fund (estimate)`;
+  return `Shares earn ${ey}% on their price against ${vs}.`;
+}
+
+/** What the facts for the AI need besides the price screen. */
+interface StockCtx { today: string; dividends: DividendEvent[]; earnings?: QuarterEarnings[]; results?: ResultsMap }
+
+/**
+ * Facts about one stock that the price screen does not show (owner review A8, A10), worked out the way every screen
+ * does: payout of profit (quality.payoutOf; the P/E shown gives the EPS), a yield that will not repeat, a suspect payout,
+ * a dividend cut, and the latest results' profit change vs a year earlier.
+ */
+export function stockExtras(symbol: string, price: number | null, psxYieldPct: number | null, fig: PeFigure | undefined, c: StockCtx) {
+  const oneOff = oneOffYield(symbol, c.dividends, c.today, c.earnings ?? [], rules);
+  // The payout the app shows (quality.payoutOf): filings first, then PSX's yield x price, against the P/E's EPS.
+  const pay = payoutOf(symbol, c.dividends, c.today, { price, psxYieldPct, eps: fig?.eps ?? null }, rules);
+  const cut = dividendCut(symbol, c.dividends);
+  const res = c.results?.[symbol];
+  return {
+    payout_pct: pay.pct, suspect: pay.suspect, one_off: oneOff,
+    dividend_cut: cut.cut, dividend_latest_dps: cut.latest, dividend_previous_dps: cut.previous,
+    results_profit_change_pct: res?.profit_change_pct ?? null, results_on: res?.on ?? null,
+  };
+}
+
+/**
+ * Discover candidates for the AI: what each card already shows (`on_card`) and what it does not (`more`). Dividend
+ * stocks with a suspect payout are left out (owner review A8): the AI may not pick them.
+ */
+export function pickCandidates(screen: ScreenRow[], x: StockCtx & { pe: Record<string, PeFigure> }): { undervalued: PickCandidate[]; dividend: PickCandidate[] } {
+  const more = (symbol: string, price: number | null, yieldPct: number | null) => stockExtras(symbol, price, yieldPct, x.pe[symbol], x);
+  const uv = undervalued(screen, { pe: x.pe }).map((r) => ({
+    symbol: r.symbol, sector: r.sector,
+    on_card: { price: r.price, pe: r.pe, sector_pe: r.sector_pe, pe_discount_pct: r.discount_pct, dividend_yield_pct: r.dividend_yield_pct, change_1y_pct: r.change_1y_pct, shariah: r.is_shariah },
+    more: { pe_basis: r.pe_label, ...more(r.symbol, r.price, r.dividend_yield_pct) },
   }));
-  for (const [kind, facts] of [['undervalued', uv], ['dividend', dv]] as const) {
+  const dv = dividendLeaders(screen, x.dividends, x.today, { pe: x.pe, earnings: x.earnings }).filter((d) => !d.suspect).map((d) => ({
+    symbol: d.symbol, sector: d.sector,
+    on_card: {
+      price: d.price, pe: d.pe, dividend_yield_pct: d.dividend_yield_pct, annual_dividend_per_share: d.annual_dps,
+      last_declared_dps: d.last?.dps ?? null, frequency_from_filings: d.frequency, shariah: d.is_shariah,
+    },
+    more: {
+      ...more(d.symbol, d.price, d.psx_yield_pct), payout_pct: d.payout_pct, suspect: d.suspect, one_off: d.one_off,
+      special_dps: d.special?.dps ?? null, last_declared_on: d.last?.announced_on ?? null,
+    },
+  }));
+  return { undervalued: uv, dividend: dv };
+}
+
+async function refreshPicks(screen: ScreenRow[], deps: JobDeps, report: RunReport, x: StockCtx & { pe: Record<string, PeFigure> }) {
+  const c = pickCandidates(screen, x);
+  for (const [kind, facts] of [['undervalued', c.undervalued], ['dividend', c.dividend]] as const) {
     if (!facts.length) continue;
     try {
       const r = await discoverPicks(deps.ai!, kind, facts);
@@ -365,7 +558,7 @@ async function processUser(u: UserCtx, c: RunCtx) {
   const lastSent = (kind: string, symbol: string) =>
     recent.filter((r) => r.kind === kind && r.symbol === symbol && r.channel && r.channel !== 'none')
       .map((r) => pktDate(new Date(r.sent_at))).sort().at(-1) ?? null;
-  const view = buildPortfolio(u.holdings, c.prices, u.settings, rules, screenSectors(c.screen), { today: c.today, sectorPe: sectorPeMap(c.screen), dividends: c.dividends, earnings: c.earnings });
+  const view = buildPortfolio(u.holdings, c.prices, u.settings, rules, screenSectors(c.screen), { today: c.today, sectorPe: c.sectorPe, dividends: c.dividends, earnings: c.earnings, pe: c.pe });
   const mine = new Set([...u.holdings.map((h) => h.symbol), ...u.watchlist.map((w) => w.symbol)]);
   const night = c.job === 'night';
   const refresh = c.job === 'refresh';
@@ -407,10 +600,16 @@ async function processUser(u: UserCtx, c: RunCtx) {
   if (night) cands.push(...holdingAlerts(view, u.settings, c.today, insight, lastSent).filter((a) => a.level === 'digest'));
   if (night) cands.push(...nightItems(view, mine, c, insight));
   if (night) cands.push(...marketItems(c));
-  // One value per trading day, so Performance can draw your money against the KSE-100 from now on.
-  if (night && c.tradedToday && view.rows.length) {
-    await store.savePortfolioDay(u.id, { day: c.today, value: r2(view.total_value) as number, invested: r2(view.total_cost) as number })
+  // One value per trading day, so Performance and Home can draw your money (and against the KSE-100) from now on.
+  // Refresh latest writes it too, for the last trading day (a weekend refresh stores Friday's).
+  const day = night ? (c.tradedToday ? c.today : null) : refresh && c.usable && c.idx ? pktDate(new Date(c.idx.ts)) : null;
+  if (day && view.rows.length) {
+    await store.savePortfolioDay(u.id, { day, value: r2(view.total_value) as number, invested: r2(view.total_cost) as number })
       .catch((e) => c.report.errors.push(`portfolio day: ${errMsg(e)}`));
+  }
+  // Your portfolio's value at this check (Home's 1D chart).
+  if (c.job === 'market' && c.tradedToday && c.idx && view.rows.length && view.total_value > 0) {
+    await store.savePortfolioTick(u.id, { ts: c.idx.ts, value: r2(view.total_value) as number }).catch((e) => c.report.errors.push(`portfolio tick: ${errMsg(e)}`));
   }
 
   if (refresh) return; // a manual refresh updates the data and suggestions; it never pushes alerts
@@ -448,7 +647,7 @@ function marketItems(c: RunCtx): AlertCandidate[] {
   const item = (kind: string, key: string, title: string, message: string): AlertCandidate => ({ kind, symbol: null, level: 'digest', url: '/#/market', dedupe_key: key, title, message });
   if (action) {
     out.push(item('market_compass', `compass:${action.key}:${action.day}`, `Market Compass: ${action.title}`,
-      `${action.title}. ${action.detail} A rule of thumb, not advice.`));
+      `${action.title}. ${action.detail}${action.gap ? ` ${action.gap}` : ''} A rule of thumb, not advice.`));
   }
   if (trend) {
     const word = (t: string) => (t === 'up' ? 'up' : t === 'down' ? 'down' : 'sideways');
@@ -495,18 +694,23 @@ function nightItems(view: PortfolioView, mine: Set<string>, c: RunCtx, insight: 
 // AI facts: everything the model may use, rounded the way it will be quoted
 // ---------------------------------------------------------------------------
 export function buildFacts(u: UserCtx, view: PortfolioView, mine: Set<string>,
-  c: Pick<RunCtx, 'today' | 'idx' | 'prices' | 'screen' | 'news' | 'dividends' | 'now'> & { bc?: Record<string, string> }, investedPkr: number) {
+  c: Pick<RunCtx, 'today' | 'idx' | 'prices' | 'screen' | 'news' | 'dividends' | 'now'> & { bc?: Record<string, string> } & Partial<Pick<RunCtx, 'pe' | 'earnings' | 'results'>>,
+  investedPkr: number) {
   const s = u.settings;
   const banner = todayBanner(c.idx, s);
   const metrics = (sym: string) => {
     const p = c.prices[sym];
+    // The P/E the app shows (filings first), so the AI never quotes a second figure for the same stock (owner review A2).
+    const fig = c.pe?.[sym] ?? peFor(sym, p?.price ?? null, (c.earnings ?? []).filter((e) => e.symbol === sym), p?.pe ?? null, rules, c.today);
     return {
       price: r2(p?.price), day_change_pct: r2(p?.change_pct), high_52w: r2(p?.high_52w), low_52w: r2(p?.low_52w),
       below_52w_high_pct: p?.price && p?.high_52w ? r1(((p.high_52w - p.price) / p.high_52w) * 100) : null,
-      dividend_yield_pct: r2(p?.dividend_yield_pct), pe: r2(p?.pe), sector: p?.sector ?? null, is_shariah: p?.is_shariah ?? null, blue_chip: c.bc?.[sym] ?? 'not_checked',
+      dividend_yield_pct: r2(p?.dividend_yield_pct), pe: fig.pe, pe_basis: fig.label, pe_unusual: fig.outlier, loss_making: fig.loss,
+      sector: p?.sector ?? null, is_shariah: p?.is_shariah ?? null, blue_chip: c.bc?.[sym] ?? 'not_checked',
+      ...stockExtras(sym, p?.price ?? null, p?.dividend_yield_pct ?? null, fig, c),
     };
   };
-  const candidates = undervalued(c.screen, { shariahOnly: s.shariah_only, exclude: mine }).slice(0, 5);
+  const candidates = undervalued(c.screen, { shariahOnly: s.shariah_only, exclude: mine, pe: c.pe }).slice(0, 5);
   const facts: InsightFacts = {
     date: c.today,
     market: { kse100: r2(c.idx?.kse100), change_pct: r2(c.idx?.change_pct), rules_say: banner.action, rules_reason: banner.reason, crash_level: s.crash_trigger_kse, market_open: isMarketOpen(c.now, rules.market_hours_pkt) },

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { EX_MARKERS, baseSymbol, dedupeBySymbol, exLabel, normalisePriceMap, splitSymbol } from './symbols.ts';
+import { EX_MARKERS, baseSymbol, canonicalSymbol, dedupeBySymbol, exLabel, normalisePriceMap, normaliseWatchSymbol, splitSymbol } from './symbols.ts';
+import { DEFAULT_RULES } from './types.ts';
 import type { Holding, Price, PriceMap } from './types.ts';
 
 const price = (symbol: string, over: Partial<Price> = {}): Price => ({
@@ -237,5 +238,22 @@ describe('normalisePriceMap', () => {
     const once = normalisePriceMap({ APLXD: price('APLXD', { price: 395 }), APL: price('APL', { price: 400, pe: 5 }) });
     expect(normalisePriceMap(once)).toEqual(once);
     expect(once.APL).toMatchObject({ ex: 'XD', price: 400, pe: 5 });
+  });
+});
+
+describe('canonical symbols', () => {
+  it('normaliseWatchSymbol', () => {
+    expect(normaliseWatchSymbol('ogdcl xd')).toBe('OGDC'); // lower case, a space, an ex marker and the long form
+    expect(normaliseWatchSymbol(' ogdcl ')).toBe('OGDC');
+    expect(normaliseWatchSymbol('OGDCXD')).toBe('OGDC');
+    expect(normaliseWatchSymbol('hubc')).toBe('HUBC');
+    expect(normaliseWatchSymbol('MEBLXDXB')).toBe('MEBL');
+    expect(normaliseWatchSymbol('')).toBe('');
+    expect(canonicalSymbol('psx:luck')).toBe('LUCK'); // stray punctuation and an exchange prefix are dropped
+  });
+  it('the alias map is a setting, and a listed symbol that ends in a marker is kept whole', () => {
+    const rules = { ...DEFAULT_RULES, symbols: { ...DEFAULT_RULES.symbols, aliases: { ...DEFAULT_RULES.symbols.aliases, ENGRO: 'ENGROH' } } };
+    expect(canonicalSymbol('engro', undefined, rules)).toBe('ENGROH');
+    expect(canonicalSymbol('FOXBXD', ['FOXB'])).toBe('FOXB');
   });
 });

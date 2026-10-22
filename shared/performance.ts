@@ -6,9 +6,10 @@
  * money is rupees to the paisa, percentages to 1 dp; a missing input gives null or an explicit count, never a
  * made-up figure.
  */
-import type { DividendEvent, DividendReceipt, Holding, IndexDay, PortfolioDay, PriceMap, Rules, Settings, Txn } from './types.ts';
+import type { Announcement, DividendEvent, DividendReceipt, Holding, IndexDay, PortfolioDay, PriceMap, Rules, Settings, Txn } from './types.ts';
 import { DEFAULT_RULES, DEFAULT_SETTINGS } from './types.ts';
-import { costRates, txnCharges } from './costs.ts';
+import { bookClosureDate } from './calendar.ts';
+import { costRates, tradeCosts, txnCharges } from './costs.ts';
 import { buildLots, sharesHeldOn, taxYear } from './tax.ts';
 import { addDays, daysBetween } from './time.ts';
 
@@ -220,6 +221,51 @@ export function totalReturn(txns: Txn[], receipts: DividendReceipt[], currentVal
 }
 
 // ---------------------------------------------------------------------------
+// Charges
+// ---------------------------------------------------------------------------
+
+export interface ChargesSummary {
+  logged: number; // charges on the logged buys and sells (recorded, else estimated at the user's rates)
+  logged_on: number; // the trade value those charges were on
+  estimate_all: number; // estimate: buy charges inside the cost basis of everything held now, at the user's rates
+  cost_basis: number; // sum of shares x average cost over the holdings
+  implied_include_charges: true; // a screenshot-implied buy price is the broker's average cost, which already includes the charges
+}
+
+/** A buy from a screenshot import without recorded charges: its price is implied from the broker's average cost, charges included. */
+const impliedBuy = (t: Txn) => t.side === 'buy' && t.source === 'import' && !finite(t.charges);
+
+/**
+ * "Charges paid", honestly: `logged` counts only the trades in the log (and says on how much, `logged_on`); a
+ * screenshot-implied buy adds nothing because its price already includes the charges. `estimate_all` is the buy
+ * charges likely inside the whole cost basis held now (each holding's shares x average cost, with the charges
+ * backed out of the average cost, which already includes them), labelled an estimate by the caller. `prices` is
+ * accepted for callers that value holdings at market; the estimate uses the cost basis only.
+ */
+export function chargesSummary(txns: Txn[], holdings: Pick<Holding, 'symbol' | 'shares' | 'avg_cost'>[], prices: PriceMap, settings: Settings, rules: Rules = DEFAULT_RULES): ChargesSummary {
+  void prices;
+  const rates = costRates(settings, rules);
+  let logged = 0;
+  let logged_on = 0;
+  for (const t of txns) {
+    const value = tradeValue(t);
+    if (value == null || impliedBuy(t)) continue;
+    logged += txnCharges(t, rates).charges;
+    logged_on += value;
+  }
+  let estimate = 0;
+  let cost_basis = 0;
+  for (const h of holdings) {
+    if (!positive(h.shares) || !positive(h.avg_cost)) continue;
+    const basis = h.shares * h.avg_cost;
+    const charges = tradeCosts(h.shares, h.avg_cost, rates).total; // as if bought at the average cost
+    cost_basis += basis;
+    estimate += charges / (1 + charges / basis); // the part of `basis` that was charges: basis = value + charges
+  }
+  return { logged: r2(logged), logged_on: r2(logged_on), estimate_all: r2(estimate), cost_basis: r2(cost_basis), implied_include_charges: true };
+}
+
+// ---------------------------------------------------------------------------
 // KSE-100 benchmark
 // ---------------------------------------------------------------------------
 
@@ -407,6 +453,7 @@ export interface ExpectedDividend {
   book_closure_from: string;
   announced_on: string;
   verified: boolean; // the AI's figures were checked against the PDF
+  basis: 'log' | 'holdings'; // where `shares` came from: the buys and sells log, or today's holdings when the log is incomplete (heldAtBookClosure)
 }
 
 const receiptMatchDays = (rules: Rules) => {
@@ -415,8 +462,30 @@ const receiptMatchDays = (rules: Rules) => {
 };
 
 /**
- * Declared cash dividends (events with a positive dps and a book_closure_from) on shares the user held at the end
- * of the day before book closure started (tax.sharesHeldOn), that are not yet in `receipts`. A receipt covers an
+ * Shares of `symbol` held at the end of the day before `cutoff` (the day book closure starts). From the buys and
+ * sells log when it explains today's holding (logGaps finds no gap for the symbol, or the symbol is not held any
+ * more); otherwise from today's holding: its shares less the buys logged on or after the cut-off, plus the sells
+ * logged on or after it (those shares were still held then). Never below 0. A holding imported as a baseline,
+ * with no logged buys, therefore still counts.
+ */
+export function heldAtBookClosure(symbol: string, cutoff: string, txns: Txn[], holdings: Pick<Holding, 'symbol' | 'shares'>[]): { shares: number; basis: 'log' | 'holdings' } {
+  const s = sym(symbol);
+  const held = holdings.filter((h) => sym(h.symbol) === s);
+  if (!logGaps(txns, held).length) return { shares: sharesHeldOn(txns, s, addDays(cutoff, -1)), basis: 'log' };
+  let shares = held.reduce((a, h) => a + (finite(h.shares) ? h.shares : 0), 0);
+  for (const t of txns) {
+    if (sym(t.symbol) !== s || t.executed_on < cutoff || !positive(t.shares)) continue;
+    shares += t.side === 'buy' ? -t.shares : t.shares;
+  }
+  return { shares: Math.max(0, shares), basis: 'holdings' };
+}
+
+/**
+ * Declared cash dividends (events with a positive dps and a book closure start) on shares the user held at the end
+ * of the day before book closure started (heldAtBookClosure with `opts.holdings`; the log alone when no holdings
+ * are passed), that are not yet in `receipts`. An event without book_closure_from takes the date its own notice
+ * (the announcement with the event's id in `opts.announcements`) names, read as "This week" reads it
+ * (calendar.bookClosureDate), so Expected and Home list the same book closures. A receipt covers an
  * event when its dividend_id is the event's id, or, when it has no dividend_id, when it is the same symbol and was
  * paid 0..`receipt_match_days` days (rules.dividends, default RECEIPT_MATCH_DAYS) after book closure started.
  * Withholding tax from whtPct() with the symbol's sector in `sectors` and settings.tax_filer. Future book closures
@@ -425,8 +494,11 @@ const receiptMatchDays = (rules: Rules) => {
  */
 export function expectedDividends(
   txns: Txn[], events: DividendEvent[], receipts: DividendReceipt[], sectors: Record<string, string | null | undefined>, settings: Settings, rules: Rules = DEFAULT_RULES,
+  opts: { holdings?: Pick<Holding, 'symbol' | 'shares'>[]; announcements?: Announcement[] } = {},
 ): ExpectedDividend[] {
   const filer = filerOf(settings);
+  const holdings = opts.holdings ?? [];
+  const notices = new Map((opts.announcements ?? []).map((a) => [a.id, a]));
   const window = receiptMatchDays(rules);
   const covered = (e: DividendEvent, symbol: string, from: string) =>
     receipts.some((r) => {
@@ -437,16 +509,18 @@ export function expectedDividends(
     });
   const out: ExpectedDividend[] = [];
   for (const e of events) {
-    if (!positive(e.dps) || !e.book_closure_from) continue;
+    if (!positive(e.dps)) continue;
+    const from = e.book_closure_from || bookClosureDate(notices.get(e.id), rules);
+    if (!from) continue;
     const symbol = sym(e.symbol);
-    const shares = sharesHeldOn(txns, symbol, addDays(e.book_closure_from, -1));
-    if (shares <= 0 || covered(e, symbol, e.book_closure_from)) continue;
+    const { shares, basis } = heldAtBookClosure(symbol, from, txns, holdings);
+    if (shares <= 0 || covered(e, symbol, from)) continue;
     const gross = r2(shares * e.dps);
     const wht_pct = whtPct(sectors[symbol] ?? sectors[e.symbol], filer, rules);
     const wht = r2((gross * wht_pct) / 100);
     out.push({
       dividend_id: e.id, symbol, shares, dps: e.dps, gross, wht_pct, wht, net: r2(gross - wht),
-      book_closure_from: e.book_closure_from, announced_on: e.announced_on, verified: e.verified === true,
+      book_closure_from: from, announced_on: e.announced_on, verified: e.verified === true, basis,
     });
   }
   return out.sort((a, b) => b.book_closure_from.localeCompare(a.book_closure_from) || b.announced_on.localeCompare(a.announced_on) || a.symbol.localeCompare(b.symbol));
@@ -585,6 +659,20 @@ export function benchmarkFromSnapshot(snapshots: PortfolioDay[], txns: Txn[], re
   const later = cashFlows(txns, receipts, myValue, today, settings, rules).filter((f) => f.kind !== 'value' && f.date > start.day);
   const flows: Flow[] = [{ date: start.day, amount: -start.value, kind: 'buy' }, ...later];
   return { start, bm: benchmark(flows, myValue, index, today) };
+}
+
+/**
+ * Whether the KSE-100 comparison may be shown: only once rules.performance.benchmark_min_days calendar days of
+ * portfolio history are stored (a few days tell you nothing). `starts_on` is the first stored day with a positive
+ * value on or before today (the same opening day benchmarkFromSnapshot uses), `ready_on` that day plus the minimum,
+ * so the screen can say "Comparison with the KSE-100 starts on <ready_on>". Both null with no history yet.
+ */
+export function benchmarkReady(snapshots: PortfolioDay[], today: string, rules: Rules = DEFAULT_RULES): { ready: boolean; starts_on: string | null; ready_on: string | null } {
+  const days = snapshots.filter((s) => finite(s.value) && s.value > 0 && typeof s.day === 'string' && s.day <= today).map((s) => s.day).sort();
+  const starts_on = days[0] ?? null;
+  if (!starts_on) return { ready: false, starts_on: null, ready_on: null };
+  const ready_on = addDays(starts_on, rules.performance.benchmark_min_days);
+  return { ready: today >= ready_on, starts_on, ready_on };
 }
 
 /** Net dividends received in total (all receipts), for "total return = price profit/loss + dividends". */

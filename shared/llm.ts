@@ -419,7 +419,7 @@ export class OpenRouterProvider extends BaseProvider {
     const fallbacks = at >= 0 ? this.candidates.slice(at, at + 3) : [model];
     this.usedModel = undefined;
     const j = await this.post('https://openrouter.ai/api/v1/chat/completions', {
-      Authorization: `Bearer ${this.apiKey}`, 'HTTP-Referer': 'https://github.com/mrnisarali110/psx-assistant', 'X-Title': 'PSX Assistant',
+      Authorization: `Bearer ${this.apiKey}`, 'HTTP-Referer': 'https://github.com/mrnisarali110/psx-assistant', 'X-Title': 'PSX Assist',
     }, {
       model,
       ...(fallbacks.length > 1 ? { models: fallbacks } : {}),

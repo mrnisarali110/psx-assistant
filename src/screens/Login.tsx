@@ -1,6 +1,11 @@
 import { useState, type FormEvent } from 'react';
 import { supabase } from '../lib/data.ts';
 import { Button, ErrorNote, Field, inputCls } from '../components/ui.tsx';
+import { LogoMark } from '../components/Splash.tsx';
+
+/** Text links stay 44px tall so they are easy to tap. */
+const linkCls = 'min-h-11 cursor-pointer px-2 font-semibold text-brand underline underline-offset-2';
+const quietLinkCls = 'min-h-11 cursor-pointer px-2 text-muted underline underline-offset-2';
 
 export function Login({ onDemo }: { onDemo: () => void }) {
   const [mode, setMode] = useState<'in' | 'up' | 'reset'>('in');
@@ -39,9 +44,9 @@ export function Login({ onDemo }: { onDemo: () => void }) {
   return (
     <div className="safe-top mx-auto flex min-h-dvh max-w-md flex-col justify-center gap-6 px-6 py-10">
       <div className="space-y-2 text-center">
-        <img src="/icons/icon-192.png" alt="" className="mx-auto h-16 w-16 rounded-2xl" />
-        <h1 className="text-2xl font-bold">PSX Assistant</h1>
-        <p className="text-sm text-slate-500 dark:text-slate-400">Buy, hold or wait, in five seconds. You place the trades.</p>
+        <LogoMark className="mx-auto h-16 w-16" />
+        <h1 className="text-28 font-bold tracking-tight">PSX Assist</h1>
+        <p className="text-14 text-muted">Buy, hold or wait, in five seconds. You place the trades.</p>
       </div>
       <form onSubmit={submit} className="space-y-4">
         <Field label="Email">
@@ -54,16 +59,16 @@ export function Login({ onDemo }: { onDemo: () => void }) {
           </Field>
         )}
         <ErrorNote error={error} />
-        {info && <p className="rounded-xl bg-teal-50 p-3 text-sm text-teal-900 dark:bg-teal-950 dark:text-teal-200">{info}</p>}
+        {info && <p className="rounded-control bg-brand/10 p-3 text-14 text-ink">{info}</p>}
         <Button type="submit" disabled={busy} className="w-full">
           {busy ? 'Please wait…' : mode === 'in' ? 'Sign in' : mode === 'up' ? 'Create free account' : 'Send reset link'}
         </Button>
       </form>
-      <div className="flex flex-col items-center gap-2 text-sm">
-        {mode !== 'in' && <button className="text-teal-700 underline dark:text-teal-400" onClick={() => setMode('in')}>I have an account</button>}
-        {mode !== 'up' && <button className="text-teal-700 underline dark:text-teal-400" onClick={() => setMode('up')}>Create a free account</button>}
-        {mode !== 'reset' && <button className="text-slate-500 underline" onClick={() => setMode('reset')}>Forgot password</button>}
-        <button className="mt-3 text-slate-500 underline" onClick={onDemo}>Try the demo without an account</button>
+      <div className="flex flex-col items-center gap-1 text-14">
+        {mode !== 'in' && <button type="button" className={linkCls} onClick={() => setMode('in')}>I have an account</button>}
+        {mode !== 'up' && <button type="button" className={linkCls} onClick={() => setMode('up')}>Create a free account</button>}
+        {mode !== 'reset' && <button type="button" className={quietLinkCls} onClick={() => setMode('reset')}>Forgot password</button>}
+        <button type="button" className={`mt-2 ${quietLinkCls}`} onClick={onDemo}>Try the demo without an account</button>
       </div>
     </div>
   );
@@ -83,7 +88,7 @@ export function NewPassword({ onDone }: { onDone: () => void }) {
   }
   return (
     <form onSubmit={submit} className="safe-top mx-auto flex min-h-dvh max-w-md flex-col justify-center gap-4 px-6">
-      <h1 className="text-xl font-bold">Choose a new password</h1>
+      <h1 className="text-20 font-bold">Choose a new password</h1>
       <Field label="New password" hint="At least 8 characters.">
         <input className={inputCls} type="password" autoComplete="new-password" minLength={8} required value={password} onChange={(e) => setPassword(e.target.value)} />
       </Field>

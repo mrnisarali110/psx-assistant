@@ -242,7 +242,7 @@ export interface AiPicks {
   kind: 'undervalued' | 'dividend';
   created_at: string;
   model: string | null;
-  items: { symbol: string; why: string; frequency?: string | null }[];
+  items: { symbol: string; why: string; frequency?: string | null; facts?: Record<string, number> }[]; // facts: the numbers behind the reason (new facts not on the card)
 }
 
 export type PriceMap = Record<string, Price>;

@@ -5,7 +5,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { TXN_CSV_TEMPLATE, dedupeTxns, parseTxnCsv, txnsToCsv } from '../../shared/transactions-csv.ts';
-import { dateLabel, rs, rs2, signedRs } from '../../shared/format.ts';
+import { day, rs, rs2, signedRs } from '../../shared/format.ts';
 import { pktDate } from '../../shared/time.ts';
 import type { Txn } from '../../shared/types.ts';
 import type { AppData, DataSource } from '../lib/data.ts';
@@ -13,7 +13,7 @@ import { haptic } from '../lib/gestures.ts';
 import { Icon } from './Icon.tsx';
 import { Sheet } from './Sheet.tsx';
 import { useToast } from './Toast.tsx';
-import { Button, Empty, ErrorNote, Field, Segmented, SymbolAvatar, Tag, inputCls } from './ui.tsx';
+import { Button, Chip, CompanyMark, Empty, ErrorNote, Field, Segmented, inputCls } from './ui.tsx';
 
 type Mode =
   | { kind: 'list' }
@@ -25,16 +25,18 @@ type ImportMode = Extract<Mode, { kind: 'import' }>;
 const r2 = (v: number) => Math.round(v * 100) / 100;
 const MAX_CSV_BYTES = 2_000_000; // a broker statement is a few KB; anything bigger is the wrong file
 const MAX_CSV_ROWS = 5000;
-const SOURCE_LABEL: Record<Txn['source'], string | null> = { manual: null, import: 'from screenshots', csv: 'from CSV' };
-const monthLabel = (ym: string) => new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'long', year: 'numeric' }).format(new Date(`${ym}-01T00:00:00Z`));
-/** "Oct 6, 2026": the import review has no month headings, so the year must be on the row. */
-const fullDate = (iso: string) => new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(`${iso}T00:00:00Z`));
+// A screenshot carries no trade date: such a buy is dated the day you chose on import (today unless changed).
+const SOURCE_LABEL: Record<Txn['source'], string | null> = { manual: null, import: 'from screenshots, check the date', csv: 'from CSV' };
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+/** "October 2026" for a YYYY-MM month heading (a heading, not a date, so not day()). */
+const monthLabel = (ym: string) => `${MONTHS[Number(ym.slice(5, 7)) - 1] ?? ym} ${ym.slice(0, 4)}`;
 /** Money out for a buy, money in for a sell. */
 const signedAmount = (t: Txn) => signedRs(t.side === 'buy' ? -t.amount : t.amount);
 const chargesLabel = (t: Txn) => (t.charges == null ? 'charges estimated' : `charges ${rs2(t.charges)}`);
-const sideTag = (side: Txn['side']) => <Tag tone={side === 'buy' ? 'green' : 'red'}>{side === 'buy' ? 'Buy' : 'Sell'}</Tag>;
+// Buy and sell are not price moves: neutral chips, the word carries it.
+const sideTag = (side: Txn['side']) => <Chip kind="neutral">{side === 'buy' ? 'Buy' : 'Sell'}</Chip>;
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
-const linkCls = 'inline-flex min-h-11 cursor-pointer items-center text-xs font-semibold text-teal-700 underline-offset-2 hover:underline dark:text-teal-400';
+const linkCls = 'inline-flex min-h-11 cursor-pointer items-center text-14 font-semibold text-brand underline-offset-2 hover:underline';
 
 /** A download URL for `text` while it is set; revoked when it changes or the sheet closes. */
 function useCsvUrl(text: string | null): string | undefined {
@@ -90,7 +92,7 @@ export function TransactionsSheet({ open, onClose, data, source, reload }: {
       <div className="space-y-4 pb-2">
         {mode.kind === 'list' && (
           <>
-            <p className="text-sm text-slate-600 dark:text-slate-300">
+            <p className="text-14 text-muted">
               Every buy and sell behind your returns, “invested this month” and the tax ledger. Holdings themselves are not changed here.
             </p>
             <div className="grid grid-cols-2 gap-2">
@@ -140,10 +142,10 @@ function TxnList({ txns, onPick }: { txns: Txn[]; onPick: (t: Txn) => void }) {
       {months.map((m) => (
         <section key={m.key} className="space-y-1" aria-label={monthLabel(m.key)}>
           <div className="flex items-baseline justify-between gap-3 px-1">
-            <h3 className="text-[13px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">{monthLabel(m.key)}</h3>
-            <span className="num text-xs text-slate-500 dark:text-slate-400">{m.bought > 0 ? `Bought ${rs(m.bought)}` : 'No buys'}</span>
+            <h3 className="text-12 font-semibold uppercase tracking-wide text-muted">{monthLabel(m.key)}</h3>
+            <span className="num text-12 text-muted">{m.bought > 0 ? `Bought ${rs(m.bought)}` : 'No buys'}</span>
           </div>
-          <ul className="divide-y divide-slate-100 dark:divide-slate-800">
+          <ul className="divide-y divide-line">
             {m.rows.map((t, i) => <TxnRow key={t.id ?? `${m.key}-${i}`} t={t} onPick={() => onPick(t)} />)}
           </ul>
         </section>
@@ -157,18 +159,18 @@ function TxnRow({ t, onPick }: { t: Txn; onPick: () => void }) {
   return (
     <li>
       <button type="button" onClick={() => { haptic(); onPick(); }} title="Tap to edit"
-        className="flex min-h-14 w-full cursor-pointer items-center gap-3 py-2 text-left active:opacity-60">
-        <SymbolAvatar symbol={t.symbol} size="h-10 w-10" />
+        className="press flex min-h-14 w-full cursor-pointer items-center gap-3 py-2 text-left active:opacity-60">
+        <CompanyMark symbol={t.symbol} />
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-2"><span className="font-semibold">{t.symbol}</span>{sideTag(t.side)}</span>
-          <span className="num block text-sm text-slate-600 dark:text-slate-300">{t.shares} × {rs2(t.price)}</span>
-          <span className="num block text-xs text-slate-500 dark:text-slate-400">{meta}</span>
+          <span className="num block text-14 text-muted">{t.shares} × {rs2(t.price)}</span>
+          <span className="num block text-12 text-muted">{meta}</span>
         </span>
         <span className="num shrink-0 text-right">
           <span className="block font-semibold">{signedAmount(t)}</span>
-          <span className="block text-xs text-slate-500 dark:text-slate-400">{dateLabel(t.executed_on)}</span>
+          <span className="block text-12 text-muted">{day(t.executed_on)}</span>
         </span>
-        <Icon name="chevron" className="h-4 w-4 shrink-0 text-slate-400" />
+        <Icon name="chevron" className="h-4 w-4 shrink-0 text-muted" />
       </button>
     </li>
   );
@@ -181,7 +183,7 @@ function SubHeader({ title, onBack }: { title: string; onBack: () => void }) {
   return (
     <div className="flex items-center gap-1">
       <Button kind="ghost" label="Back to the list" onClick={onBack} className="-ml-3 px-3"><Icon name="chevron" className="h-5 w-5 rotate-180" /></Button>
-      <h3 className="text-base font-semibold">{title}</h3>
+      <h3 className="text-16 font-semibold">{title}</h3>
     </div>
   );
 }
@@ -254,7 +256,7 @@ function TxnForm({ txn, today, source, onBack, onDone }: {
         </Field>
       </div>
       <div className="space-y-1">
-        <span className="block text-sm font-medium">Side</span>
+        <span className="block text-14 font-medium">Side</span>
         <Segmented label="Side" value={side} onChange={setSide} options={[{ value: 'buy', label: 'Buy' }, { value: 'sell', label: 'Sell' }]} />
       </div>
       <div className="grid grid-cols-2 gap-3">
@@ -269,14 +271,14 @@ function TxnForm({ txn, today, source, onBack, onDone }: {
         <input className={`${inputCls} num`} inputMode="decimal" value={charges} placeholder="estimate" onChange={(e) => setCharges(e.target.value)} />
       </Field>
       {valid && (
-        <p className="num rounded-2xl bg-slate-50 p-3 text-sm text-slate-600 dark:bg-slate-800/60 dark:text-slate-300" role="status">
+        <p className="num rounded-control bg-surface-2 p-3 text-14 text-muted" role="status">
           {qty} × {rs2(px)} = {rs2(r2(qty * px))} before charges
         </p>
       )}
       <ErrorNote error={error} />
       <Button className="w-full" disabled={busy != null} onClick={save}>{busy === 'save' ? 'Saving…' : txn ? 'Save changes' : 'Save'}</Button>
       {txn && (confirm ? (
-        <div role="alert" className="space-y-2 rounded-2xl bg-rose-50 p-3 text-sm text-rose-800 dark:bg-rose-950 dark:text-rose-300">
+        <div role="alert" className="space-y-2 rounded-control bg-caution/10 p-3 text-14 text-ink">
           <p>Delete this {txn.side} of {txn.shares} {txn.symbol}? It leaves the history for good; your holdings are not changed.</p>
           <div className="flex gap-2">
             <Button kind="secondary" className="flex-1" disabled={busy != null} onClick={() => setConfirm(false)}>Keep it</Button>
@@ -325,22 +327,22 @@ function ImportReview({ review, source, onBack, onDone }: {
   return (
     <div className="space-y-3">
       <SubHeader title="Import from CSV" onBack={onBack} />
-      <p className="text-sm text-slate-600 dark:text-slate-300">
-        <span className="font-medium">{file}</span>: {fresh.length ? `${plural(fresh.length, 'new row')} found. Untick any you do not want.`
+      <p className="text-14 text-muted">
+        <span className="font-medium text-ink">{file}</span>: {fresh.length ? `${plural(fresh.length, 'new row')} found. Untick any you do not want.`
           : duplicates > 0 || errors.length > 0 ? 'nothing new to import.' : 'no rows found in this file.'}
         {duplicates > 0 && ` ${duplicates} already recorded, skipped.`}
       </p>
       {fresh.length > 0 && (
-        <ul className="divide-y divide-slate-100 dark:divide-slate-800">
+        <ul className="divide-y divide-line">
           {fresh.map((t, i) => (
             <li key={i}>
               <label className="flex min-h-14 cursor-pointer items-center gap-3 py-2">
                 <input type="checkbox" checked={ticked.has(i)} onChange={() => toggle(i)} disabled={busy}
-                  aria-label={`Import ${t.side} of ${t.shares} ${t.symbol} on ${fullDate(t.executed_on)}`}
-                  className="h-5 w-5 shrink-0 rounded accent-teal-600" />
+                  aria-label={`Import ${t.side} of ${t.shares} ${t.symbol} on ${day(t.executed_on)}`}
+                  className="h-5 w-5 shrink-0 rounded accent-brand" />
                 <span className="min-w-0 flex-1">
                   <span className="flex items-center gap-2"><span className="font-semibold">{t.symbol}</span>{sideTag(t.side)}</span>
-                  <span className="num block text-xs text-slate-500 dark:text-slate-400">{t.shares} × {rs2(t.price)} · {fullDate(t.executed_on)} · {chargesLabel(t)}</span>
+                  <span className="num block text-12 text-muted">{t.shares} × {rs2(t.price)} · {day(t.executed_on)} · {chargesLabel(t)}</span>
                 </span>
                 <span className="num shrink-0 font-semibold">{signedAmount(t)}</span>
               </label>
@@ -349,7 +351,7 @@ function ImportReview({ review, source, onBack, onDone }: {
         </ul>
       )}
       {errors.length > 0 && (
-        <div role="status" className="space-y-1 rounded-2xl bg-amber-50 p-3 text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-300">
+        <div role="status" className="space-y-1 rounded-control bg-caution/10 p-3 text-12 text-ink">
           <p className="font-semibold">{plural(errors.length, 'row')} skipped. Fix the file and import it again; nothing below is saved.</p>
           <ul className="list-disc space-y-0.5 pl-4">
             {errors.slice(0, MAX_ERRORS_SHOWN).map((e, i) => <li key={i}>{e}</li>)}

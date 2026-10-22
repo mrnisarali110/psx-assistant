@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 const BIG_FIGURE_PX = 18;
 
@@ -32,4 +32,32 @@ export function useNumberFade() {
     o.observe(root, { subtree: true, characterData: true, childList: true });
     observer.current = o;
   }, []);
+}
+
+/**
+ * A hero number that counts up to its value in ~600ms (ease-out) the first time it shows, and glides to a new value
+ * after a refresh. Shows the final value at once under reduced motion, on the server and for a value that is not a
+ * finite number. Returns the value to display this frame.
+ */
+export function useCountUp(target: number, duration = 600): number {
+  const [shown, setShown] = useState(target);
+  const from = useRef<number | null>(null);
+  useEffect(() => {
+    const reduce = typeof window === 'undefined' || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    // First show starts from zero; later changes start from what is on screen now.
+    const start = from.current ?? 0;
+    from.current = target;
+    if (reduce || !Number.isFinite(target) || start === target || typeof requestAnimationFrame === 'undefined') { setShown(target); return; }
+    let raf = 0;
+    const t0 = performance.now();
+    const step = (t: number) => {
+      const k = Math.min(1, (t - t0) / duration);
+      const eased = 1 - Math.pow(1 - k, 3);
+      setShown(start + (target - start) * eased);
+      if (k < 1) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [target, duration]);
+  return shown;
 }

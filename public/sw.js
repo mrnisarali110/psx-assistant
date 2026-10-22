@@ -1,6 +1,6 @@
-/* PSX Assistant service worker: offline shell + web push. Bump CACHE to force an update. */
-const CACHE = 'psx-v2';
-const SHELL = ['/', '/index.html', '/manifest.webmanifest', '/icons/icon-192.png', '/favicon.svg'];
+/* PSX Assist service worker: offline shell + web push. Bump CACHE to force an update. */
+const CACHE = 'psx-v3';
+const SHELL = ['/', '/index.html', '/manifest.webmanifest', '/icons/icon-192.png', '/favicon.svg', '/logo.svg'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -50,10 +50,10 @@ self.addEventListener('push', (e) => {
   try {
     d = e.data ? e.data.json() : {};
   } catch {
-    d = { title: 'PSX Assistant', body: e.data ? e.data.text() : '' };
+    d = { title: 'PSX Assist', body: e.data ? e.data.text() : '' };
   }
   e.waitUntil(
-    self.registration.showNotification(d.title || 'PSX Assistant', {
+    self.registration.showNotification(d.title || 'PSX Assist', {
       body: d.body || '',
       icon: '/icons/icon-192.png',
       badge: '/icons/badge-72.png',

@@ -4,7 +4,8 @@
  */
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import type {
-  AiPicks, Announcement, AlertLogRow, DividendEvent, Holding, IndexDay, QuarterEarnings, IndexSnapshot, PortfolioDay, Price, PriceMap, Settings, Txn, WatchItem,
+  AiPicks, Announcement, AnnouncementMetrics, AlertLogRow, DividendEvent, Holding, IndexDay, QuarterEarnings, IndexSnapshot, PortfolioDay, PortfolioTick, Price,
+  PriceDay, PriceMap, Settings, Txn, WatchItem,
 } from '../shared/types.ts';
 import { DEFAULT_SETTINGS } from '../shared/types.ts';
 import type { ScreenRow } from '../shared/discover.ts';
@@ -50,7 +51,11 @@ export interface Store {
   setTelegramChat(userId: string, chatId: number): Promise<void>;
   saveScreen(rows: ScreenRow[]): Promise<void>;
   announcementsToRead(symbols: string[], sinceDate: string, limit: number): Promise<Announcement[]>;
-  saveAnnouncementDigest(id: string, d: { summary: string | null; figures: unknown; verified: boolean | null; date_note?: string | null }): Promise<void>;
+  saveAnnouncementDigest(id: string, d: Digest): Promise<void>;
+  /** The News card figures only (an older filing read again for its EPS keeps its summary). */
+  saveAnnouncementMetrics(id: string, m: AnnouncementMetrics): Promise<void>;
+  /** Results filings for these symbols published since the date, newest first, with whether and how they were read. */
+  resultsFilings(symbols: string[], sinceDate: string): Promise<ReadFiling[]>;
   /** Filings for these symbols published since the date, with AI summaries where read. */
   recentAnnouncements(symbols: string[], sinceDate: string): Promise<Announcement[]>;
   saveInsight(userId: string, row: InsightRow): Promise<void>;
@@ -77,6 +82,11 @@ export interface Store {
   saveIndexDay(d: IndexDay): Promise<void>;
   /** One portfolio value per user per trading day, for the Performance chart. */
   savePortfolioDay(userId: string, d: PortfolioDay): Promise<void>;
+  /** The portfolio value at one market check (Home's 1D chart); and the clean-up of ticks older than a time. */
+  savePortfolioTick(userId: string, t: PortfolioTick): Promise<void>;
+  prunePortfolioTicks(beforeIso: string): Promise<void>;
+  /** One close per stock per trading day (stock page chart); upsert on (symbol, day); no-op when empty. */
+  savePriceDays(rows: PriceDay[]): Promise<void>;
   /** Stored KSE-100 closes from a date on, oldest first (bull/bear trend). */
   indexCloses(sinceDate: string): Promise<IndexDay[]>;
   /** State Bank policy rate decisions, oldest first. */
@@ -91,8 +101,16 @@ export interface Store {
   macroReadings(sinceDate: string): Promise<MacroReading[]>;
 }
 
+/** What the AI read from a filing: summary and figures, plus the News card figures (migration 0012). */
+export interface Digest { summary: string | null; figures: unknown; verified: boolean | null; date_note?: string | null; metrics?: AnnouncementMetrics | null }
+/** A filing with the time it was read (null = not yet). */
+export type ReadFiling = Announcement & { ai_checked_at?: string | null };
+
 const READ_KINDS = ['dividend', 'results', 'board_meeting'];
 const num = (v: unknown) => (v == null ? null : Number(v));
+export const normEarnings = (r: any): QuarterEarnings => ({
+  ...r, profit_after_tax: Number(r.profit_after_tax), eps: num(r.eps), eps_basis: r.eps_basis ?? null, period_months: num(r.period_months),
+});
 
 function check<T>(res: { data: T; error: { message: string } | null }, what: string): T {
   if (res.error) throw new Error(`${what}: ${res.error.message}`);
@@ -247,10 +265,25 @@ export class SupabaseStore implements Store {
       .order('published_at', { ascending: false }).limit(limit), 'announcements to read') as Announcement[];
   }
 
-  async saveAnnouncementDigest(id: string, d: { summary: string | null; figures: unknown; verified: boolean | null; date_note?: string | null }) {
+  async saveAnnouncementDigest(id: string, d: Digest) {
     check(await this.sb.from('announcements').update({
       ai_summary: d.summary, ai_figures: d.figures, ai_verified: d.verified, ai_checked_at: new Date().toISOString(), ai_date_note: d.date_note ?? null,
+      ai_metrics: d.metrics ?? null,
     }).eq('id', id), 'save digest');
+  }
+
+  async saveAnnouncementMetrics(id: string, m: AnnouncementMetrics) {
+    check(await this.sb.from('announcements').update({ ai_metrics: m }).eq('id', id), 'save filing figures');
+  }
+
+  async resultsFilings(symbols: string[], sinceDate: string) {
+    const out: ReadFiling[] = [];
+    for (let i = 0; i < symbols.length; i += 150) {
+      out.push(...check(await this.sb.from('announcements').select('id, symbol, title, kind, published_at, pdf_url, ai_metrics, ai_checked_at')
+        .in('symbol', symbols.slice(i, i + 150)).eq('kind', 'results').gte('published_at', sinceDate)
+        .order('published_at', { ascending: false }).limit(2000), 'results filings') as ReadFiling[]);
+    }
+    return out;
   }
 
   async recentAnnouncements(symbols: string[], sinceDate: string) {
@@ -318,7 +351,7 @@ export class SupabaseStore implements Store {
   async earnings(symbols: string[], sinceDate: string) {
     if (!symbols.length) return [];
     const rows = check(await this.sb.from('earnings').select('*').in('symbol', symbols).gte('period_end', sinceDate).order('period_end', { ascending: false }).limit(1000), 'earnings') as any[];
-    return rows.map((r) => ({ ...r, profit_after_tax: Number(r.profit_after_tax) }));
+    return rows.map(normEarnings);
   }
 
   async saveDividend(d: DividendEvent) {
@@ -345,6 +378,18 @@ export class SupabaseStore implements Store {
 
   async savePortfolioDay(userId: string, d: PortfolioDay) {
     check(await this.sb.from('portfolio_daily').upsert({ ...d, user_id: userId }, { onConflict: 'user_id,day' }), 'save portfolio day');
+  }
+
+  async savePortfolioTick(userId: string, t: PortfolioTick) {
+    check(await this.sb.from('portfolio_ticks').upsert({ ...t, user_id: userId }, { onConflict: 'user_id,ts' }), 'save portfolio tick');
+  }
+
+  async prunePortfolioTicks(beforeIso: string) {
+    check(await this.sb.from('portfolio_ticks').delete().lt('ts', beforeIso), 'prune portfolio ticks');
+  }
+
+  async savePriceDays(rows: PriceDay[]) {
+    for (let i = 0; i < rows.length; i += 500) check(await this.sb.from('price_daily').upsert(rows.slice(i, i + 500), { onConflict: 'symbol,day' }), 'save price days');
   }
 
   async indexCloses(since: string) {
@@ -442,9 +487,17 @@ export class MemoryStore implements Store {
     return this.announcements.filter((a) => symbols.includes(a.symbol) && READ_KINDS.includes(a.kind) && a.pdf_url && a.published_at >= since && !a.ai_checked_at)
       .sort((a, b) => b.published_at.localeCompare(a.published_at)).slice(0, limit);
   }
-  async saveAnnouncementDigest(id: string, d: { summary: string | null; figures: unknown; verified: boolean | null; date_note?: string | null }) {
+  async saveAnnouncementDigest(id: string, d: Digest) {
     const a = this.announcements.find((x) => x.id === id);
-    if (a) Object.assign(a, { ai_summary: d.summary, ai_figures: d.figures, ai_verified: d.verified, ai_checked_at: this.clock().toISOString(), ai_date_note: d.date_note ?? null });
+    if (a) Object.assign(a, { ai_summary: d.summary, ai_figures: d.figures, ai_verified: d.verified, ai_checked_at: this.clock().toISOString(), ai_date_note: d.date_note ?? null, ai_metrics: d.metrics ?? null });
+  }
+  async saveAnnouncementMetrics(id: string, m: AnnouncementMetrics) {
+    const a = this.announcements.find((x) => x.id === id);
+    if (a) a.ai_metrics = m;
+  }
+  async resultsFilings(symbols: string[], since: string) {
+    return this.announcements.filter((a) => symbols.includes(a.symbol) && a.kind === 'results' && a.published_at >= since)
+      .sort((a, b) => b.published_at.localeCompare(a.published_at)).map((a) => ({ ...a }));
   }
   async recentAnnouncements(symbols: string[], since: string) { return this.announcements.filter((a) => symbols.includes(a.symbol) && a.published_at >= since); }
   async saveInsight(userId: string, row: InsightRow) { this.insights.push({ ...row, user_id: userId, created_at: this.clock().toISOString() }); }
@@ -498,5 +551,14 @@ export class MemoryStore implements Store {
   async macroReadings(since: string) { return this.macro.filter((r) => r.as_of >= since).sort((a, b) => a.as_of.localeCompare(b.as_of) || a.series.localeCompare(b.series)); }
   async savePortfolioDay(userId: string, d: PortfolioDay) {
     this.portfolioDays = [...this.portfolioDays.filter((x) => !(x.user_id === userId && x.day === d.day)), { ...d, user_id: userId }];
+  }
+  ticks: (PortfolioTick & { user_id: string })[] = [];
+  async savePortfolioTick(userId: string, t: PortfolioTick) {
+    this.ticks = [...this.ticks.filter((x) => !(x.user_id === userId && x.ts === t.ts)), { ...t, user_id: userId }];
+  }
+  async prunePortfolioTicks(beforeIso: string) { this.ticks = this.ticks.filter((t) => t.ts >= beforeIso); }
+  priceDays: PriceDay[] = [];
+  async savePriceDays(rows: PriceDay[]) {
+    for (const r of rows) this.priceDays = [...this.priceDays.filter((x) => !(x.symbol === r.symbol && x.day === r.day)), { ...r }];
   }
 }

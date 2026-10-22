@@ -1,35 +1,33 @@
 /**
  * Market Compass in the app. `MarketCard` is the glance on Home (KSE-100, the action for extra money, three lights and
- * a rates strip); `MarketDetails` is the Market page: the compass with its reasons, the P/E gauge, shares against safe
- * yield, the trend chart, rates and inflation, Pakistan at a glance, and where spare cash could go.
+ * a rates strip); `MarketDetails` is the Market page: the compass, the P/E gauge, shares against safe yield, the trend
+ * chart, rates and inflation, Pakistan at a glance, and where spare cash could go.
+ * Each card shows its light, its number and one line; the method, reasons, sources and "to verify" notes sit behind a
+ * "How this works" sheet per card (owner review 2026-10-23).
  * Display only: every figure comes from shared/compass.ts and shared/regime.ts, every threshold from rules.json
- * (`compass`, `regime`). Colour always backs up a word (Cheap, Sideways, Bonds pay more), never replaces it, and a
+ * (`compass`, `regime`). Colour always backs up a word (Cheap, Sideways, Safe yield pays more), never replaces it, and a
  * figure we don't have shows as "n/a", never a guess.
  */
 import { useMemo, type ReactNode } from 'react';
 import type { AppData } from '../lib/data.ts';
-import { compass, GAP_WORD, TREND_WORD, VALUE_WORD, type ActionKey, type Compass, type GapState, type Latest, type Trend, type ValueState } from '../../shared/compass.ts';
+import { compass, GAP_WORD, TREND_WORD, VALUE_WORD, type ActionKey, type Compass, type GapBasis, type GapState, type Latest, type Trend, type ValueState } from '../../shared/compass.ts';
 import { marketBreadth, rateCycles, type PolicyRate, type RateCycle, type RatePeriod, type RegimeDay } from '../../shared/regime.ts';
 import { daysBetween, pktDate } from '../../shared/time.ts';
 import { DEFAULT_RULES, type IndexDay } from '../../shared/types.ts';
-import { asOfLabel, num, pct } from '../../shared/format.ts';
+import { day, dayTime, num, sessionLabel } from '../../shared/format.ts';
 import { Icon } from './Icon.tsx';
-import { Card, Tag, changeTone } from './ui.tsx';
+import { Card, Change, Chip, HowItWorks } from './ui.tsx';
 
 const RULES = DEFAULT_RULES.regime;
 const K = DEFAULT_RULES.compass;
-const muted = 'text-slate-500 dark:text-slate-400';
 const SBP_URL = 'https://www.sbp.org.pk/our-operations/monetary-policy';
 const RATE_CHART_FROM = '2015-01-01';
 const SIP_LINE = 'Your monthly investment (SIP) always runs; only extra money changes.';
-const linkCls = 'inline-flex min-h-11 items-center gap-1 font-medium text-teal-700 underline underline-offset-2 dark:text-teal-400';
+const linkCls = 'inline-flex min-h-11 items-center gap-1 font-medium text-brand underline underline-offset-2';
 
-/** "Oct 5, 2026": the sheet spans years, so dates carry the year. */
-const fullDate = (iso: string) =>
-  new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(iso + 'T00:00:00Z'));
-/** "Sep 2026" for a monthly figure such as CPI. */
-const monthLabel = (iso: string) =>
-  new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'short', year: 'numeric' }).format(new Date(iso + 'T00:00:00Z'));
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+/** "Sep 2026" for a monthly figure such as CPI (a day would name a date the figure doesn't belong to). */
+const month = (iso: string) => `${MONTHS[Number(iso.slice(5, 7)) - 1]} ${iso.slice(0, 4)}`;
 const plural = (v: number, word: string) => `${v} ${word}${v === 1 ? '' : 's'}`;
 /** 12 days, 3.4 months, 2.1 years. */
 function duration(days: number): string {
@@ -39,23 +37,48 @@ function duration(days: number): string {
 }
 /** +1.2, −0.4 (a true minus sign, so it reads well and doesn't wrap). */
 const signed = (v: number, digits = 1) => `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toFixed(digits)}`;
-/** +1.0, -0.5, +0.25 percentage points. */
-const points = (v: number) => `${v > 0 ? '+' : ''}${Number.isInteger(v * 10) ? v.toFixed(1) : v.toFixed(2)} points`;
 const pc = (v: number | null | undefined, digits = 1) => (v == null ? null : `${v.toFixed(digits)}%`);
 const CYCLE_WORD: Record<RateCycle, string> = { easing: 'Easing', tightening: 'Tightening', on_hold: 'On hold' };
+const BASIS_WORD: Record<GapBasis, string> = { money_market: 'vs money market', pib: 'vs 10-year bond' };
 
-/** A rules note: "VERIFY:" in front (or "VERIFY." at the end) becomes an amber "to verify" tag. */
-function Note({ text, className = '' }: { text: string; className?: string }) {
+/**
+ * A move that is not a price or return (the rupee, the policy rate): arrow and sign in the body colour, since green
+ * for "rupee weaker" or "rate up" would say good or bad where we mean neither.
+ */
+function Moved({ value, unit = '%', digits = 1 }: { value: number; unit?: string; digits?: number }) {
+  const flat = Number(Math.abs(value).toFixed(digits)) === 0;
+  return (
+    <span className="num whitespace-nowrap">
+      <span aria-hidden="true" className="text-[0.8em]">{flat ? '–' : value > 0 ? '▲' : '▼'}</span> {signed(value, digits)}{unit}
+    </span>
+  );
+}
+
+/** A rules note: "VERIFY:" in front (or "VERIFY." at the end) becomes a "To verify" chip. */
+function Note({ text }: { text: string }) {
   const unverified = /VERIFY/.test(text);
   const stripped = text.replace(/^VERIFY:\s*/, '').replace(/,\s*VERIFY\.?\s*$/, '.');
   const body = stripped.charAt(0).toUpperCase() + stripped.slice(1);
   return (
-    <p className={`text-[11px] leading-relaxed ${muted} ${className}`}>
-      {unverified && <span className="mr-1 align-middle"><Tag tone="amber">to verify</Tag></span>}
+    <p className="text-14 text-muted">
+      {unverified && <span className="mr-1.5 align-middle"><Chip kind="caution">To verify</Chip></span>}
       {body}
     </p>
   );
 }
+
+/** One titled block inside a "How this works" sheet. */
+function Part({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="space-y-1.5">
+      <h3 className="text-12 font-semibold tracking-wide text-muted uppercase">{title}</h3>
+      {children}
+    </div>
+  );
+}
+const Bullets = ({ items }: { items: string[] }) => (
+  <ul className="list-disc space-y-1 pl-5 text-14">{items.map((r) => <li key={r}>{r}</li>)}</ul>
+);
 
 // ---------------------------------------------------------------------------
 // The shared reading
@@ -82,6 +105,22 @@ function trendPeriods(days: { day: string; key: TrendKey }[], today: string): Tr
 }
 
 /**
+ * A stored day's shares-vs-safe-yield reading. Readings are never recomputed: rows saved before the money-market basis
+ * (2026-10-23) carry no `gap_basis` and were measured against the 10-year bond, so they say so.
+ */
+interface StoredGap { day: string; spread: number; basis: GapBasis }
+function storedGap(d: RegimeDay): StoredGap | null {
+  const k = d.compass as { spread_pct?: unknown; gap_basis?: unknown } | null | undefined;
+  if (!k || typeof k !== 'object' || typeof k.spread_pct !== 'number') return null;
+  return { day: d.day, spread: k.spread_pct, basis: k.gap_basis === 'money_market' ? 'money_market' : 'pib' };
+}
+
+/** The Trend light's word: "Sideways · provisional" while the 200-day average is not known yet. */
+const trendWord = (t: Compass['trend']) => (t.state ? `${TREND_WORD[t.state]}${t.provisional ? ' · provisional' : ''}` : null);
+/** "200-day average (needs 120 stored closes; 37 so far)" while provisional, from the same reasons the rule gives. */
+const maReason = (t: Compass['trend']) => t.reasons.find((r) => /day average/.test(r)) ?? null;
+
+/**
  * Everything the market views need, shared by Home and the Market page. The compass is worked out here from the same
  * data and rules the night check uses (stored readings only feed the trend history); unknown stays unknown.
  */
@@ -94,11 +133,13 @@ export function useCompass(data: AppData) {
       today, closes: data.indexDaily.filter((d) => d.day < indexDay), close: data.index?.kse100 ?? null,
       breadth, macro: data.macro, rates: data.policyRates,
     });
-    let provisional = false;
+    // No stored readings yet: the period list shows today's live reading only, and says the history is still to come.
+    let unstored = false;
     let rows = data.regime.map((d) => ({ day: d.day, key: trendKey(d) }));
-    if (!rows.length && c.trend.state) { rows = [{ day: indexDay, key: c.trend.state }]; provisional = true; }
+    if (!rows.length && c.trend.state) { rows = [{ day: indexDay, key: c.trend.state }]; unstored = true; }
     const periods = trendPeriods(rows, today);
-    return { today, indexDay, c, breadth, periods, provisional };
+    const pastGaps = data.regime.map(storedGap).filter((g): g is StoredGap => g != null);
+    return { today, indexDay, c, breadth, periods, unstored, pastGaps };
   }, [data.regime, data.policyRates, data.screen, data.index, data.indexDaily, data.macro]);
 }
 
@@ -107,32 +148,33 @@ export function useCompass(data: AppData) {
 // ---------------------------------------------------------------------------
 type Mood = 'good' | 'neutral' | 'caution' | 'bad' | 'unknown';
 const MOOD: Record<Mood, { pill: string; dot: string; panel: string; word: string }> = {
-  good: { pill: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300', dot: 'bg-emerald-500', panel: 'bg-emerald-50 dark:bg-emerald-950/60', word: 'text-emerald-800 dark:text-emerald-300' },
-  neutral: { pill: 'bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300', dot: 'bg-sky-500', panel: 'bg-sky-50 dark:bg-sky-950/50', word: 'text-sky-800 dark:text-sky-300' },
-  caution: { pill: 'bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-300', dot: 'bg-amber-500', panel: 'bg-amber-50 dark:bg-amber-950/50', word: 'text-amber-900 dark:text-amber-300' },
-  bad: { pill: 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300', dot: 'bg-rose-500', panel: 'bg-rose-50 dark:bg-rose-950/50', word: 'text-rose-800 dark:text-rose-300' },
-  unknown: { pill: 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400', dot: 'bg-slate-400', panel: 'bg-slate-50 dark:bg-slate-800/60', word: 'text-slate-500 dark:text-slate-400' },
+  good: { pill: 'bg-surface text-up ring-1 ring-up/40', dot: 'bg-up', panel: 'bg-up/10', word: 'text-up' },
+  neutral: { pill: 'bg-surface text-info ring-1 ring-info/40', dot: 'bg-info', panel: 'bg-info/10', word: 'text-info' },
+  caution: { pill: 'bg-surface text-caution ring-1 ring-caution/40', dot: 'bg-caution', panel: 'bg-caution/10', word: 'text-caution' },
+  bad: { pill: 'bg-surface text-down ring-1 ring-down/40', dot: 'bg-down', panel: 'bg-down/10', word: 'text-down' },
+  unknown: { pill: 'bg-surface text-muted ring-1 ring-line', dot: 'bg-muted', panel: 'bg-surface-2', word: 'text-muted' },
 };
 const VALUE_MOOD: Record<ValueState, Mood> = { cheap: 'good', fair: 'neutral', expensive: 'bad' };
 const GAP_MOOD: Record<GapState, Mood> = { shares: 'good', even: 'neutral', safe: 'caution' };
 const TREND_MOOD: Record<TrendKey, Mood> = { up: 'good', sideways: 'neutral', down: 'bad', not_up: 'unknown' };
 const ACTION_MOOD: Record<ActionKey, Mood> = { add_extra: 'good', buy_in_steps: 'neutral', on_schedule: 'neutral', park_extra: 'caution' };
 
-interface LightView { id: string; label: string; word: string | null; figure: string | null; mood: Mood }
+interface LightView { id: 'value' | 'gap' | 'trend'; label: string; word: string | null; figure: ReactNode; mood: Mood }
 
 function lights(c: Compass): LightView[] {
   const t = c.trend;
   return [
     { id: 'value', label: 'Value', word: c.value.state ? VALUE_WORD[c.value.state] : null, figure: c.value.pe != null ? `P/E ${c.value.pe.toFixed(1)}x` : null, mood: c.value.state ? VALUE_MOOD[c.value.state] : 'unknown' },
-    { id: 'gap', label: 'Shares vs bonds', word: c.gap.state ? GAP_WORD[c.gap.state] : null, figure: c.gap.spread_pct != null ? `${signed(c.gap.spread_pct)} pts` : null, mood: c.gap.state ? GAP_MOOD[c.gap.state] : 'unknown' },
-    { id: 'trend', label: 'Trend', word: t.state ? TREND_WORD[t.state] : null, figure: t.one_year_pct != null ? `${signed(t.one_year_pct)}% 1y` : null, mood: t.state ? TREND_MOOD[t.state] : 'unknown' },
+    { id: 'gap', label: 'Shares vs safe yield', word: c.gap.state ? GAP_WORD[c.gap.state] : null, figure: c.gap.spread_pct != null ? `${signed(c.gap.spread_pct)} pts` : null, mood: c.gap.state ? GAP_MOOD[c.gap.state] : 'unknown' },
+    { id: 'trend', label: 'Trend', word: trendWord(t), figure: t.one_year_pct != null ? <><Change value={t.one_year_pct} /> 1y</> : null, mood: t.state ? TREND_MOOD[t.state] : 'unknown' },
   ];
 }
 
 function LightPill({ word, mood, big = false }: { word: string | null; mood: Mood; big?: boolean }) {
+  const m = MOOD[word ? mood : 'unknown'];
   return (
-    <span className={`inline-flex max-w-full items-center gap-1.5 font-semibold ${big ? 'rounded-full px-3 py-1 text-sm' : 'rounded-xl px-2 py-0.5 text-xs leading-snug'} ${MOOD[word ? mood : 'unknown'].pill}`}>
-      <span className={`h-2 w-2 shrink-0 rounded-full ${MOOD[word ? mood : 'unknown'].dot}`} aria-hidden="true" />
+    <span className={`inline-flex max-w-full items-center gap-1.5 font-semibold ${big ? 'rounded-chip px-3 py-1 text-14' : 'rounded-control px-2 py-0.5 text-12'} ${m.pill}`}>
+      <span className={`h-2 w-2 shrink-0 rounded-full ${m.dot}`} aria-hidden="true" />
       <span className="min-w-0">{word ?? 'n/a'}</span>
     </span>
   );
@@ -156,36 +198,39 @@ export function MarketCard({ data, onOpen, footnote }: { data: AppData; onOpen: 
     <Card onClick={onOpen} className="space-y-3">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className={`text-xs ${muted}`}>Market · KSE-100</p>
-          <p className="num text-2xl font-bold tracking-tight">{idx ? num(idx.kse100, 0) : 'no data'}</p>
-          <p className={`num text-xs font-semibold ${changeTone(idx?.change_pct)}`}>{pct(idx?.change_pct, 2)} today</p>
+          <p className="text-12 text-muted">Market · KSE-100</p>
+          <p className="num text-28 font-bold tracking-tight">{idx ? num(idx.kse100, 0) : 'no data'}</p>
+          {idx && <p className="text-12 font-semibold"><Change value={idx.change_pct} digits={2} /> <span className="font-normal text-muted">{sessionLabel(idx.ts)}</span></p>}
         </div>
-        <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-teal-700 dark:text-teal-400">
+        <span className="inline-flex shrink-0 items-center gap-1 text-12 font-semibold text-brand">
           <Icon name="compass" className="h-4 w-4" />Compass<Icon name="chevron" className="h-4 w-4" />
         </span>
       </div>
 
-      <div className={`rounded-2xl px-3 py-2.5 ${MOOD[mood].panel}`}>
-        <p className={`text-[15px] leading-snug font-semibold ${MOOD[mood].word}`}>{c.action.title}</p>
-        <p className="mt-0.5 flex items-center gap-1 text-xs text-slate-600 dark:text-slate-300">
-          <Icon name="check" className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />Your monthly investment stays on
+      <div className={`rounded-control px-3 py-2.5 ${MOOD[mood].panel}`}>
+        {/* 16px is not large text, so the title stays ink (contrast); the tint and the dot carry the tone. */}
+        <p className="flex items-center gap-2 text-16 font-semibold">
+          <span className={`h-2 w-2 shrink-0 rounded-full ${MOOD[mood].dot}`} aria-hidden="true" />{c.action.title}
+        </p>
+        <p className="mt-0.5 flex items-center gap-1 text-12 text-ink">
+          <Icon name="check" className="h-3.5 w-3.5 shrink-0 text-info" />Your monthly investment stays on
         </p>
       </div>
 
       <dl className="grid grid-cols-3 gap-2">
         {lights(c).map((l) => (
-          <div key={l.id} className="min-w-0 rounded-2xl bg-slate-50 px-2 py-2 dark:bg-slate-800/60">
-            <dt className={`truncate text-[11px] ${muted}`}>{l.label}</dt>
+          <div key={l.id} className="min-w-0 rounded-control bg-surface-2 px-2 py-2">
+            <dt className="min-h-8 text-12 text-muted">{l.label}</dt>
             <dd className="mt-1"><LightPill word={l.word} mood={l.mood} /></dd>
-            <dd className={`num mt-1 text-xs ${l.figure ? 'font-semibold' : muted}`}>{l.figure ?? (l.word ? 'n/a' : 'no data yet')}</dd>
+            <dd className={`num mt-1 text-12 ${l.figure ? 'font-semibold' : 'text-muted'}`}>{l.figure ?? (l.word ? 'n/a' : 'no data yet')}</dd>
           </div>
         ))}
       </dl>
 
-      <p className="num flex flex-wrap gap-x-2 gap-y-0.5 text-[11px] text-slate-600 dark:text-slate-300" aria-label="Rates">
+      <p className="num flex flex-wrap gap-x-2 gap-y-0.5 text-12 text-muted" aria-label="Rates">
         {rates.map((r, i) => (
           <span key={r.label} className="whitespace-nowrap">
-            {r.label} <b className={r.value ? 'font-semibold' : `font-normal ${muted}`}>{r.value ?? 'n/a'}</b>{i < rates.length - 1 && <span className={`ml-2 ${muted}`} aria-hidden="true">·</span>}
+            {r.label} <b className={r.value ? 'font-semibold text-ink' : 'font-normal'}>{r.value ?? 'n/a'}</b>{i < rates.length - 1 && <span className="ml-2" aria-hidden="true">·</span>}
           </span>
         ))}
       </p>
@@ -193,7 +238,7 @@ export function MarketCard({ data, onOpen, footnote }: { data: AppData; onOpen: 
       {data.indexDaily.length >= 2
         ? <IndexChart closes={data.indexDaily} periods={periods} today={today} compact />
         : <MiniTrend values={data.indexHistory.map((i) => i.kse100)} />}
-      {footnote && <p className={`text-[11px] ${muted}`}>{footnote}</p>}
+      {footnote && <p className="text-12 text-muted">{footnote}</p>}
     </Card>
   );
 }
@@ -207,7 +252,7 @@ function MiniTrend({ values }: { values: number[] }) {
   const up = values[values.length - 1] >= values[0];
   return (
     <svg viewBox="0 0 300 60" preserveAspectRatio="none" className="h-14 w-full" role="img" aria-label={`KSE-100 recent readings, ${up ? 'up' : 'down'} from ${num(values[0], 0)} to ${num(values[values.length - 1], 0)}`}>
-      <polyline points={pts} fill="none" strokeWidth="2" strokeLinejoin="round" vectorEffect="non-scaling-stroke" className={up ? 'stroke-emerald-500' : 'stroke-rose-500'} />
+      <polyline points={pts} fill="none" strokeWidth="2" strokeLinejoin="round" vectorEffect="non-scaling-stroke" className={up ? 'stroke-up' : 'stroke-down'} />
     </svg>
   );
 }
@@ -215,13 +260,17 @@ function MiniTrend({ values }: { values: number[] }) {
 // ---------------------------------------------------------------------------
 // The Market page
 // ---------------------------------------------------------------------------
-function SectionCard({ id, title, icon, children, className = '' }: { id: string; title: string; icon?: Parameters<typeof Icon>[0]['name']; children: ReactNode; className?: string }) {
+/** A Market card: title, then the light, the number and one line; `how` is the "How this works" sheet's content. */
+function SectionCard({ id, title, icon, how, children, className = '' }: {
+  id: string; title: string; icon?: Parameters<typeof Icon>[0]['name']; how?: ReactNode; children: ReactNode; className?: string;
+}) {
   return (
-    <section aria-labelledby={id} className={`min-w-0 rounded-3xl bg-white p-4 ring-1 ring-slate-200/80 lg:p-5 dark:bg-slate-900 dark:ring-slate-800 ${className}`}>
-      <h2 id={id} className="flex items-center gap-2 font-semibold">
-        {icon && <Icon name={icon} className="h-4.5 w-4.5 text-teal-600 dark:text-teal-400" />}{title}
+    <section aria-labelledby={id} className={`min-w-0 rounded-card bg-surface p-4 ring-1 ring-line lg:p-5 ${className}`}>
+      <h2 id={id} className="flex items-center gap-2 text-16 font-semibold">
+        {icon && <Icon name={icon} className="h-4.5 w-4.5 text-muted" />}{title}
       </h2>
       {children}
+      {how && <div className="mt-1 -mb-2"><HowItWorks title={title}>{how}</HowItWorks></div>}
     </section>
   );
 }
@@ -231,25 +280,34 @@ const SERIES_SOURCE: Record<string, string> = {
   fx_reserves_total: 'SBP reserves', pkr_usd: 'SBP exchange rate', kse100_1y_pct: 'PSX',
 };
 
-/** "SBP PIB auction, Oct 7, 2026" linking to the document it came from (when we have its address). */
+/** "SBP PIB auction, Oct 7" linking to the document it came from (when we have its address). */
 function SourceLink({ series, l }: { series: string; l: Latest }) {
-  const label = `${SERIES_SOURCE[series] ?? 'Source'}, ${series === 'cpi_yoy' ? monthLabel(l.as_of) : fullDate(l.as_of)}`;
+  const label = `${SERIES_SOURCE[series] ?? 'Source'}, ${series === 'cpi_yoy' ? month(l.as_of) : day(l.as_of)}`;
   return /^https?:\/\//.test(l.source)
     ? <a href={l.source} target="_blank" rel="noopener noreferrer" className={linkCls}>{label}<Icon name="external" className="h-3.5 w-3.5" /></a>
     : <span>{label}</span>;
 }
+function Sources({ items }: { items: [string, Latest | null][] }) {
+  const known = items.filter((s): s is [string, Latest] => s[1] != null);
+  if (!known.length) return <p className="text-14 text-muted">Not read yet.</p>;
+  return (
+    <ul className="text-14">
+      {known.map(([s, l]) => <li key={s} className="flex flex-wrap items-center gap-x-1.5"><SourceLink series={s} l={l} /><OldTag l={l} /></li>)}
+    </ul>
+  );
+}
 
-const OldTag = ({ l }: { l: Latest | null }) => (l?.stale ? <Tag tone="amber">old</Tag> : null);
+const OldTag = ({ l }: { l: Latest | null }) => (l?.stale ? <Chip kind="caution">Old</Chip> : null);
 
 /** The Market page body: a grid on wide screens, one column on a phone. */
 export function MarketDetails({ data }: { data: AppData }) {
-  const { c, periods, today, provisional } = useCompass(data);
+  const { c, periods, today, unstored, pastGaps } = useCompass(data);
   return (
     <div className="space-y-4 lg:grid lg:grid-cols-2 lg:items-start lg:gap-5 lg:space-y-0">
       <CompassHero c={c} asOf={data.index?.ts ?? null} />
       <ValueCard c={c} />
-      <GapCard c={c} />
-      <TrendCard c={c} data={data} periods={periods} today={today} provisional={provisional} />
+      <GapCard c={c} past={pastGaps} />
+      <TrendCard c={c} data={data} periods={periods} today={today} unstored={unstored} />
       <div className="space-y-4 lg:space-y-5">
         <MixCard c={c} />
         <GlanceCard c={c} />
@@ -264,48 +322,62 @@ const TREND_NOTE = 'In past data a trend rule cut how deep crashes went; it did 
 
 function CompassHero({ c, asOf }: { c: Compass; asOf: string | null }) {
   const mood = ACTION_MOOD[c.action.key];
-  const reasons: Record<string, string[]> = { value: c.value.reasons, gap: c.gap.reasons, trend: c.trend.reasons };
-  const notes: Record<string, string | undefined> = { value: VALUE_NOTE, trend: TREND_NOTE };
+  const reasons: Record<LightView['id'], string[]> = { value: c.value.reasons, gap: c.gap.reasons, trend: c.trend.reasons };
+  const how = <>
+    <p>Three separate lights, never one score. Worked out from PSX, SBP and PBS figures{asOf ? `; KSE-100 as of ${dayTime(asOf)}` : ''}.</p>
+    {lights(c).map((l) => <Part key={l.id} title={l.label}><Bullets items={reasons[l.id]} /></Part>)}
+    <Part title="Keep in mind">
+      <p className="text-14 text-muted">{VALUE_NOTE}</p>
+      <p className="text-14 text-muted">{TREND_NOTE}</p>
+      <p className="text-14 text-muted">A rule of thumb, not advice.</p>
+    </Part>
+  </>;
   return (
-    <SectionCard id="mc-compass" title="Compass" icon="compass" className="lg:col-span-2">
-      <div className={`mt-2 rounded-2xl px-4 py-3 lg:px-5 lg:py-4 ${MOOD[mood].panel}`}>
-        <p className={`text-xl leading-tight font-bold tracking-tight lg:text-2xl ${MOOD[mood].word}`}>{c.action.title}</p>
-        <p className="mt-1 text-sm leading-snug">{c.action.detail}</p>
-        <p className="mt-2 flex items-start gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-200">
-          <Icon name="shield" className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" />{SIP_LINE}
+    <SectionCard id="mc-compass" title="Compass" icon="compass" className="lg:col-span-2" how={how}>
+      <div className={`mt-2 rounded-control px-4 py-3 lg:px-5 lg:py-4 ${MOOD[mood].panel}`}>
+        <p className={`text-20 font-bold tracking-tight lg:text-28 ${MOOD[mood].word}`}>{c.action.title}</p>
+        <p className="mt-1 text-14">{c.action.detail}</p>
+        <p className="mt-2 flex items-start gap-1.5 text-14 font-medium">
+          <Icon name="shield" className="mt-0.5 h-4 w-4 shrink-0 text-info" />{SIP_LINE}
         </p>
       </div>
-      <ul className="mt-3 grid gap-3 md:grid-cols-3">
+      <ul className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3 sm:gap-3">
         {lights(c).map((l) => (
-          <li key={l.id} className="min-w-0 rounded-2xl bg-slate-50 p-3 dark:bg-slate-800/60">
-            <p className={`text-xs font-semibold ${muted}`}>{l.label}</p>
-            <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+          <li key={l.id} className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1.5 rounded-control bg-surface-2 px-3 py-2.5 sm:block">
+            <p className="text-12 font-semibold text-muted">{l.label}</p>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 sm:mt-1.5">
               <LightPill word={l.word} mood={l.mood} big />
-              {(l.figure || l.word) && <span className={`num text-sm ${l.figure ? 'font-semibold' : muted}`}>{l.figure ?? 'n/a'}</span>}
+              {(l.figure || l.word) && <span className={`num text-14 ${l.figure ? 'font-semibold' : 'text-muted'}`}>{l.figure ?? 'n/a'}</span>}
             </div>
-            <ul className="mt-2 list-disc space-y-0.5 pl-4 text-xs leading-snug text-slate-700 dark:text-slate-300">
-              {reasons[l.id].map((r) => <li key={r}>{r}</li>)}
-            </ul>
-            {notes[l.id] && <p className={`mt-2 text-[11px] leading-snug italic ${muted}`}>{notes[l.id]}</p>}
           </li>
         ))}
       </ul>
-      <p className={`mt-3 text-[11px] ${muted}`}>
-        Three separate lights, never one score. Worked out from PSX, SBP and PBS figures{asOf ? `; KSE-100 as of ${asOfLabel(asOf)}` : ''}. A rule of thumb, not advice.
-      </p>
     </SectionCard>
   );
 }
 
-function Figure({ label, value, sub, tag }: { label: string; value: string | null; sub?: ReactNode; tag?: ReactNode }) {
+function Figure({ label, value, sub, tag }: { label: string; value: ReactNode; sub?: ReactNode; tag?: ReactNode }) {
   return (
-    <div className="min-w-0 rounded-2xl bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
-      <dt className={`text-[11px] ${muted}`}>{label}</dt>
+    <div className="min-w-0 rounded-control bg-surface-2 px-3 py-2">
+      <dt className="text-12 text-muted">{label}</dt>
       <dd className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-        <span className={`num text-lg leading-tight font-bold ${value ? '' : `font-normal ${muted}`}`}>{value ?? 'n/a'}</span>{tag}
+        <span className={`num text-20 font-bold ${value ? '' : 'font-normal text-muted'}`}>{value ?? 'n/a'}</span>{tag}
       </dd>
-      {sub && <dd className={`text-[11px] leading-snug ${muted}`}>{sub}</dd>}
+      {sub && <dd className="text-12 text-muted">{sub}</dd>}
     </div>
+  );
+}
+
+/** Light, then the big number beside it, then one plain line. */
+function Headline({ pill, figure, line }: { pill: ReactNode; figure?: ReactNode; line?: ReactNode }) {
+  return (
+    <>
+      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+        {pill}
+        {figure && <span className="num text-20 font-bold">{figure}</span>}
+      </div>
+      {line && <p className="mt-1.5 text-14 text-muted">{line}</p>}
+    </>
   );
 }
 
@@ -321,22 +393,22 @@ function PeGauge({ pe, avg }: { pe: number | null; avg: number }) {
   return (
     <div className="mt-3" role="img" aria-label={label}>
       <div className="relative h-16">
-        <div className="absolute inset-x-0 top-6 flex h-4 overflow-hidden rounded-full">
-          <div className="h-full bg-emerald-200 dark:bg-emerald-900/70" style={{ width: `${cheapW}%` }} />
-          <div className="h-full bg-sky-200 dark:bg-sky-900/70" style={{ width: `${fairW}%` }} />
-          <div className="h-full flex-1 bg-rose-200 dark:bg-rose-900/70" />
+        <div className="absolute inset-x-0 top-6 flex h-4 overflow-hidden rounded-chip">
+          <div className="h-full bg-up/25" style={{ width: `${cheapW}%` }} />
+          <div className="h-full bg-info/20" style={{ width: `${fairW}%` }} />
+          <div className="h-full flex-1 bg-down/20" />
         </div>
-        <div className="absolute top-5 h-6 border-l-2 border-dashed border-slate-500 dark:border-slate-400" style={{ left: at(avg) }} aria-hidden="true" />
-        <span className={`num absolute top-11 -translate-x-1/2 text-[10px] whitespace-nowrap ${muted}`} style={{ left: at(avg) }} aria-hidden="true">avg {avg}x</span>
+        <div className="absolute top-5 h-6 border-l-2 border-dashed border-muted" style={{ left: at(avg) }} aria-hidden="true" />
+        <span className="num absolute top-11 -translate-x-1/2 text-12 whitespace-nowrap text-muted" style={{ left: at(avg) }} aria-hidden="true">avg {avg}x</span>
         {pe != null && <>
-          <div className="absolute top-4.5 h-7 w-1.5 -translate-x-1/2 rounded-full bg-slate-900 ring-2 ring-white dark:bg-white dark:ring-slate-900" style={{ left: at(pe) }} aria-hidden="true" />
-          <span className="num absolute top-0 -translate-x-1/2 text-[11px] font-bold whitespace-nowrap" style={{ left: `clamp(1.5rem, ${at(pe)}, calc(100% - 1.5rem))` }} aria-hidden="true">{pe.toFixed(1)}x</span>
+          <div className="absolute top-4.5 h-7 w-1.5 -translate-x-1/2 rounded-full bg-ink ring-2 ring-surface" style={{ left: at(pe) }} aria-hidden="true" />
+          <span className="num absolute top-0 -translate-x-1/2 text-12 font-bold whitespace-nowrap" style={{ left: `clamp(1.5rem, ${at(pe)}, calc(100% - 1.5rem))` }} aria-hidden="true">{pe.toFixed(1)}x</span>
         </>}
       </div>
-      <div className="num mt-0.5 flex text-[11px] font-medium" aria-hidden="true">
-        <span className="text-emerald-800 dark:text-emerald-300" style={{ width: `${cheapW}%` }}>Cheap &lt;{K.pe_cheap_below}x</span>
-        <span className="text-center text-sky-800 dark:text-sky-300" style={{ width: `${fairW}%` }}>Fair</span>
-        <span className="flex-1 text-right text-rose-800 dark:text-rose-300">&gt;{K.pe_expensive_above}x Expensive</span>
+      <div className="num mt-0.5 flex text-12 font-medium" aria-hidden="true">
+        <span className="text-up" style={{ width: `${cheapW}%` }}>Cheap &lt;{K.pe_cheap_below}x</span>
+        <span className="text-center text-info" style={{ width: `${fairW}%` }}>Fair</span>
+        <span className="flex-1 text-right text-down">&gt;{K.pe_expensive_above}x Expensive</span>
       </div>
     </div>
   );
@@ -344,102 +416,132 @@ function PeGauge({ pe, avg }: { pe: number | null; avg: number }) {
 
 function ValueCard({ c }: { c: Compass }) {
   const v = c.value;
+  const how = <>
+    <Part title="Why this light"><Bullets items={v.reasons} /></Part>
+    <dl className="grid grid-cols-2 gap-2">
+      <Figure label="Earnings yield" value={pc(v.earnings_yield_pct)} sub="profit / price" />
+      <Figure label="Dividend yield" value={pc(v.dividend_yield_pct)} sub="index stocks" />
+    </dl>
+    <Part title="Keep in mind">
+      <p className="text-14 text-muted">{VALUE_NOTE}</p>
+      <Note text={K.pe_avg_note} />
+      <Note text={K.pe_bands_note} />
+    </Part>
+  </>;
   return (
-    <SectionCard id="mc-value" title="Value" icon="scale">
-      <div className="mt-1 flex flex-wrap items-center gap-2">
-        <LightPill word={v.state ? VALUE_WORD[v.state] : null} mood={v.state ? VALUE_MOOD[v.state] : 'unknown'} big />
-        <span className={`text-sm ${muted}`}>KSE-100 P/E against its long-run average</span>
-      </div>
+    <SectionCard id="mc-value" title="Value" icon="scale" how={how}>
+      <Headline
+        pill={<LightPill word={v.state ? VALUE_WORD[v.state] : null} mood={v.state ? VALUE_MOOD[v.state] : 'unknown'} big />}
+        figure={v.pe != null ? `P/E ${v.pe.toFixed(1)}x` : null}
+        line={`KSE-100 P/E against its long-run average of about ${v.pe_avg}x.`} />
       <PeGauge pe={v.pe} avg={v.pe_avg} />
-      <dl className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <Figure label="P/E now" value={v.pe != null ? `${v.pe.toFixed(1)}x` : null} sub="index stocks" />
-        <Figure label="Long-run avg" value={`${v.pe_avg}x`} sub="forward P/E" />
-        <Figure label="Earnings yield" value={pc(v.earnings_yield_pct)} sub="profit / price" />
-        <Figure label="Dividend yield" value={pc(v.dividend_yield_pct)} sub="index stocks" />
-      </dl>
-      <p className={`mt-3 text-xs ${muted}`}>{VALUE_NOTE}</p>
-      <Note text={K.pe_avg_note} className="mt-2" />
-      <Note text={K.pe_bands_note} className="mt-1" />
     </SectionCard>
   );
 }
 
-function GapCard({ c }: { c: Compass }) {
+function GapCard({ c, past }: { c: Compass; past: StoredGap[] }) {
   const g = c.gap;
-  const bars: { label: string; v: number | null; note: string; shares?: boolean }[] = [
-    { label: 'Shares: earnings yield', v: c.value.earnings_yield_pct, note: 'KSE-100 stocks', shares: true },
-    { label: '10-year PIB', v: g.pib_10y?.value ?? null, note: 'government bond' },
+  const mm = c.rates.money_market_pct;
+  const ey = c.value.earnings_yield_pct;
+  const vsMoney = g.basis === 'money_market';
+  const bars: { label: string; v: number | null; note: string; shares?: boolean; basis?: boolean }[] = [
+    { label: 'Shares: earnings yield', v: ey, note: 'KSE-100 stocks', shares: true },
+    { label: 'Money-market fund', v: mm, note: 'estimate', basis: vsMoney },
     { label: '12-month T-bill', v: g.tbill_12m?.value ?? null, note: 'government' },
-    { label: 'Money-market fund', v: c.rates.money_market_pct, note: 'estimate' },
+    { label: '10-year PIB', v: g.pib_10y?.value ?? null, note: vsMoney ? 'for information' : 'government bond', basis: !vsMoney },
     { label: 'Bank savings', v: c.rates.savings_pct, note: 'estimate' },
   ];
   const max = Math.max(15, ...bars.map((b) => b.v ?? 0)) * 1.05;
   const known = bars.filter((b) => b.v != null);
   const label = `Yields compared: ${bars.map((b) => `${b.label} ${b.v != null ? `${b.v.toFixed(1)}%` : 'not available'}`).join(', ')}.`;
-  const sources = ([['pib_10y', g.pib_10y], ['tbill_12m', g.tbill_12m], ['tbill_3m', g.tbill_3m]] as const).filter((s): s is readonly [typeof s[0], Latest] => s[1] != null);
+  const line = g.spread_pct == null ? (vsMoney ? 'Needs the P/E and the 3-month T-bill from SBP.' : 'Needs the P/E and the 10-year PIB from SBP.')
+    : vsMoney ? `Earnings yield ${ey}% against a money-market fund at about ${mm}% (estimate).`
+      : `Earnings yield ${ey}% against the 10-year bond at ${g.pib_10y?.value.toFixed(2)}%.`;
+  const recent = past.slice(-5).reverse();
+  const how = <>
+    <Part title="Why this light"><Bullets items={g.reasons} /></Part>
+    <Part title="The rule">
+      <p className="text-14">
+        Earnings yield minus the {vsMoney ? 'money-market estimate' : '10-year bond'}. From {signed(K.spread_neutral_low)} to {signed(K.spread_neutral_high)} points
+        nothing changes; below {signed(K.spread_neutral_low)} safe yield pays more and the advice is to park extra cash; at {signed(K.spread_shares_above)} or more, shares pay more.
+      </p>
+      {vsMoney && <Note text={`VERIFY: the ${signed(K.spread_shares_above)} point mark for "shares pay more" is a re-based guess. It was +3.5 against the 10-year bond, which pays about 1.5 to 2 points more than a money-market fund.`} />}
+      <Note text={K.money_market_note} />
+    </Part>
+    {recent.length > 0 && (
+      <Part title="Past readings">
+        <ul className="divide-y divide-line text-14">
+          {recent.map((r) => (
+            <li key={r.day} className="flex items-baseline justify-between gap-3 py-1.5">
+              <span>{day(r.day)}</span>
+              <span className="num">{signed(r.spread)} points <span className="text-muted">{BASIS_WORD[r.basis]}</span></span>
+            </li>
+          ))}
+        </ul>
+      </Part>
+    )}
+    <Part title="Sources"><Sources items={[['tbill_3m', g.tbill_3m], ['tbill_12m', g.tbill_12m], ['pib_10y', g.pib_10y]]} /></Part>
+  </>;
   return (
-    <SectionCard id="mc-gap" title="Shares vs safe yield" icon="coins">
-      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
-        <LightPill word={g.state ? GAP_WORD[g.state] : null} mood={g.state ? GAP_MOOD[g.state] : 'unknown'} big />
-        {g.spread_pct != null && <span className="num text-lg font-bold">{signed(g.spread_pct)} points</span>}
-        <span className={`text-xs ${muted}`}>earnings yield minus 10-year PIB</span>
-      </div>
+    <SectionCard id="mc-gap" title="Shares vs safe yield" icon="coins" how={how}>
+      <Headline
+        pill={<LightPill word={g.state ? GAP_WORD[g.state] : null} mood={g.state ? GAP_MOOD[g.state] : 'unknown'} big />}
+        figure={g.spread_pct != null ? <>{signed(g.spread_pct)} points <span className="text-14 font-normal text-muted">{BASIS_WORD[g.basis]}</span></> : null}
+        line={line} />
       <ul className="mt-3 space-y-2.5" role="img" aria-label={label}>
         {bars.map((b) => (
           <li key={b.label} aria-hidden="true">
-            <div className="flex items-baseline justify-between gap-3 text-sm">
-              <span className="min-w-0">{b.label} <span className={`text-[11px] ${muted}`}>· {b.note}</span></span>
-              <span className={`num shrink-0 font-semibold ${b.v == null ? `font-normal ${muted}` : ''}`}>{b.v != null ? `${b.v.toFixed(1)}%` : 'n/a'}</span>
+            <div className="flex items-baseline justify-between gap-3 text-14">
+              <span className="min-w-0"><span className={b.basis || b.shares ? 'font-semibold' : ''}>{b.label}</span> <span className="text-12 text-muted">· {b.note}{b.basis ? ', compared' : ''}</span></span>
+              <span className={`num shrink-0 ${b.v == null ? 'text-muted' : 'font-semibold'}`}>{b.v != null ? `${b.v.toFixed(1)}%` : 'n/a'}</span>
             </div>
-            <div className="mt-1 h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
-              {b.v != null && <div className={`h-full rounded-full ${b.shares ? 'bg-teal-500' : 'bg-slate-400 dark:bg-slate-500'}`} style={{ width: `${(b.v / max) * 100}%` }} />}
+            <div className="mt-1 h-2 overflow-hidden rounded-chip bg-surface-2">
+              {b.v != null && <div className={`h-full rounded-chip ${b.shares ? 'bg-info' : b.basis ? 'bg-ink/60' : 'bg-muted/40'}`} style={{ width: `${(b.v / max) * 100}%` }} />}
             </div>
           </li>
         ))}
       </ul>
-      {known.length < bars.length && <p className={`mt-2 text-xs ${muted}`}>n/a: not read from SBP yet. The night check fills these in from SBP's auction results.</p>}
-      <Note text={K.spread_note} className="mt-3" />
-      {sources.length > 0 && (
-        <ul className="mt-1 flex flex-wrap gap-x-4 text-xs">
-          {sources.map(([s, l]) => <li key={s} className="flex items-center gap-1.5"><SourceLink series={s} l={l} /><OldTag l={l} /></li>)}
-        </ul>
-      )}
+      {known.length < bars.length && <p className="mt-2 text-12 text-muted">n/a: not read from SBP yet; the night check fills these in.</p>}
     </SectionCard>
   );
 }
 
-function TrendCard({ c, data, periods, today, provisional }: { c: Compass; data: AppData; periods: TrendPeriod[]; today: string; provisional: boolean }) {
+function TrendCard({ c, data, periods, today, unstored }: { c: Compass; data: AppData; periods: TrendPeriod[]; today: string; unstored: boolean }) {
   const t = c.trend;
-  const rule = `Trend: Up when the KSE-100 is up ${RULES.on_1y_pct}% on a year or ${RULES.on_rise_pct}% above its 12-month low, and not below its ${RULES.ma_days}-day average. Down after a ${RULES.off_drawdown_pct}% fall from the 12-month high, or below the average with the year negative. Sideways in between.`;
+  const rule = `Up when the KSE-100 is up ${RULES.on_1y_pct}% on a year or ${RULES.on_rise_pct}% above its 12-month low, and not below its ${RULES.ma_days}-day average. Down after a ${RULES.off_drawdown_pct}% fall from the 12-month high, or below the average with the year negative. Sideways in between.`;
+  const line = t.provisional ? maReason(t) : t.one_year_pct != null ? `On a year (${t.one_year_source === 'psx' ? 'PSX figure' : 'index stocks'}).` : null;
+  const how = <>
+    <Part title="Why this light"><Bullets items={t.reasons} /></Part>
+    {t.provisional && <p className="text-14">Provisional: the {RULES.ma_days}-day average needs {RULES.min_days_for_ma} stored closes. Until then the light leans on the yearly change and the 12-month high and low only.</p>}
+    <Part title="The rule"><p className="text-14">{rule}</p></Part>
+    <Part title="Keep in mind"><p className="text-14 text-muted">{TREND_NOTE}</p></Part>
+  </>;
   return (
-    <SectionCard id="mc-trend" title="Trend" icon="chart">
-      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
-        <LightPill word={t.state ? TREND_WORD[t.state] : null} mood={t.state ? TREND_MOOD[t.state] : 'unknown'} big />
-        {t.one_year_pct != null && <>
-          <span className={`num text-lg font-bold ${changeTone(t.one_year_pct)}`}>{signed(t.one_year_pct)}%</span>
-          <span className={`text-xs ${muted}`}>on a year ({t.one_year_source === 'psx' ? 'PSX' : 'index stocks'})</span>
-        </>}
-      </div>
+    <SectionCard id="mc-trend" title="Trend" icon="chart" how={how}>
+      <Headline
+        pill={<span className="inline-flex flex-wrap items-center gap-2">
+          <LightPill word={trendWord(t)} mood={t.state ? TREND_MOOD[t.state] : 'unknown'} big />
+          {t.provisional && t.state && <Chip kind="provisional" />}
+        </span>}
+        figure={t.one_year_pct != null ? <><Change value={t.one_year_pct} /> <span className="text-14 font-normal text-muted">1 year</span></> : null}
+        line={line} />
       {data.indexDaily.length < 2
-        ? <p className={`mt-2 text-sm ${muted}`}>History builds up daily: the night check stores the KSE-100 close each trading day.</p>
+        ? <p className="mt-2 text-14 text-muted">{data.indexDaily.length ? `Builds from ${day(data.indexDaily[0].day)}: ` : 'History builds up daily: '}the night check stores the KSE-100 close each trading day.</p>
         : <IndexChart closes={data.indexDaily} periods={periods} today={today} />}
-      <ul className="mt-3 list-disc space-y-0.5 pl-5 text-sm">{t.reasons.map((r) => <li key={r}>{r}</li>)}</ul>
-      <h3 className={`mt-4 text-[13px] font-semibold tracking-wide uppercase ${muted}`}>Trend periods</h3>
-      {periods.length === 0 || provisional ? (
-        <p className={`mt-1 text-sm ${muted}`}>Each stretch appears here once the night check stores readings.</p>
+      <h3 className="mt-4 text-12 font-semibold tracking-wide text-muted uppercase">Trend periods</h3>
+      {periods.length === 0 || unstored ? (
+        <p className="mt-1 text-14 text-muted">Each stretch appears here once the night check stores readings.</p>
       ) : (
-        <ul className="mt-1 divide-y divide-slate-100 dark:divide-slate-800">
+        <ul className="mt-1 divide-y divide-line">
           {[...periods].reverse().map((p) => (
             <li key={p.from} className="flex items-center gap-3 py-2">
               <LightPill word={TREND_KEY_WORD[p.key]} mood={TREND_MOOD[p.key]} />
-              <span className="num min-w-0 flex-1 text-sm">{fullDate(p.from)} – {p.to ? fullDate(p.to) : 'now'}</span>
-              <span className={`num shrink-0 text-xs ${muted}`}>{duration(p.days)}</span>
+              <span className="num min-w-0 flex-1 text-14">{day(p.from)} – {p.to ? day(p.to) : 'now'}</span>
+              <span className="num shrink-0 text-12 text-muted">{duration(p.days)}</span>
             </li>
           ))}
         </ul>
       )}
-      <p className={`mt-3 text-xs leading-relaxed ${muted}`}>{rule}</p>
-      <p className={`mt-1 text-[11px] italic ${muted}`}>{TREND_NOTE}</p>
     </SectionCard>
   );
 }
@@ -447,53 +549,52 @@ function TrendCard({ c, data, periods, today, provisional }: { c: Compass; data:
 function MixCard({ c }: { c: Compass }) {
   const mix = c.action.mix;
   const rows = [
-    { key: 'stocks', label: 'Shares you pick', pct: mix.stocks, note: c.value.earnings_yield_pct != null ? `about ${c.value.earnings_yield_pct}% earnings yield` : 'earnings yield: no PSX figure yet', bar: 'bg-teal-500' },
-    { key: 'equity_funds', label: 'Equity funds', pct: mix.equity_funds, note: 'spread across many shares', bar: 'bg-sky-500' },
-    { key: 'money_market', label: 'Money market / T-bills', pct: mix.money_market, note: c.rates.money_market_pct != null ? `about ${c.rates.money_market_pct}% a year (estimate)` : 'yield: n/a', bar: 'bg-slate-400 dark:bg-slate-500' },
+    { key: 'stocks', label: 'Shares you pick', pct: mix.stocks, note: c.value.earnings_yield_pct != null ? `about ${c.value.earnings_yield_pct}% earnings yield` : 'earnings yield: no PSX figure yet', bar: 'bg-info' },
+    { key: 'equity_funds', label: 'Equity funds', pct: mix.equity_funds, note: 'spread across many shares', bar: 'bg-info/50' },
+    { key: 'money_market', label: 'Money market / T-bills', pct: mix.money_market, note: c.rates.money_market_pct != null ? `about ${c.rates.money_market_pct}% a year (estimate)` : 'yield: n/a', bar: 'bg-muted/50' },
   ];
+  const how = <>
+    <p className="text-14">The split follows the compass's action for extra money: {c.action.title.toLowerCase()}.</p>
+    <Note text={K.mix_note} />
+    <Note text={K.money_market_note} />
+  </>;
   return (
-    <SectionCard id="mc-mix" title="Where spare cash could go" icon="coins">
-      <p className={`text-xs ${muted}`}>Only money beyond your monthly investment and crash fund.</p>
-      <p className="mt-2 text-sm font-semibold">{c.action.title}</p>
-      <ul className="mt-2 space-y-3">
+    <SectionCard id="mc-mix" title="Where spare cash could go" icon="coins" how={how}>
+      <p className="mt-1.5 text-14 text-muted">Only money beyond your monthly investment and crash fund.</p>
+      <ul className="mt-3 space-y-3">
         {rows.map((r) => (
           <li key={r.key}>
-            <div className="flex items-baseline justify-between gap-3 text-sm">
+            <div className="flex items-baseline justify-between gap-3 text-14">
               <span className="min-w-0">{r.label}</span>
               <span className="num shrink-0 font-semibold">{r.pct}%</span>
             </div>
-            <div className="mt-1 h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800" role="img" aria-label={`${r.label}: ${r.pct}%`}>
-              <div className={`h-full rounded-full ${r.bar}`} style={{ width: `${r.pct}%` }} />
+            <div className="mt-1 h-2 overflow-hidden rounded-chip bg-surface-2" role="img" aria-label={`${r.label}: ${r.pct}%`}>
+              <div className={`h-full rounded-chip ${r.bar}`} style={{ width: `${r.pct}%` }} />
             </div>
-            <p className={`num mt-0.5 text-xs ${muted}`}>{r.note}</p>
+            <p className="num mt-0.5 text-12 text-muted">{r.note}</p>
           </li>
         ))}
       </ul>
-      <Note text={K.mix_note} className="mt-3 text-xs" />
-      <Note text={K.money_market_note} className="mt-1" />
     </SectionCard>
   );
 }
 
 function GlanceCard({ c }: { c: Compass }) {
   const fx = c.macro.fx_reserves, pkr = c.macro.pkr_usd;
+  const how = <>
+    <Part title="Sources"><Sources items={[['fx_reserves_total', fx], ['pkr_usd', pkr]]} /></Part>
+    <Part title="Not shown">
+      <p className="text-14 text-muted">Fund returns (MUFAP) and foreign flows (NCCPL): their sites block automated reading, and we don't get around that.</p>
+    </Part>
+  </>;
   return (
-    <SectionCard id="mc-glance" title="Pakistan at a glance" icon="flag">
+    <SectionCard id="mc-glance" title="Pakistan at a glance" icon="flag" how={how}>
       <dl className="mt-2 grid grid-cols-2 gap-2">
         <Figure label="FX reserves" value={fx ? `US$ ${(fx.value / 1000).toFixed(1)} bn` : null} tag={<OldTag l={fx} />}
-          sub={fx ? (fx.change_pct != null ? `${signed(fx.change_pct)}% over 4 weeks` : 'change: n/a') : 'SBP, weekly'} />
+          sub={fx ? (fx.change_pct != null ? <><Change value={fx.change_pct} /> over 4 weeks</> : 'change: n/a') : 'SBP, weekly'} />
         <Figure label="Rs per US$" value={pkr ? pkr.value.toFixed(2) : null} tag={<OldTag l={pkr} />}
-          sub={pkr ? (pkr.change_pct != null ? `${signed(pkr.change_pct)}% over 30 days${pkr.change_pct < 0 ? ' (rupee stronger)' : pkr.change_pct > 0 ? ' (rupee weaker)' : ''}` : 'change: n/a') : 'SBP, daily'} />
+          sub={pkr ? (pkr.change_pct != null ? <><Moved value={pkr.change_pct} /> over 30 days{pkr.change_pct < 0 ? ' (rupee stronger)' : pkr.change_pct > 0 ? ' (rupee weaker)' : ''}</> : 'change: n/a') : 'SBP, daily'} />
       </dl>
-      {(fx || pkr) && (
-        <ul className="mt-1 flex flex-wrap gap-x-4 text-xs">
-          {fx && <li><SourceLink series="fx_reserves_total" l={fx} /></li>}
-          {pkr && <li><SourceLink series="pkr_usd" l={pkr} /></li>}
-        </ul>
-      )}
-      <p className={`mt-2 text-[11px] leading-relaxed ${muted}`}>
-        Not shown: fund returns (MUFAP) and foreign flows (NCCPL) — their sites block automated reading, and we don't get around that.
-      </p>
     </SectionCard>
   );
 }
@@ -502,54 +603,60 @@ function RatesCard({ c, rates, today }: { c: Compass; rates: PolicyRate[]; today
   const rate = c.rates.policy;
   const cycles = useMemo(() => rateCycles(rates, today), [rates, today]);
   const cpi = c.rates.cpi;
-  const asOf = (l: Latest | null, monthly = false) => (l ? (monthly ? monthLabel(l.as_of) : fullDate(l.as_of)) : 'not read yet');
+  const asOf = (l: Latest | null) => (l ? day(l.as_of) : 'not read yet');
+  const how = <>
+    <Part title="How the cycle is read">
+      <p className="text-14">Easing while the State Bank is cutting, tightening while it is raising. No change for {RULES.rate_hold_months} months or more counts as on hold.</p>
+      <Note text={RULES.rates_note} />
+    </Part>
+    <Part title="Sources">
+      <Sources items={[['cpi_yoy', cpi], ['tbill_3m', c.gap.tbill_3m], ['tbill_12m', c.gap.tbill_12m], ['pib_10y', c.gap.pib_10y]]} />
+      <p className="text-14">
+        Policy rate: State Bank of Pakistan,{' '}
+        <a href={SBP_URL} target="_blank" rel="noopener noreferrer" className={linkCls}>monetary policy<Icon name="external" className="h-3.5 w-3.5" /></a>
+      </p>
+      <p className="text-14 text-muted">Savings and money-market figures are estimates worked out from the policy rate and T-bill yields.</p>
+    </Part>
+  </>;
   return (
-    <SectionCard id="mc-rates" title="Rates & inflation" icon="growth" className="lg:col-span-2">
+    <SectionCard id="mc-rates" title="Rates & inflation" icon="growth" className="lg:col-span-2" how={how}>
       <div className="lg:grid lg:grid-cols-5 lg:gap-6">
         <div className="min-w-0 lg:col-span-3">
-          {rate == null ? <p className={`mt-1 text-sm ${muted}`}>No policy-rate history loaded yet.</p> : <>
-            <div className="mt-1 flex flex-wrap items-end gap-x-4 gap-y-1">
-              <p className="num text-3xl font-bold tracking-tight">{rate.rate}%</p>
-              <div className="pb-1"><Tag tone={rate.cycle === 'easing' ? 'green' : rate.cycle === 'tightening' ? 'amber' : 'slate'}>{CYCLE_WORD[rate.cycle]}</Tag></div>
-              <p className={`pb-1 text-sm ${muted}`}>SBP policy rate</p>
+          {rate == null ? <p className="mt-1.5 text-14 text-muted">No policy-rate history loaded yet.</p> : <>
+            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+              <p className="num text-28 font-bold tracking-tight">{rate.rate}%</p>
+              <Chip kind="neutral">{CYCLE_WORD[rate.cycle]}</Chip>
+              <p className="text-14 text-muted">SBP policy rate</p>
             </div>
-            <p className={`num text-sm ${muted}`}>
-              Decided {fullDate(rate.decided_on)}
-              {rate.last_change_pct != null ? ` · last change ${points(rate.last_change_pct)}` : ''}
+            <p className="num mt-1 text-14 text-muted">
+              Decided {day(rate.decided_on)}
+              {rate.last_change_pct != null && <> · last change <Moved value={rate.last_change_pct} unit=" points" digits={Number.isInteger(rate.last_change_pct * 10) ? 1 : 2} /></>}
               {rate.months_since_change != null ? ` · ${plural(rate.months_since_change, 'month')} ago` : ''}
             </p>
-            {rate.cycle === 'on_hold' && rate.direction && (
-              <p className={`text-xs ${muted}`}>No change for {RULES.rate_hold_months} months or more, so the last {rate.direction} cycle counts as on hold.</p>
-            )}
           </>}
           <dl className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
-            <Figure label="CPI inflation" value={pc(cpi?.value)} tag={<OldTag l={cpi} />} sub={cpi ? `${monthLabel(cpi.as_of)}, year on year` : 'PBS, not read yet'} />
+            <Figure label="CPI inflation" value={pc(cpi?.value)} tag={<OldTag l={cpi} />} sub={cpi ? `${month(cpi.as_of)}, year on year` : 'PBS, not read yet'} />
             <Figure label="Real rate" value={c.rates.real_rate_pct != null ? `${signed(c.rates.real_rate_pct)}%` : null} sub="policy rate minus CPI" />
             <Figure label="T-bill 3-month" value={pc(c.gap.tbill_3m?.value, 2)} tag={<OldTag l={c.gap.tbill_3m} />} sub={asOf(c.gap.tbill_3m)} />
             <Figure label="T-bill 12-month" value={pc(c.gap.tbill_12m?.value, 2)} tag={<OldTag l={c.gap.tbill_12m} />} sub={asOf(c.gap.tbill_12m)} />
             <Figure label="PIB 10-year" value={pc(c.gap.pib_10y?.value, 2)} tag={<OldTag l={c.gap.pib_10y} />} sub={asOf(c.gap.pib_10y)} />
-            <Figure label="Savings (estimate)" value={pc(c.rates.savings_pct)} sub="from the policy rate" />
+            <Figure label="Savings" value={pc(c.rates.savings_pct)} sub="estimate, from the policy rate" />
           </dl>
-          {cpi && <p className="mt-1 text-xs"><SourceLink series="cpi_yoy" l={cpi} /></p>}
-          <Note text={RULES.rates_note} className="mt-2" />
           {rates.length > 0 && <RateChart rates={rates} cycles={cycles} today={today} />}
-          <p className={`mt-2 text-xs ${muted}`}>
-            Source: State Bank of Pakistan,{' '}
-            <a href={SBP_URL} target="_blank" rel="noopener noreferrer" className={linkCls}>monetary policy<Icon name="external" className="h-3.5 w-3.5" /></a>
-          </p>
         </div>
         <div className="min-w-0 lg:col-span-2">
-          <h3 className={`mt-4 text-[13px] font-semibold tracking-wide uppercase lg:mt-1 ${muted}`}>Rate cycles</h3>
-          {cycles.length === 0 ? <p className={`mt-1 text-sm ${muted}`}>None yet.</p> : (
-            <ul className="mt-1 divide-y divide-slate-100 lg:max-h-[560px] lg:overflow-y-auto lg:pr-2 dark:divide-slate-800">
+          <h3 className="mt-4 text-12 font-semibold tracking-wide text-muted uppercase lg:mt-1">Rate cycles</h3>
+          {cycles.length === 0 ? <p className="mt-1 text-14 text-muted">None yet.</p> : (
+            <ul className="mt-1 divide-y divide-line lg:max-h-[560px] lg:overflow-y-auto lg:pr-2">
               {[...cycles].reverse().map((cy) => (
                 <li key={cy.from} className="py-2">
                   <div className="flex items-center gap-2">
-                    <Tag tone={cy.cycle === 'easing' ? 'green' : 'amber'}>{cy.cycle === 'easing' ? 'Easing' : 'Tightening'}</Tag>
-                    <span className="num min-w-0 flex-1 text-sm font-medium">{cy.start_rate}% → {cy.end_rate}%</span>
-                    <span className={`num shrink-0 text-xs ${muted}`}>{duration(cy.days)}</span>
+                    <span className={`h-3 w-3 shrink-0 rounded-sm ${CYCLE_SWATCH[cy.cycle === 'easing' ? 'easing' : 'tightening']}`} aria-hidden="true" />
+                    <span className="w-21 shrink-0 text-14 font-medium">{cy.cycle === 'easing' ? 'Easing' : 'Tightening'}</span>
+                    <span className="num min-w-0 flex-1 text-14">{cy.start_rate}% → {cy.end_rate}%</span>
+                    <span className="num shrink-0 text-12 text-muted">{duration(cy.days)}</span>
                   </div>
-                  <p className={`num mt-0.5 text-xs ${muted}`}>{fullDate(cy.from)} – {cy.to ? fullDate(cy.to) : 'now'} · {plural(cy.changes, 'change')}</p>
+                  <p className="num mt-0.5 text-12 text-muted">{day(cy.from)} – {cy.to ? day(cy.to) : 'now'} · {plural(cy.changes, 'change')}</p>
                 </li>
               ))}
             </ul>
@@ -567,15 +674,13 @@ const W = 300;
 const H = 140;
 const PAD = 6;
 const BOTTOM = 20; // room for the x labels inside the rate chart
-const TREND_FILL: Record<TrendKey, string> = {
-  up: 'fill-emerald-500/15 dark:fill-emerald-400/15',
-  sideways: 'fill-sky-500/10 dark:fill-sky-400/10',
-  down: 'fill-rose-500/12 dark:fill-rose-400/15',
-  not_up: 'fill-slate-500/10 dark:fill-slate-400/10',
-};
-const TREND_SWATCH: Record<TrendKey, string> = { up: 'bg-emerald-500/25', sideways: 'bg-sky-500/20', down: 'bg-rose-500/20', not_up: 'bg-slate-500/20' };
+const TREND_FILL: Record<TrendKey, string> = { up: 'fill-up/15', sideways: 'fill-info/10', down: 'fill-down/15', not_up: 'fill-muted/10' };
+const TREND_SWATCH: Record<TrendKey, string> = { up: 'bg-up/25', sideways: 'bg-info/20', down: 'bg-down/25', not_up: 'bg-muted/20' };
+/** Rate cycles are not good or bad for you, so neither green nor amber: blue for cuts, grey for hikes. */
+const CYCLE_FILL = { easing: 'fill-info/15', tightening: 'fill-muted/20' };
+const CYCLE_SWATCH = { easing: 'bg-info/30', tightening: 'bg-muted/35' };
 
-/** KSE-100 closes on a time scale, each trend stretch shaded behind the line (Up green, Sideways blue, Down rose). */
+/** KSE-100 closes on a time scale, each trend stretch shaded behind the line (Up green, Sideways blue, Down red). */
 function IndexChart({ closes, periods, today, compact = false }: { closes: IndexDay[]; periods: TrendPeriod[]; today: string; compact?: boolean }) {
   const first = closes[0].day;
   const last = closes[closes.length - 1].day;
@@ -583,34 +688,34 @@ function IndexChart({ closes, periods, today, compact = false }: { closes: Index
   const vals = closes.map((c) => c.close);
   let lo = Math.min(...vals), hi = Math.max(...vals);
   if (hi === lo) { lo -= 1; hi += 1; }
-  const x = (day: string) => PAD + (Math.min(span, Math.max(0, daysBetween(first, day))) / span) * (W - PAD * 2);
+  const x = (d: string) => PAD + (Math.min(span, Math.max(0, daysBetween(first, d))) / span) * (W - PAD * 2);
   const y = (v: number) => H - PAD - ((v - lo) / (hi - lo)) * (H - PAD * 2);
   const line = closes.map((c) => `${x(c.day).toFixed(1)},${y(c.close).toFixed(1)}`).join(' ');
   const bands = periods
     .map((p) => ({ ...p, a: p.from < first ? first : p.from, b: (p.to ?? today) > last ? last : (p.to ?? today) }))
     .filter((p) => p.a <= last && p.b >= first && p.a <= p.b);
   const present = (['up', 'sideways', 'down', 'not_up'] as TrendKey[]).filter((k) => bands.some((b) => b.key === k));
-  const label = `KSE-100 from ${fullDate(first)} (${num(closes[0].close, 0)}) to ${fullDate(last)} (${num(closes[closes.length - 1].close, 0)})`
+  const label = `KSE-100 from ${day(first)} (${num(closes[0].close, 0)}) to ${day(last)} (${num(closes[closes.length - 1].close, 0)})`
     + (bands.length ? `, shaded by trend: ${present.map((k) => `${plural(bands.filter((b) => b.key === k).length, `${TREND_KEY_WORD[k]} period`)}`).join(', ')}.` : '. No trend readings in this range yet.');
   return (
-    <div className={compact ? '' : 'mt-2'}>
+    <div className={compact ? '' : 'mt-3'}>
       <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className={`${compact ? 'h-14' : 'h-40 lg:h-52'} w-full`} role="img" aria-label={label}>
         {bands.map((b) => <rect key={b.from} x={x(b.a)} y={0} width={Math.max(1.5, x(b.b) - x(b.a))} height={H} className={TREND_FILL[b.key]} />)}
-        <polyline points={line} fill="none" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" className="stroke-slate-800 dark:stroke-slate-100" />
+        <polyline points={line} fill="none" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" className="stroke-ink" />
       </svg>
-      {!compact && <><div className={`num flex items-center justify-between text-[11px] ${muted}`}>
-        <span>{fullDate(first)}</span>
-        <span>{fullDate(last)}</span>
+      {!compact && <><div className="num flex items-center justify-between text-12 text-muted">
+        <span>{day(first)}</span>
+        <span>{day(last)}</span>
       </div>
-      <ul className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-600 dark:text-slate-300" aria-label="Legend">
+      <ul className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-12 text-muted" aria-label="Legend">
         {present.map((k) => <li key={k} className="flex items-center gap-1.5"><span className={`h-3 w-4 rounded-sm ${TREND_SWATCH[k]}`} aria-hidden="true" />{TREND_KEY_WORD[k]}{k === 'not_up' ? ' (older rule)' : ''}</li>)}
-        <li className="flex items-center gap-1.5"><span className="h-0.5 w-4 rounded bg-slate-800 dark:bg-slate-100" aria-hidden="true" />KSE-100 close</li>
+        <li className="flex items-center gap-1.5"><span className="h-0.5 w-4 rounded bg-ink" aria-hidden="true" />KSE-100 close</li>
       </ul></>}
     </div>
   );
 }
 
-/** The policy rate as a step line since 2015, easing cycles shaded green and tightening amber, years along the bottom. */
+/** The policy rate as a step line since 2015, easing and tightening cycles shaded, years along the bottom. */
 function RateChart({ rates, cycles, today }: { rates: PolicyRate[]; cycles: RatePeriod[]; today: string }) {
   const sorted = useMemo(() => [...rates].sort((a, b) => a.decided_on.localeCompare(b.decided_on)), [rates]);
   const start = sorted.some((r) => r.decided_on <= RATE_CHART_FROM) ? RATE_CHART_FROM : sorted[0]?.decided_on;
@@ -625,7 +730,7 @@ function RateChart({ rates, cycles, today }: { rates: PolicyRate[]; cycles: Rate
   let lo = Math.floor(Math.min(...vals)), hi = Math.ceil(Math.max(...vals));
   if (hi === lo) { lo -= 1; hi += 1; }
   const L = 22; // room for the % labels
-  const x = (day: string) => L + (Math.min(span, Math.max(0, daysBetween(start, day))) / span) * (W - L - PAD);
+  const x = (d: string) => L + (Math.min(span, Math.max(0, daysBetween(start, d))) / span) * (W - L - PAD);
   const y = (v: number) => H - BOTTOM - ((v - lo) / (hi - lo)) * (H - BOTTOM - PAD);
   let d = `M${x(steps[0].day).toFixed(1)},${y(steps[0].v).toFixed(1)}`;
   for (const s of steps.slice(1)) d += ` H${x(s.day).toFixed(1)} V${y(s.v).toFixed(1)}`;
@@ -639,30 +744,27 @@ function RateChart({ rates, cycles, today }: { rates: PolicyRate[]; cycles: Rate
   const mid = Math.round((lo + hi) / 2);
   const ticks = [...new Set([lo, mid, hi])];
   const now = steps.at(-1)!;
-  const label = `Policy rate from ${fullDate(start)} to ${fullDate(today)}: ${steps[0].v}% at the start, a high of ${Math.max(...vals)}%, a low of ${Math.min(...vals)}%, and ${now.v}% now. ${plural(bands.filter((b) => b.cycle === 'easing').length, 'easing cycle')} shaded green, ${plural(bands.filter((b) => b.cycle === 'tightening').length, 'tightening cycle')} shaded amber.`;
+  const label = `Policy rate from ${day(start)} to ${day(today)}: ${steps[0].v}% at the start, a high of ${Math.max(...vals)}%, a low of ${Math.min(...vals)}%, and ${now.v}% now. ${plural(bands.filter((b) => b.cycle === 'easing').length, 'easing cycle')} shaded blue, ${plural(bands.filter((b) => b.cycle === 'tightening').length, 'tightening cycle')} shaded grey.`;
   return (
     <div className="mt-3">
       <svg viewBox={`0 0 ${W} ${H}`} className="h-40 w-full lg:h-56" role="img" aria-label={label}>
         {bands.map((b) => (
           <rect key={b.from} x={x(b.a)} y={PAD} width={Math.max(1.5, x(b.b) - x(b.a))} height={H - BOTTOM - PAD}
-            className={b.cycle === 'easing' ? 'fill-emerald-500/15 dark:fill-emerald-400/15' : 'fill-amber-500/20 dark:fill-amber-400/15'} />
+            className={b.cycle === 'easing' ? CYCLE_FILL.easing : CYCLE_FILL.tightening} />
         ))}
         {ticks.map((t) => (
           <g key={t}>
-            <line x1={L} x2={W - PAD} y1={y(t)} y2={y(t)} strokeWidth="0.5" strokeDasharray="2 3" className="stroke-slate-300 dark:stroke-slate-700" />
-            <text x={L - 3} y={y(t) + 3} textAnchor="end" fontSize="9" className="fill-slate-500 dark:fill-slate-400">{t}%</text>
+            <line x1={L} x2={W - PAD} y1={y(t)} y2={y(t)} strokeWidth="0.5" strokeDasharray="2 3" className="stroke-muted/40" />
+            <text x={L - 3} y={y(t) + 3} textAnchor="end" fontSize="9" className="fill-muted">{t}%</text>
           </g>
         ))}
-        <path d={d} fill="none" strokeWidth="2" strokeLinejoin="round" className="stroke-slate-800 dark:stroke-slate-100" />
-        {years.map((yr) => {
-          const day = `${yr}-01-01`;
-          return <text key={yr} x={x(day)} y={H - 4} textAnchor="middle" fontSize="9" className="fill-slate-500 dark:fill-slate-400">{yr}</text>;
-        })}
+        <path d={d} fill="none" strokeWidth="2" strokeLinejoin="round" className="stroke-ink" />
+        {years.map((yr) => <text key={yr} x={x(`${yr}-01-01`)} y={H - 4} textAnchor="middle" fontSize="9" className="fill-muted">{yr}</text>)}
       </svg>
-      <ul className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-600 dark:text-slate-300" aria-label="Legend">
-        <li className="flex items-center gap-1.5"><span className="h-3 w-4 rounded-sm bg-emerald-500/25" aria-hidden="true" />Easing (cuts)</li>
-        <li className="flex items-center gap-1.5"><span className="h-3 w-4 rounded-sm bg-amber-500/30" aria-hidden="true" />Tightening (hikes)</li>
-        <li className="flex items-center gap-1.5"><span className="h-0.5 w-4 rounded bg-slate-800 dark:bg-slate-100" aria-hidden="true" />Policy rate</li>
+      <ul className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-12 text-muted" aria-label="Legend">
+        <li className="flex items-center gap-1.5"><span className={`h-3 w-4 rounded-sm ${CYCLE_SWATCH.easing}`} aria-hidden="true" />Easing (cuts)</li>
+        <li className="flex items-center gap-1.5"><span className={`h-3 w-4 rounded-sm ${CYCLE_SWATCH.tightening}`} aria-hidden="true" />Tightening (hikes)</li>
+        <li className="flex items-center gap-1.5"><span className="h-0.5 w-4 rounded bg-ink" aria-hidden="true" />Policy rate</li>
       </ul>
     </div>
   );

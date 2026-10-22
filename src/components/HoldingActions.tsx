@@ -1,20 +1,18 @@
 /**
- * Everything you can do to a stock, in one place, used by Home and Portfolio: detail sheet,
- * long-press menu, edit / record-buy form, remove with Undo, watchlist actions.
+ * Everything you can do to a stock, in one place, used by Home, Portfolio and the stock page: open the stock page,
+ * long-press menu, edit / record-buy form, plan a sale, remove with Undo, watchlist actions.
  */
 import { useMemo, useState } from 'react';
-import { buildPortfolio, cleanInsight, mergeCall, screenSectors, screenShariah, sectorPeMap, type HoldingView } from '../../shared/portfolio.ts';
-import { upcomingDividends } from '../../shared/discover.ts';
-import { tradingCalendar } from '../../shared/calendar.ts';
+import { buildPortfolio, cleanInsight, mergeCall, screenSectors, screenShariah, sectorPeMap, type HoldingView, type RuleContext } from '../../shared/portfolio.ts';
+import { peMap, sectorStats } from '../../shared/valuation.ts';
 import { pktDate } from '../../shared/time.ts';
 import { DEFAULT_RULES, type AiInsight, type Holding } from '../../shared/types.ts';
 import type { ScreenProps } from '../App.tsx';
+import { openStock } from '../lib/nav.ts';
 import { useToast } from './Toast.tsx';
 import { ActionSheet } from './Sheet.tsx';
-import { HoldingForm, StockSheet, type FormMode } from './Holding.tsx';
+import { HoldingForm, type FormMode } from './Holding.tsx';
 import { SellPlanner } from './SellPlanner.tsx';
-import { Button } from './ui.tsx';
-import { Icon } from './Icon.tsx';
 
 /** The latest AI insight if it is recent enough to trust for today. */
 export function freshInsight(ai: AiInsight | null, now = new Date()): AiInsight | null {
@@ -23,7 +21,6 @@ export function freshInsight(ai: AiInsight | null, now = new Date()): AiInsight 
 
 export function useHoldingActions({ data, source, reload }: Pick<ScreenProps, 'data' | 'source' | 'reload'>) {
   const toast = useToast();
-  const [detail, setDetail] = useState<string | null>(null);
   const [menu, setMenu] = useState<string | null>(null);
   const [form, setForm] = useState<FormMode | null>(null);
   const [plan, setPlan] = useState<{ open: boolean; symbol: string | null }>({ open: false, symbol: null });
@@ -31,14 +28,21 @@ export function useHoldingActions({ data, source, reload }: Pick<ScreenProps, 'd
   const sectors = useMemo(() => screenSectors(data.screen), [data.screen]);
   const shariah = useMemo(() => screenShariah(data.screen), [data.screen]);
   const today = pktDate(new Date());
-  const sectorPe = useMemo(() => sectorPeMap(data.screen), [data.screen]);
-  const view = useMemo(() => buildPortfolio(data.holdings, data.prices, data.settings, DEFAULT_RULES, sectors, { today, sectorPe, dividends: data.dividends, earnings: data.earnings }), [data, sectors, today, sectorPe]);
+  // One P/E per stock (filings first, PSX's figure otherwise), the same one every screen shows and every rule uses.
+  // Live prices win over the screen's for the stocks you hold or watch.
+  const pe = useMemo(() => {
+    const rows = new Map(data.screen.map((r) => [r.symbol, { symbol: r.symbol, price: r.price, pe: r.pe }]));
+    for (const p of Object.values(data.prices)) rows.set(p.symbol, { symbol: p.symbol, price: p.price, pe: p.pe ?? rows.get(p.symbol)?.pe ?? null });
+    return peMap([...rows.values()], data.earnings);
+  }, [data.screen, data.prices, data.earnings]);
+  const sectorPe = useMemo(() => sectorPeMap(data.screen, DEFAULT_RULES, pe), [data.screen, pe]);
+  const sectorStat = useMemo(() => sectorStats(data.screen, DEFAULT_RULES, pe), [data.screen, pe]);
+  const ctx: RuleContext = useMemo(() => ({ today, sectorPe, dividends: data.dividends, earnings: data.earnings, pe }), [today, sectorPe, data.dividends, data.earnings, pe]);
+  const view = useMemo(() => buildPortfolio(data.holdings, data.prices, data.settings, DEFAULT_RULES, sectors, ctx), [data.holdings, data.prices, data.settings, sectors, ctx]);
   const ai = cleanInsight(freshInsight(data.aiInsight), view, data.settings);
   const callFor = (row: HoldingView) => mergeCall(row, ai, data.settings);
   const rowOf = (sym: string | null) => view.rows.find((r) => r.holding.symbol === sym);
   const watchOf = (sym: string | null) => data.watchlist.find((w) => w.symbol === sym);
-  const cal = useMemo(() => tradingCalendar(DEFAULT_RULES, data.indexDaily), [data.indexDaily]);
-  const upcoming = useMemo(() => upcomingDividends(data.dividends, today, DEFAULT_RULES, cal), [data.dividends, today, cal]);
 
   const remove = async (h: Holding) => {
     try {
@@ -54,49 +58,29 @@ export function useHoldingActions({ data, source, reload }: Pick<ScreenProps, 'd
     await reload();
     toast(`${sym} removed from watchlist`, { label: 'Undo', run: async () => { await source.addWatch(sym, w.note ?? undefined); await reload(); } });
   };
-  const buy = (sym: string) => setForm({ mode: 'buy', holding: rowOf(sym)?.holding, symbol: sym, price: data.prices[sym]?.price });
+  const watch = async (sym: string) => {
+    try {
+      await source.addWatch(sym);
+      await reload();
+      toast(`${sym} added to your watchlist`);
+    } catch (e) { toast((e as Error).message); }
+  };
+  const buy = (sym: string) => setForm({ mode: 'buy', holding: rowOf(sym)?.holding, symbol: sym, price: data.prices[sym]?.price ?? data.screen.find((r) => r.symbol === sym)?.price });
   const edit = (h: Holding) => setForm({ mode: 'edit', holding: h });
   const planSale = (sym: string | null = null) => setPlan({ open: true, symbol: sym });
 
-  const d = rowOf(detail);
   const menuRow = rowOf(menu);
   const ui = (
     <>
-      <StockSheet open={!!detail} onClose={() => setDetail(null)} symbol={detail ?? ''} price={detail ? data.prices[detail] ?? null : null}
-        row={d} call={d ? callFor(d) : undefined}
-        dividend={upcoming.find((u) => u.symbol === detail) ?? null}
-        news={data.announcements.find((a) => a.symbol === detail && a.kind !== 'other') ?? null}>
-        {d && (d.holding.thesis || d.holding.review_on || d.holding.target_price) && (
-          <div className="rounded-2xl bg-slate-50 p-3 text-sm dark:bg-slate-800/60">
-            <p className="text-xs text-slate-500 dark:text-slate-400">Why I own it</p>
-            <p>{d.holding.thesis ?? <span className="text-slate-500 dark:text-slate-400">Not written yet (Edit to add it)</span>}</p>
-            <p className="num mt-1 text-xs text-slate-500 dark:text-slate-400">
-              {[d.holding.review_on && `Review ${d.holding.review_on <= today ? 'due' : 'on'} ${d.holding.review_on}`, d.holding.target_price && `Target Rs ${d.holding.target_price}`].filter(Boolean).join(' · ')}
-            </p>
-          </div>
-        )}
-        <div className="grid grid-cols-3 gap-2">
-          <Button onClick={() => { const s = detail!; setDetail(null); buy(s); }}><Icon name="bag" />Buy</Button>
-          {d ? (
-            <>
-              <Button kind="secondary" onClick={() => { setDetail(null); edit(d.holding); }}><Icon name="pencil" />Edit</Button>
-              <Button kind="secondary" onClick={() => { const s = detail!; setDetail(null); planSale(s); }}><Icon name="tag" />Plan sale</Button>
-              <Button kind="secondary" className="col-span-3 text-rose-600 dark:text-rose-400" onClick={() => { setDetail(null); remove(d.holding); }}><Icon name="trash" />Remove</Button>
-            </>
-          ) : watchOf(detail) ? (
-            <Button kind="secondary" className="col-span-2" onClick={() => { const s = detail!; setDetail(null); unwatch(s); }}><Icon name="x" />Stop watching</Button>
-          ) : null}
-        </div>
-      </StockSheet>
       <ActionSheet open={!!menu} onClose={() => setMenu(null)} title={menu ?? ''} actions={menuRow ? [
         { label: 'Record a buy', icon: 'bag', onSelect: () => buy(menuRow.holding.symbol) },
         { label: 'Plan a sale', icon: 'tag', onSelect: () => planSale(menuRow.holding.symbol) },
         { label: 'Edit holding', icon: 'pencil', onSelect: () => edit(menuRow.holding) },
-        { label: 'Details', icon: 'eye', onSelect: () => setDetail(menuRow.holding.symbol) },
+        { label: 'Open stock page', icon: 'eye', onSelect: () => openStock(menuRow.holding.symbol) },
         { label: 'Remove', icon: 'trash', destructive: true, onSelect: () => remove(menuRow.holding) },
       ] : menu ? [
         { label: 'Record a buy', icon: 'bag', onSelect: () => buy(menu) },
-        { label: 'Details', icon: 'eye', onSelect: () => setDetail(menu) },
+        { label: 'Open stock page', icon: 'eye', onSelect: () => openStock(menu) },
         { label: 'Stop watching', icon: 'x', destructive: true, onSelect: () => unwatch(menu) },
       ] : []} />
       <SellPlanner open={plan.open} onClose={() => setPlan({ open: false, symbol: null })} view={view} txns={data.transactions} settings={data.settings} preselect={plan.symbol} />
@@ -110,8 +94,9 @@ export function useHoldingActions({ data, source, reload }: Pick<ScreenProps, 'd
   );
 
   return {
-    view, sectors, callFor, ui, today, ai,
-    open: setDetail, menu: setMenu, edit, buy, remove, unwatch, planSale,
+    view, sectors, callFor, ui, today, ai, pe, sectorStat, ctx,
+    // One detail view: every tap on a ticker opens its stock page.
+    open: openStock, menu: setMenu, edit, buy, remove, unwatch, watch, planSale,
     add: () => setForm({ mode: 'add' }),
   };
 }

@@ -2,11 +2,12 @@
  * Discover tab logic over the KSE-100 screen: undervalued names, dividend leaders, upcoming dividends.
  * Rules pick the candidates (with real numbers); the AI only ranks and explains them.
  */
-import type { DividendEvent, Rules } from './types.ts';
+import type { DividendEvent, QuarterEarnings, Rules } from './types.ts';
 import { DEFAULT_RULES } from './types.ts';
 import { addDays } from './time.ts';
 import { dedupeBySymbol } from './symbols.ts';
-import { impliedEps, missingNum, payoutFrequency, payoutRatio, peOutlier, regularDividend } from './quality.ts';
+import { missingNum, oneOffYield, payoutFrequency, payoutOf, peOutlier, regularDividend } from './quality.ts';
+import { sectorNote, sectorStats, type PeFigure } from './valuation.ts';
 import { buyByDate, tradingCalendar, type TradingCalendar } from './calendar.ts';
 
 export interface ScreenRow {
@@ -25,41 +26,51 @@ export interface ScreenRow {
   is_shariah: boolean | null;
 }
 
-const median = (xs: number[]) => {
-  const s = [...xs].sort((a, b) => a - b);
-  return s.length ? (s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2) : null;
-};
 const r1 = (v: number) => Math.round(v * 10) / 10;
 
-export interface Undervalued extends ScreenRow { sector_pe: number | null; discount_pct: number | null; score: number; reason: string }
+export interface Undervalued extends ScreenRow {
+  sector_pe: number | null; // null when the sector cannot be compared (sector_note says why)
+  discount_pct: number | null;
+  score: number;
+  reason: string; // "P/E 6.6 · sector 14.5 · 5.0% yield · 1y -12%", with "sector too mixed to compare" in place of the sector figure
+  sector_note: string | null; // 'sector too mixed to compare' | 'too few sector peers to compare' | null
+  pe_label: string | null; // basis of the P/E (valuation.peFor label) when `opts.pe` was given
+}
 
 /**
  * Profitable KSE-100 stocks priced well below their sector's typical P/E (or cheap outright), still paying dividends.
  * One row per company (PSX's XD/XB/XR spellings are merged). A P/E outside rules.undervalued.pe_outlier_min..max is
  * not evidence of value (AHCL's 1.5 came from unconsolidated investment gains), so such rows are left out here and
  * out of the sector medians; the Dividends list still shows them with a "check figures" chip. 0 and blank are missing.
+ * The sector figure comes from valuation.sectorStats: no comparison (discount_pct null) when the sector has too few
+ * trusted peers or is too mixed. `opts.pe` (valuation.peMap) swaps in the filing-based P/E the stock page shows.
  */
-export function undervalued(screen: ScreenRow[], opts: { shariahOnly?: boolean; exclude?: Set<string> } = {}, rules: Rules = DEFAULT_RULES): Undervalued[] {
+export function undervalued(screen: ScreenRow[], opts: { shariahOnly?: boolean; exclude?: Set<string>; pe?: Record<string, PeFigure> } = {},
+  rules: Rules = DEFAULT_RULES): Undervalued[] {
   const u = rules.undervalued;
-  const rows = dedupeBySymbol(screen);
+  const rows = dedupeBySymbol(screen).map((r) => (opts.pe?.[r.symbol] ? { ...r, pe: opts.pe[r.symbol].pe } : r));
   const trusted = (r: ScreenRow) => !missingNum(r.pe) && !peOutlier(r.pe, rules).outlier;
-  const bySector = new Map<string, number[]>();
-  for (const r of rows) if (trusted(r) && r.sector) bySector.set(r.sector, [...(bySector.get(r.sector) ?? []), r.pe as number]);
+  const stats = sectorStats(rows, rules);
   return rows
     .filter((r) => !missingNum(r.price) && trusted(r) && !missingNum(r.dividend_yield_pct) && (r.dividend_yield_pct as number) >= u.min_dividend_yield_pct
       && (!opts.shariahOnly || r.is_shariah === true) && !opts.exclude?.has(r.symbol))
     .map((r) => {
-      const peers = r.sector ? bySector.get(r.sector) ?? [] : [];
-      const sectorPe = peers.length >= 3 ? median(peers) : null;
+      const stat = r.sector ? stats[r.sector] : undefined;
+      const sectorPe = stat?.comparable ? stat.median : null;
+      const note = sectorNote(stat, rules);
       const discount = sectorPe ? (1 - (r.pe as number) / sectorPe) * 100 : null;
       const cheap = (sectorPe != null && (r.pe as number) <= sectorPe * u.sector_discount) || (r.pe as number) <= u.max_pe * 0.6;
       const fell = r.change_1y_pct != null && r.change_1y_pct < 0 ? Math.min(30, -r.change_1y_pct) / 10 : 0;
       const score = (discount ?? 0) / 10 + (u.max_pe - Math.min(u.max_pe, r.pe as number)) + (r.dividend_yield_pct ?? 0) / 2 + fell;
       const parts = [`P/E ${(r.pe as number).toFixed(1)}`];
       if (sectorPe != null) parts.push(`sector ${sectorPe.toFixed(1)}`);
+      else if (note) parts.push(note);
       parts.push(`${(r.dividend_yield_pct ?? 0).toFixed(1)}% yield`);
       if (r.change_1y_pct != null) parts.push(`1y ${r.change_1y_pct > 0 ? '+' : ''}${r.change_1y_pct.toFixed(0)}%`);
-      return { ...r, sector_pe: sectorPe == null ? null : r1(sectorPe), discount_pct: discount == null ? null : r1(discount), score, reason: parts.join(' · '), cheap };
+      return {
+        ...r, sector_pe: sectorPe == null ? null : r1(sectorPe), discount_pct: discount == null ? null : r1(discount), score, reason: parts.join(' · '),
+        sector_note: note, pe_label: opts.pe?.[r.symbol]?.label ?? null, cheap,
+      };
     })
     .filter((r) => r.cheap && r.pe! <= u.max_pe * 1.5)
     .sort((a, b) => b.score - a.score || a.symbol.localeCompare(b.symbol))
@@ -146,19 +157,24 @@ export interface DividendLeader {
   frequency: Frequency | null;
   frequency_enough: boolean; // at least 2 cash dividend filings behind `frequency`
   outlier: string | null; // why the P/E is not to be trusted, else null
-  payout_pct: number | null; // dividend per share behind the yield as % of earnings (price / P/E)
-  /** Over rules.dividends.suspect_payout_pct of profit with no filing showing which part is a one-off: ranked after the rest. */
+  payout_pct: number | null; // quality.payoutOf: last 12 months of filings, else PSX yield x price, as % of earnings
+  /** Over rules.dividends.suspect_payout_pct of profit on PSX's figure, with no filing showing which part is a one-off: ranked after the rest. */
   suspect: boolean;
+  /** The trailing yield will not repeat (quality.oneOffYield): a special in it, or the latest full-year results paid none. */
+  one_off: boolean;
+  pe_label: string | null; // basis of the P/E (valuation.peFor label) when `opts.pe` was given
   is_shariah: boolean | null;
 }
 
 /**
- * The highest-yielding KSE-100 stocks, one row per company. A yield that rests on a one-off special dividend is
- * ranked on the regular payout instead (from the last 12 months of filings), so a single special cannot carry a stock
- * to the top; the special is reported on the row. Missing PSX figures (0, blank) are never treated as values.
+ * The highest-yielding KSE-100 stocks, one row per company. A one-off yield (a special dividend in the last 12 months,
+ * or latest full-year results with no dividend: quality.oneOffYield) is ranked on the regular payout from the last 12
+ * months of filings instead, so a single special cannot carry a stock to the top; the row says `one_off` and names the
+ * special. Missing PSX figures (0, blank) are never treated as values. `opts.pe` (valuation.peMap) gives the P/E shown
+ * and the EPS the payout is measured against; `opts.earnings` lets a skipped final dividend count as a one-off.
  */
 export function dividendLeaders(screen: ScreenRow[], events: DividendEvent[], today: string,
-  opts: { shariahOnly?: boolean } = {}, rules: Rules = DEFAULT_RULES): DividendLeader[] {
+  opts: { shariahOnly?: boolean; pe?: Record<string, PeFigure>; earnings?: QuarterEarnings[] } = {}, rules: Rules = DEFAULT_RULES): DividendLeader[] {
   const d = rules.dividends;
   return dedupeBySymbol(screen)
     .filter((r) => !missingNum(r.price) && !missingNum(r.dividend_yield_pct) && (!opts.shariahOnly || r.is_shariah === true))
@@ -167,23 +183,28 @@ export function dividendLeaders(screen: ScreenRow[], events: DividendEvent[], to
       const psxYield = r.dividend_yield_pct as number;
       const regular = regularDividend(r.symbol, events, today, price, rules);
       const special = regular?.specials[0] ?? null;
-      const fromFilings = !!regular && !!special && regular.yield_pct != null;
+      const oneOff = oneOffYield(r.symbol, events, today, opts.earnings, rules);
+      const fromFilings = oneOff && !!regular && regular.yield_pct != null;
       const yieldPct = fromFilings ? (regular.yield_pct as number) : psxYield;
       const mine = events.filter((e) => e.symbol === r.symbol && e.dps != null).sort((a, b) => b.announced_on.localeCompare(a.announced_on));
       const freq = payoutFrequency(r.symbol, events, today, rules);
-      const pe = missingNum(r.pe) ? null : (r.pe as number);
+      const fig = opts.pe?.[r.symbol];
+      const pe = fig ? fig.pe : missingNum(r.pe) ? null : (r.pe as number);
       const annualDps = fromFilings ? regular.annual_dps : Math.round((psxYield * price) / 100 * 100) / 100;
-      const payout = payoutRatio(annualDps, impliedEps(price, pe)).pct;
+      // The payout every screen shows (quality.payoutOf): filings first, then PSX's yield x price.
+      const pay = payoutOf(r.symbol, events, today, { price, psxYieldPct: psxYield, eps: fig ? fig.eps : undefined, pe }, rules);
       return {
         symbol: r.symbol, ex: r.ex ?? null, sector: r.sector, price, pe,
         dividend_yield_pct: yieldPct, psx_yield_pct: psxYield, yield_from: fromFilings ? 'filings' as const : 'psx' as const,
-        annual_dps: fromFilings ? regular.annual_dps : Math.round((psxYield * price) / 100 * 100) / 100,
+        annual_dps: annualDps,
         last: mine[0] ?? null, special,
         high_yield_hint: !regular && psxYield > d.special_yield_hint_pct,
         frequency: freq.enough ? freq.label : null, frequency_enough: freq.enough,
         outlier: pe == null ? null : peOutlier(pe, rules).reason,
-        payout_pct: payout,
-        suspect: !fromFilings && payout != null && payout > d.suspect_payout_pct,
+        payout_pct: pay.pct,
+        suspect: pay.suspect,
+        one_off: oneOff,
+        pe_label: fig?.label ?? null,
         is_shariah: r.is_shariah,
       };
     })

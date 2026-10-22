@@ -4,8 +4,11 @@
  *
  *   Value         KSE-100 P/E (the index stocks' total value over total profit, from PSX's screener) against its
  *                 long-run average: cheap / fair / expensive.
- *   Shares vs     what shares earn on their price (earnings yield) minus the 10-year government bond (PIB) yield from
- *   safe yield    SBP's auction: shares / even / safe.
+ *   Shares vs     what shares earn on their price (earnings yield) minus the money-market estimate (3-month T-bill
+ *   safe yield    minus fees), the place the cash advice sends money (owner decision 2026-10-23; rules.compass.gap_basis,
+ *                 'pib' compares with the 10-year bond instead). A neutral band (spread_neutral_low..high, inclusive)
+ *                 changes nothing; below it safe yield pays more, at spread_shares_above shares do. The 10-year PIB
+ *                 is shown for information.
  *   Trend         up / sideways / down: up 20% on a year (PSX's own figure) or from the 12-month low; down 20% from the
  *                 12-month high, or below the 200-day average with the year negative; sideways in between.
  *   Rates         SBP policy rate and its cycle, CPI inflation (PBS), the real rate, T-bill yields, FX reserves, PKR.
@@ -25,6 +28,7 @@ export interface Latest { value: number; as_of: string; source: string; stale: b
 export type Trend = 'up' | 'sideways' | 'down';
 export type ValueState = 'cheap' | 'fair' | 'expensive';
 export type GapState = 'shares' | 'even' | 'safe';
+export type GapBasis = 'money_market' | 'pib';
 export type ActionKey = 'add_extra' | 'buy_in_steps' | 'on_schedule' | 'park_extra';
 
 export interface CompassFacts {
@@ -37,9 +41,14 @@ export interface CompassFacts {
 }
 
 export interface Compass {
-  trend: { state: Trend | null; one_year_pct: number | null; one_year_source: 'psx' | 'index stocks' | null; ma: number | null; drawdown_pct: number | null; rise_pct: number | null; reasons: string[] };
+  /** `provisional` while the 200-day average is not yet known (fewer stored closes than regime.min_days_for_ma). */
+  trend: { state: Trend | null; provisional: boolean; one_year_pct: number | null; one_year_source: 'psx' | 'index stocks' | null; ma: number | null; drawdown_pct: number | null; rise_pct: number | null; reasons: string[] };
   value: { state: ValueState | null; pe: number | null; pe_avg: number; earnings_yield_pct: number | null; dividend_yield_pct: number | null; reasons: string[] };
-  gap: { state: GapState | null; spread_pct: number | null; pib_10y: Latest | null; tbill_3m: Latest | null; tbill_12m: Latest | null; reasons: string[] };
+  /** spread_pct = earnings yield minus the `basis` rate; `neutral` = inside the no-change band; pib_spread_pct for information. */
+  gap: {
+    state: GapState | null; basis: GapBasis; spread_pct: number | null; neutral: boolean; pib_spread_pct: number | null;
+    pib_10y: Latest | null; tbill_3m: Latest | null; tbill_12m: Latest | null; reasons: string[];
+  };
   rates: { policy: RateState | null; cpi: Latest | null; real_rate_pct: number | null; money_market_pct: number | null; savings_pct: number | null };
   macro: { fx_reserves: (Latest & { change_pct: number | null }) | null; pkr_usd: (Latest & { change_pct: number | null }) | null };
   action: { key: ActionKey; title: string; detail: string; extra_multiplier: number; mix: { stocks: number; equity_funds: number; money_market: number } };
@@ -75,14 +84,14 @@ export function trendOf(f: CompassFacts, rules: Rules = DEFAULT_RULES): Compass[
   const reasons: string[] = [];
   if (oneYear != null) reasons.push(`KSE-100 ${fmt(oneYear)}% on a year (${source === 'psx' ? 'PSX' : 'PSX screener, index stocks by market cap'})`);
   reasons.push(...t.reasons.filter((r) => !/on a year/.test(r) && !/No clear signal/.test(r)));
-  if (f.close == null) return { state: null, one_year_pct: oneYear, one_year_source: source, ma: null, drawdown_pct: null, rise_pct: null, reasons: ['No KSE-100 close yet'] };
+  if (f.close == null) return { state: null, provisional: true, one_year_pct: oneYear, one_year_source: source, ma: null, drawdown_pct: null, rise_pct: null, reasons: ['No KSE-100 close yet'] };
   const ma = t.ma;
   const below = ma != null && f.close < ma * (1 - c.band_pct / 100);
   const above = ma == null || f.close >= ma * (1 - c.band_pct / 100);
   const up = ((oneYear != null && oneYear >= c.on_1y_pct) || (t.rise_pct != null && t.rise_pct >= c.on_rise_pct)) && above;
   const down = (t.drawdown_pct != null && t.drawdown_pct <= -c.off_drawdown_pct) || (below && oneYear != null && oneYear < 0);
   const state: Trend | null = down ? 'down' : up ? 'up' : oneYear == null && ma == null ? null : 'sideways';
-  return { state, one_year_pct: oneYear, one_year_source: source, ma, drawdown_pct: t.drawdown_pct, rise_pct: t.rise_pct, reasons };
+  return { state, provisional: ma == null, one_year_pct: oneYear, one_year_source: source, ma, drawdown_pct: t.drawdown_pct, rise_pct: t.rise_pct, reasons };
 }
 
 export function compass(f: CompassFacts, rules: Rules = DEFAULT_RULES): Compass {
@@ -99,21 +108,29 @@ export function compass(f: CompassFacts, rules: Rules = DEFAULT_RULES): Compass 
     ...(f.breadth.dividend_yield_pct != null ? [`Dividend yield ${f.breadth.dividend_yield_pct}%`] : []),
   ];
 
-  // ---- shares vs safe yield ----
-  const pib = L('pib_10y'), t3 = L('tbill_3m'), t12 = L('tbill_12m');
-  const spread = ey != null && pib ? r1(ey - pib.value) : null;
-  const gState: GapState | null = spread == null ? null : spread >= k.spread_shares_above ? 'shares' : spread < k.spread_neutral_low ? 'safe' : 'even';
-  const gReasons = spread == null ? ['Needs the 10-year PIB yield from SBP and the P/E'] : [
-    `Shares earn ${ey}% on their price; the 10-year government bond pays ${pib!.value.toFixed(2)}% (${fmt(spread)} points)`,
-    ...(t12 ? [`12-month T-bill ${t12.value.toFixed(2)}%`] : []),
-  ];
-
   // ---- rates and inflation ----
+  const pib = L('pib_10y'), t3 = L('tbill_3m'), t12 = L('tbill_12m');
   const policy = rateState(f.rates, f.today, rules);
   const cpi = L('cpi_yoy');
   const real = policy && cpi ? r1(policy.rate - cpi.value) : null;
   const mm = t3 ? r1(t3.value - k.money_market_fee_pct) : policy ? r1(policy.rate - rules.regime.money_market_below_policy_pct) : null;
   const savings = policy ? r1(policy.rate - rules.regime.savings_below_policy_pct) : null;
+
+  // ---- shares vs safe yield: against the money-market estimate (or the PIB when the setting says so) ----
+  const basis: GapBasis = k.gap_basis === 'pib' ? 'pib' : 'money_market';
+  const pibSpread = ey != null && pib ? r1(ey - pib.value) : null;
+  const ref = basis === 'pib' ? pib?.value ?? null : mm;
+  const spread = ey != null && ref != null ? r1(ey - ref) : null;
+  const neutral = spread != null && spread >= k.spread_neutral_low && spread <= k.spread_neutral_high;
+  const gState: GapState | null = spread == null ? null : spread < k.spread_neutral_low ? 'safe'
+    : spread > k.spread_neutral_high && spread >= k.spread_shares_above ? 'shares' : 'even';
+  const refText = basis === 'pib' ? `the 10-year government bond pays ${pib?.value.toFixed(2)}%`
+    : `a money-market fund pays about ${mm?.toFixed(1)}% (${t3 ? '3-month T-bill minus fees' : 'from the policy rate'}, estimate)`;
+  const gReasons = spread == null ? [basis === 'pib' ? 'Needs the 10-year PIB yield from SBP and the P/E' : 'Needs the P/E and the 3-month T-bill from SBP'] : [
+    `Shares earn ${ey}% on their price; ${refText}: ${fmt(spread)} points`,
+    ...(basis !== 'pib' && pib ? [`For information: the 10-year government bond pays ${pib.value.toFixed(2)}%${pibSpread != null ? ` (${fmt(pibSpread)} points)` : ''}`] : []),
+    ...(t12 ? [`12-month T-bill ${t12.value.toFixed(2)}%`] : []),
+  ];
 
   const fx = L('fx_reserves_total'), pkr = L('pkr_usd');
 
@@ -135,7 +152,7 @@ export function compass(f: CompassFacts, rules: Rules = DEFAULT_RULES): Compass 
   return {
     trend,
     value: { state: vState, pe, pe_avg: k.pe_long_run_avg, earnings_yield_pct: ey, dividend_yield_pct: f.breadth.dividend_yield_pct, reasons: vReasons },
-    gap: { state: gState, spread_pct: spread, pib_10y: pib, tbill_3m: t3, tbill_12m: t12, reasons: gReasons },
+    gap: { state: gState, basis, spread_pct: spread, neutral, pib_spread_pct: pibSpread, pib_10y: pib, tbill_3m: t3, tbill_12m: t12, reasons: gReasons },
     rates: { policy, cpi, real_rate_pct: real, money_market_pct: mm, savings_pct: savings },
     macro: {
       fx_reserves: fx ? { ...fx, change_pct: changeOver(f.macro, 'fx_reserves_total', fx, 28) } : null,
@@ -147,4 +164,4 @@ export function compass(f: CompassFacts, rules: Rules = DEFAULT_RULES): Compass 
 
 export const TREND_WORD: Record<Trend, string> = { up: 'Up', sideways: 'Sideways', down: 'Down' };
 export const VALUE_WORD: Record<ValueState, string> = { cheap: 'Cheap', fair: 'Fair', expensive: 'Expensive' };
-export const GAP_WORD: Record<GapState, string> = { shares: 'Shares pay more', even: 'About even', safe: 'Bonds pay more' };
+export const GAP_WORD: Record<GapState, string> = { shares: 'Shares pay more', even: 'About even', safe: 'Safe yield pays more' };

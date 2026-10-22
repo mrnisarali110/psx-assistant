@@ -5,7 +5,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import type { DataSource, WorkerRun } from '../lib/data.ts';
-import { asOfLabel } from '../../shared/format.ts';
+import { dayTime } from '../../shared/format.ts';
 import { haptic } from '../lib/gestures.ts';
 import { Icon } from './Icon.tsx';
 import { Button } from './ui.tsx';
@@ -57,30 +57,31 @@ export function RefreshLatest({ source, last, reload }: { source: DataSource; la
   return (
     <div className="space-y-3 py-3">
       <div className="flex items-center gap-3">
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-teal-100 text-teal-700 dark:bg-teal-950 dark:text-teal-300">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand/10 text-brand">
           <Icon name="refresh" className={`h-[18px] w-[18px] ${running ? 'animate-spin [animation-duration:1.4s]' : ''}`} />
         </span>
         <div className="min-w-0 flex-1">
-          <p className="text-[15px] font-medium">Refresh latest</p>
-          <p className="text-xs text-slate-500 dark:text-slate-400">
-            Runs everything now: prices, filings, AI, blue chips. {last?.finished_at ? `Last refresh ${asOfLabel(last.started_at)}.` : 'Not run yet.'}
+          <p className="text-16 font-medium">Refresh latest</p>
+          <p className="text-14 text-muted">
+            Runs everything now: prices, filings, AI, blue chips. {last?.finished_at ? `Last refresh ${dayTime(last.started_at)}.` : 'Not run yet.'}
           </p>
         </div>
         <Button kind="secondary" className="min-h-11 shrink-0" disabled={running} onClick={start}>{running ? 'Running…' : 'Refresh'}</Button>
       </div>
       {running && (
-        <div className="rounded-2xl bg-slate-50 p-3 text-sm dark:bg-slate-800/60" role="status" aria-live="polite" data-tick={tick}>
-          <div className="mb-2 h-1.5 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700"><div className="refresh-bar h-full w-1/3 rounded-full bg-teal-600" /></div>
+        <div className="rounded-control bg-surface-2 p-3 text-14" role="status" aria-live="polite" data-tick={tick}>
+          <div className="mb-2 h-1.5 overflow-hidden rounded-full bg-line"><div className="refresh-bar h-full w-1/3 rounded-full bg-brand" /></div>
           <p className="font-medium">Working on it{elapsed ? ` · ${elapsed} min` : ''}. Usually 3 to 8 minutes; you can leave this screen.</p>
-          <ul className="mt-1 space-y-0.5 text-xs text-slate-500 dark:text-slate-400">{STEPS.map((s) => <li key={s}>· {s}</li>)}</ul>
+          <ul className="mt-1 space-y-0.5 text-muted">{STEPS.map((s) => <li key={s}>· {s}</li>)}</ul>
         </div>
       )}
       {phase.kind === 'done' && (
-        <p className={`text-sm ${phase.ok ? 'text-emerald-700 dark:text-emerald-400' : 'text-amber-700 dark:text-amber-400'}`} role="status">
+        <p className={`flex items-center gap-1.5 text-14 ${phase.ok ? 'text-ink' : 'text-caution'}`} role="status">
+          <Icon name={phase.ok ? 'check' : 'alert'} className="h-4 w-4 shrink-0" />
           {phase.ok ? 'Everything is up to date.' : 'Finished, but PSX or the AI did not answer everything; what did arrive is shown.'}
         </p>
       )}
-      {phase.kind === 'error' && <p className="text-sm text-amber-700 dark:text-amber-400" role="alert">{phase.text}</p>}
+      {phase.kind === 'error' && <p className="flex items-center gap-1.5 text-14 text-caution" role="alert"><Icon name="alert" className="h-4 w-4 shrink-0" />{phase.text}</p>}
     </div>
   );
 }

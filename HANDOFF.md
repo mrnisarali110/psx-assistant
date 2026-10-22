@@ -1,7 +1,32 @@
-# PSX Assistant — Work Handoff
+# PSX Assist — Work Handoff
 
-_Last updated: 2026-10-18 (evening PKT). Read this first in a new chat. `README.md` describes the product, every
+_Last updated: 2026-10-23 (PKT). Read this first in a new chat. `README.md` describes the product, every
 rule and the data sources in full; this file is about state, open items and how to work on it._
+
+## 2026-10-23: owner review fixes and redesign (newest)
+
+Design `docs/superpowers/specs/2026-10-23-review-fixes-and-redesign-design.md`, plan
+`docs/superpowers/plans/2026-10-23-review-fixes-and-redesign.md` (owner decisions are marked in the design).
+- **Data fixes:** Expected dividends use holdings when the buy log has gaps (`heldAtBookClosure`); P/E from filing EPS,
+  consolidated first (`shared/valuation.ts` `peFor`), and the rules use the same P/E; charges row says what it covers;
+  receipts form (no silent date, edit in place); trend "provisional" until 120 closes; OGDCL→OGDC alias; Compass gap vs
+  the money-market estimate with a neutral band −1..+1 (`compass.spread_*`, VERIFY); payout > 90% caution and one-off
+  yields; sector P/E = median of ≥ 5 peers, skipped when too spread out; AI reasons must add a new fact; benchmark
+  hidden under 30 days; projection in today's money (`settings.inflation_pct`); "Last session (Thu)" and a greeting by
+  hour.
+- **Design:** tokens in `src/index.css` (`text-up/down/caution/brand/muted`, `text-12..40`, `rounded-card`), primitives
+  in `src/components/ui.tsx` (`Change` with ▲▼, `Chip`, `CompanyMark`, `InfoTip`, `HowItWorks`), one date language
+  (`shared/format.ts` `day/dayTime/time/sessionLabel/greeting`), routes in `src/lib/nav.ts` incl. `#/stock/SYM` and
+  `#/profile/<section>`. Phone tabs Home, Market, Portfolio, Discover, News + avatar → Profile; freshness line; Home
+  chart (1D/1W/1M/YTD/All) and holdings list; stock page; Market "How this works" sheets; News metric chips and
+  "Impact on you"; sectioned Profile; first-run setup. One name: **PSX Assist**.
+- **Migration 0012:** `price_daily`, `portfolio_ticks` (10 days), `earnings.eps/eps_basis/period_months`,
+  `announcements.ai_metrics`, `settings.inflation_pct/onboarded`. History (stock charts, sparklines, 1D) builds from
+  2026-10-23; PSX's timeseries stays unused (bot-checked). Dev check of charts: `?demo=1&sample=1` (sample series,
+  plain demo shows the empty states).
+- **Open for the owner:** custom domain (skipped for now); whether to tighten `undervalued.sector_max_iqr_ratio`
+  (MUREB still shows ~61% below a food median of 16.6 because it is far below all 6 peers); VERIFY the re-based
+  `compass.spread_shares_above` 2 and `growth.inflation_pct` 10.
 
 ## Where everything is
 

@@ -14,13 +14,12 @@ import { DEFAULT_SETTINGS } from '../shared/types.ts';
 import { SEED_HOLDINGS, SEED_WATCHLIST } from '../shared/fixtures/seed.ts';
 import { llmHealth, makeRouter } from '../shared/llm.ts';
 import { buildPortfolio } from '../shared/portfolio.ts';
-import { undervalued } from '../shared/discover.ts';
 import { pktDate } from '../shared/time.ts';
 import { readFileSync } from 'node:fs';
 import { readPortfolioScreenshots } from '../shared/screenshots.ts';
 import { discoverPicks, portfolioInsight, readAnnouncement } from './ai.ts';
 import { Fetcher, fetchSnapshot, toPrice, toScreenRows } from './feed.ts';
-import { buildFacts, runJob, type JobName } from './jobs.ts';
+import { buildFacts, pickCandidates, rulesPe, runJob, type JobName } from './jobs.ts';
 import { ConsoleNotifier, RealNotifier } from './notify.ts';
 import { MemoryStore, SupabaseStore, type UserCtx } from './store.ts';
 import { processTelegramUpdates } from './telegram.ts';
@@ -77,13 +76,16 @@ async function aiCheck(): Promise<number> {
       console.log(`\n== Filing: ${ann.symbol} ${ann.published_at} "${ann.title}"\nmodel=${d.model} verified=${d.verified}${d.date_note ? ` dates=${d.date_note}` : ''}\n${d.summary}`);
       for (const f of d.figures) console.log(`  ${f.verified ? '✓' : '?'} ${f.label}: ${f.value}`);
       if (d.dividend) console.log(`  dividend: Rs ${d.dividend.dps} ${d.dividend.type ?? ''} book closure ${d.dividend.book_closure_from ?? '?'} verified=${d.dividend.verified}`);
+      for (const [label, e] of [['quarter', d.earnings], ['year', d.annual]] as const) if (e?.eps != null) console.log(`  EPS (${label}): ${e.eps} ${e.eps_basis}`);
+      console.log(`  News card: ${JSON.stringify(d.metrics)}`);
     } catch (e) { ok = false; console.error('filing read failed:', (e as Error).message); }
   }
   const k = snap.indices.KSE100;
   const idx = k?.value ? { ts: snap.fetched_at, kse100: k.value, change: k.change, change_pct: k.change_pct } : null;
   const today = pktDate(new Date());
-  const { facts, guard } = buildFacts(u, buildPortfolio(u.holdings, prices, u.settings), new Set(syms),
-    { today, idx, prices, screen, news: [], dividends: [], now: new Date() }, 0);
+  const pe = rulesPe(screen, prices, []);
+  const { facts, guard } = buildFacts(u, buildPortfolio(u.holdings, prices, u.settings, undefined, {}, { today, pe }), new Set(syms),
+    { today, idx, prices, screen, news: [], dividends: [], now: new Date(), pe }, 0);
   try {
     const r = await portfolioInsight(ai, facts, guard);
     console.log(`\n== AI Assistant (model=${r.model}, dropped=${r.dropped}) stance=${r.insight.stance}\n${r.insight.headline}`);
@@ -93,8 +95,7 @@ async function aiCheck(): Promise<number> {
     if (r.reasons.length) console.log(`  guardrails dropped: ${r.reasons.join(' | ')}`);
   } catch (e) { ok = false; console.error('insight failed:', (e as Error).message); }
   try {
-    const uv = undervalued(screen).map((r) => ({ symbol: r.symbol, sector: r.sector, price: r.price, pe: r.pe, sector_pe: r.sector_pe, dividend_yield_pct: r.dividend_yield_pct, change_1y_pct: r.change_1y_pct }));
-    const p = await discoverPicks(ai, 'undervalued', uv);
+    const p = await discoverPicks(ai, 'undervalued', pickCandidates(screen, { today, dividends: [], pe }).undervalued);
     console.log(`\n== Undervalued picks (${p.model})`);
     for (const i of p.items) console.log(`  ${i.symbol.padEnd(8)} ${i.why}`);
   } catch (e) { ok = false; console.error('picks failed:', (e as Error).message); }

@@ -64,6 +64,8 @@ export interface DataSource {
   deleteTxn(id: string): Promise<void>;
   /** A dividend credited to the account. */
   saveReceipt(r: DividendReceipt): Promise<void>;
+  /** Correct a saved receipt in place (shares, date, amount). */
+  updateReceipt(id: string, r: DividendReceipt): Promise<void>;
   deleteReceipt(id: string): Promise<void>;
   addWatch(symbol: string, note?: string): Promise<void>;
   deleteWatch(id: string): Promise<void>;
@@ -131,6 +133,7 @@ const normRegime = (r: any): RegimeDay => ({
   pe: n(r.pe), dividend_yield_pct: n(r.dividend_yield_pct),
   value_state: r.value_state === 'cheap' || r.value_state === 'fair' || r.value_state === 'expensive' ? r.value_state : null,
   action: typeof r.action === 'string' ? r.action : null,
+  compass: r.compass ?? null, // stored reading incl. gap_basis (Market: past readings vs money market or the 10-year bond)
 });
 const normMacro = (r: any): MacroReading | null => {
   const value = Number(r.value);
@@ -267,6 +270,7 @@ export class LiveSource implements DataSource {
   }
   async deleteTxn(id: string) { ok(await supabase().from('transactions').delete().eq('id', id)); }
   async saveReceipt(r: DividendReceipt) { ok(await supabase().from('dividend_receipts').insert({ ...receiptRow(r), user_id: this.userId })); }
+  async updateReceipt(id: string, r: DividendReceipt) { ok(await supabase().from('dividend_receipts').update(receiptRow(r)).eq('id', id)); }
   async deleteReceipt(id: string) { ok(await supabase().from('dividend_receipts').delete().eq('id', id)); }
   async addWatch(symbol: string, note?: string) { ok(await supabase().from('watchlist').insert({ symbol, note: note || null, user_id: this.userId })); }
   async deleteWatch(id: string) { ok(await supabase().from('watchlist').delete().eq('id', id)); }
@@ -424,6 +428,7 @@ export class DemoSource implements DataSource {
   async updateTxn(id: string, patch: Partial<Txn>) { this.txns = this.txns.map((t) => (t.id === id ? { ...t, ...patch } : t)); }
   async deleteTxn(id: string) { this.txns = this.txns.filter((t) => t.id !== id); }
   async saveReceipt(r: DividendReceipt) { this.receipts.unshift({ ...r, id: r.id ?? `demo-r${Date.now()}` }); }
+  async updateReceipt(id: string, r: DividendReceipt) { this.receipts = this.receipts.map((x) => (x.id === id ? { ...r, id } : x)); }
   async deleteReceipt(id: string) { this.receipts = this.receipts.filter((r) => r.id !== id); }
   async saveHoldingChange(before: Holding | undefined, after: Holding | null, txn: Txn | null) {
     if (!after) this.holdings = this.holdings.filter((h) => h.id !== before?.id);

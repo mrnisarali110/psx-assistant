@@ -4,7 +4,7 @@
  * numbers shown beside it, and which of the three Home states we are in. Pure logic; every threshold comes
  * from rules.json. Nothing here invents data: a missing input gives null or an explicit flag, never a guess.
  */
-import type { DividendEvent, Rules } from './types.ts';
+import type { DividendEvent, QuarterEarnings, Rules } from './types.ts';
 import { DEFAULT_RULES } from './types.ts';
 import { addDays } from './time.ts';
 import { rs } from './format.ts';
@@ -89,6 +89,24 @@ export function payoutRatio(annualDps: number | null | undefined, eps: number | 
 }
 
 /**
+ * The one payout figure every screen, rule and AI fact uses (owner review A8): dividend per share from the last 12
+ * months of `symbol`'s filings (regular only, specials left out) when there are any, else PSX's yield x price; earnings
+ * are `eps` (the filing-based EPS from valuation.peFor; null there means no figure) when given, else price / P/E.
+ * `suspect` = over rules.dividends.suspect_payout_pct on PSX's figure, with no filing to show which part is a one-off.
+ * A null `symbol` (a list that mixes companies) leaves the filings out rather than guessing.
+ */
+export function payoutOf(symbol: string | null, events: DividendEvent[], today: string,
+  o: { price: number | null; psxYieldPct: number | null; eps?: number | null; pe?: number | null }, rules: Rules = DEFAULT_RULES):
+  { pct: number | null; unsustainable: boolean; dps: number | null; from: 'filings' | 'psx' | null; suspect: boolean } {
+  const regular = symbol ? regularDividend(symbol, events, today, o.price, rules) : null;
+  const psxDps = !missingNum(o.price) && !missingNum(o.psxYieldPct) ? r2(((o.psxYieldPct as number) * (o.price as number)) / 100) : null;
+  const dps = regular ? regular.annual_dps : psxDps;
+  const from = regular ? 'filings' as const : psxDps != null ? 'psx' as const : null;
+  const { pct, unsustainable } = payoutRatio(dps, o.eps !== undefined ? o.eps : impliedEps(o.price, o.pe));
+  return { pct, unsustainable, dps, from, suspect: from === 'psx' && pct != null && pct > rules.dividends.suspect_payout_pct };
+}
+
+/**
  * A declared dividend is "special" when its type says so, or when its dps is more than
  * rules.dividends.special_multiple_of_median x the median dps of the symbol's other filings in `events`
  * (at least 2 others needed; filings typed 'special' are left out of that median so one-offs do not raise
@@ -116,6 +134,19 @@ export function regularDividend(symbol: string, events: DividendEvent[], today: 
   const specials = recent.filter((e) => isSpecial(e, events, rules));
   const annual = r2(recent.filter((e) => !specials.includes(e)).reduce((a, e) => a + (e.dps as number), 0));
   return { annual_dps: annual, yield_pct: missingNum(price) ? null : r2((annual / (price as number)) * 100), specials, count: recent.length };
+}
+
+/**
+ * A trailing yield that will not repeat (owner review A8): a special dividend inside the 365 days ending `today`, or
+ * the latest full-year results (a 12-month `earnings` row) came with no dividend: none declared in that filing (same
+ * announcement id) or after the year end. A quarter without a dividend says nothing (many companies pay yearly).
+ */
+export function oneOffYield(symbol: string, events: DividendEvent[], today: string, earnings: QuarterEarnings[] = [], rules: Rules = DEFAULT_RULES): boolean {
+  if (regularDividend(symbol, events, today, null, rules)?.specials.length) return true;
+  const year = earnings.filter((e) => e.symbol === symbol && e.period_months === 12 && e.period_end <= today)
+    .sort((a, b) => b.period_end.localeCompare(a.period_end))[0];
+  if (!year) return false;
+  return !cashDividends(events, symbol).some((e) => e.id === year.id || (e.announced_on > year.period_end && e.announced_on <= today));
 }
 
 /**
@@ -165,8 +196,9 @@ export interface QualityChip { key: 'loss' | 'payout' | 'trend' | 'special' | 'o
  * Small chips for a Discover card, in this order when they apply:
  * - loss (red): only a P/E below zero, "Loss-making". A 0 or blank P/E is missing data (BAFL is profitable but
  *   PSX leaves its P/E blank), so it gets the slate "No P/E figure" chip and is never hidden as loss-making.
- * - payout (amber): regular dividend over 100% of earnings. Dividend per share comes from the last 12 months
- *   of filings when there are any, else from PSX's yield x price; earnings from price / P/E.
+ * - payout (amber): regular dividend over rules.holding.payout_warn_pct of earnings, "High payout — may not last";
+ *   over rules.dividends.suspect_payout_pct the figure itself ("Pays out 160% of profit"). The figure is payoutOf's,
+ *   the same on every screen; `eps` is the filing-based EPS from valuation.peFor. `loss` (from peFor) is the loss chip.
  * - trend (green up, red down, slate flat): "1y +12%" from change_1y_pct when known.
  * - special (amber): a one-off dividend in the last 12 months (the yield is inflated by it).
  * - outlier (amber): a positive P/E outside rules.undervalued.pe_outlier_min..max, "check figures".
@@ -176,7 +208,8 @@ export interface QualityChip { key: 'loss' | 'payout' | 'trend' | 'special' | 'o
  * says which are this company's; without it such a list is ignored (PSX's own figures decide the chips)
  * rather than guessed from.
  */
-export function qualityChips(row: { symbol?: string; pe: number | null; price: number | null; dividend_yield_pct: number | null; change_1y_pct?: number | null },
+export function qualityChips(row: { symbol?: string; pe: number | null; price: number | null; dividend_yield_pct: number | null; change_1y_pct?: number | null;
+  eps?: number | null; loss?: boolean },
   events: DividendEvent[], today: string, rules: Rules = DEFAULT_RULES): QualityChip[] {
   const chips: QualityChip[] = [];
   const symbol = row.symbol ?? onlySymbol(events);
@@ -184,13 +217,13 @@ export function qualityChips(row: { symbol?: string; pe: number | null; price: n
   const peNumber = row.pe != null && Number.isFinite(row.pe) ? row.pe : null;
   const peGap = peNumber == null || peNumber === 0; // PSX leaves the cell blank or prints 0 when it has no figure
 
-  if (peNumber != null && peNumber < 0) chips.push({ key: 'loss', label: 'Loss-making', tone: 'red' });
+  const loss = row.loss ?? (peNumber != null && peNumber < 0);
+  if (loss) chips.push({ key: 'loss', label: 'Loss-making', tone: 'red' });
 
-  const eps = impliedEps(row.price, row.pe);
   const regular = symbol ? regularDividend(symbol, events, today, row.price, rules) : null;
-  const dps = regular ? regular.annual_dps : havePrice && !missingNum(row.dividend_yield_pct) ? r2(((row.dividend_yield_pct as number) * (row.price as number)) / 100) : null;
-  const payout = payoutRatio(dps, eps);
-  if (payout.unsustainable) chips.push({ key: 'payout', label: `Pays out ${fmt(payout.pct as number)}% of profit`, tone: 'amber' });
+  const payout = payoutOf(symbol, events, today, { price: row.price, psxYieldPct: row.dividend_yield_pct, eps: row.eps, pe: row.pe }, rules).pct;
+  if (payout != null && payout > rules.dividends.suspect_payout_pct) chips.push({ key: 'payout', label: `Pays out ${fmt(payout)}% of profit`, tone: 'amber' });
+  else if (payout != null && payout > rules.holding.payout_warn_pct) chips.push({ key: 'payout', label: 'High payout — may not last', tone: 'amber' });
 
   const t = row.change_1y_pct;
   if (t != null && Number.isFinite(t)) {

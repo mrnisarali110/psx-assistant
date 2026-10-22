@@ -7,8 +7,9 @@
  * its base and its markers, and merges rows that are the same company under different markers.
  *
  * Pure logic: no DOM, no Node. The marker table below is PSX notation, not a rate or threshold, so it lives here
- * rather than in rules.json.
+ * rather than in rules.json; the alias map for long forms people type (OGDCL for OGDC) is a setting in rules.json.
  */
+import { DEFAULT_RULES, type Rules } from './types.ts';
 
 export interface SymbolParts {
   /** The company's symbol without any marker: upper case, trimmed. */
@@ -142,3 +143,19 @@ export function normalisePriceMap<T extends { symbol: string; ex?: string | null
   for (const row of dedupeBySymbol(rows, known)) out[row.symbol] = row;
   return out;
 }
+
+/**
+ * The PSX symbol for what someone typed: "ogdcl xd" -> "OGDC". Drops an exchange prefix ("PSX:"), spaces and
+ * punctuation, upper-cases, strips the ex markers (splitSymbol rules, `known` as there) and reads the result through
+ * rules.symbols.aliases. Empty input gives "".
+ */
+export function canonicalSymbol(input: string, known?: Iterable<string>, rules: Rules = DEFAULT_RULES): string {
+  const typed = clean(input.split(':').at(-1) ?? '').replace(/[^A-Z0-9]/g, '');
+  if (!typed) return '';
+  const aliases = rules.symbols.aliases as Record<string, string>;
+  const base = baseSymbol(aliases[typed] ?? typed, known);
+  return aliases[base] ?? base;
+}
+
+/** A watchlist entry as stored: the canonical PSX symbol (same rules as canonicalSymbol). */
+export const normaliseWatchSymbol = canonicalSymbol;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { discoverPicks, guardInsight, numberSet, numbersGrounded } from './ai.ts';
-import { buildFacts } from './jobs.ts';
+import { discoverPicks, guardInsight, numberSet, numbersGrounded, readAnnouncement } from './ai.ts';
+import { buildFacts, rulesPe } from './jobs.ts';
+import { tinyPdf } from './fixtures/tiny-pdf.ts';
 import type { UserCtx } from './store.ts';
 import { GeminiProvider, GroqProvider, LlmHealth, LlmRouter, makeRouter, parseJsonLoose } from '../shared/llm.ts';
 import { buildPortfolio } from '../shared/portfolio.ts';
@@ -78,12 +79,30 @@ describe('AI guardrails', () => {
     expect(r.insight.stance).toBe('wait');
   });
 
-  it('Discover picks keep only candidate symbols and grounded reasons', async () => {
+  it('Discover picks keep only candidate symbols and reasons grounded in the new facts', async () => {
     const ai = { available: true, json: async () => ({ model: 'fake', data: { items: [
-      { symbol: 'AAA', why: 'P/E 4.2 vs sector 8.1', frequency: 'Quarterly' }, { symbol: 'ZZZ', why: 'great' }, { symbol: 'BBB', why: 'will double to 300' },
+      { symbol: 'AAA', why: 'Pays out 64.5% of profit; profit fell 12.3% in its latest results', frequency: 'Quarterly' }, { symbol: 'ZZZ', why: 'great' },
+      { symbol: 'BBB', why: 'will double to 300' },
     ] } }) } as unknown as LlmRouter;
-    const r = await discoverPicks(ai, 'dividend', [{ symbol: 'AAA', pe: 4.2, sector_pe: 8.1 }, { symbol: 'BBB', pe: 5 }]);
-    expect(r.items).toEqual([{ symbol: 'AAA', why: 'P/E 4.2 vs sector 8.1', frequency: 'Quarterly' }]);
+    const r = await discoverPicks(ai, 'dividend', [
+      { symbol: 'AAA', on_card: { pe: 4.2, dividend_yield_pct: 9.1 }, more: { payout_pct: 64.5, results_profit_change_pct: -12.3, suspect: false } },
+      { symbol: 'BBB', on_card: { pe: 5 }, more: { payout_pct: 40 } },
+    ]);
+    expect(r.items).toEqual([{ symbol: 'AAA', why: 'Pays out 64.5% of profit; profit fell 12.3% in its latest results', frequency: 'Quarterly', facts: { payout_pct: 64.5, results_profit_change_pct: -12.3 } }]);
+  });
+
+  it('Discover picks add one new fact: a reason that repeats a card number, or picks a suspect payout, is dropped', async () => {
+    const ai = { available: true, json: async () => ({ model: 'fake', data: { items: [
+      { symbol: 'AAA', why: 'P/E 4.2 with a 9.1% yield' }, { symbol: 'BBB', why: 'Yield of 8% and pays out 40% of profit' },
+      { symbol: 'CCC', why: 'Pays out 55.1% of profit' }, { symbol: 'DDD', why: 'Pays out 180% of profit' },
+    ] } }) } as unknown as LlmRouter;
+    const r = await discoverPicks(ai, 'dividend', [
+      { symbol: 'AAA', on_card: { pe: 4.2, dividend_yield_pct: 9.1 }, more: { payout_pct: 64.5 } },
+      { symbol: 'BBB', on_card: { pe: 5, dividend_yield_pct: 8 }, more: { payout_pct: 40 } },
+      { symbol: 'CCC', on_card: { pe: 6, dividend_yield_pct: 7.5 }, more: { payout_pct: 55.1 } },
+      { symbol: 'DDD', on_card: { pe: 9, dividend_yield_pct: 20 }, more: { payout_pct: 180, suspect: true } },
+    ]);
+    expect(r.items.map((i) => i.symbol)).toEqual(['CCC']);
   });
 });
 
@@ -283,5 +302,65 @@ describe('Refresh latest endpoint', () => {
     expect(recent.status).toBe(429);
     expect(await recent.json()).toMatchObject({ status: 'recent', retry_in_min: 5 });
     expect((await handleRefresh(post(), env, make([{ started_at: '2026-10-18T09:40:00Z', finished_at: '2026-10-18T09:44:00Z' }]).f, NOW)).status).toBe(202);
+  });
+});
+
+describe('filing reader: EPS and News card figures (owner review A2, B10)', () => {
+  const answer = (data: Record<string, unknown>) => ({ available: true, json: async () => ({ model: 'fake', data: { summary: 'Results.', figures: [], ...data } }) }) as unknown as LlmRouter;
+
+  it('reads the quarter EPS with its basis and months, and works out the profit change from printed figures', async () => {
+    const pdf = tinyPdf('Quarter ended September 30, 2026. Consolidated profit after tax 1,234,567 (2025: 1,000,000) Rupees in thousand. '
+      + 'Earnings per share - basic (Rupees) 7.42. Interim cash dividend Rs 5.00 per share (50%).');
+    const d = await readAnnouncement(answer({
+      headline: 'Profit up 23.5%, Rs 5 dividend', cash_dividend_per_share: 5, dividend_type: 'interim', quarter_end: '2026-09-30', quarter_profit_after_tax: 1234567000,
+      eps: 7.42, eps_period_months: 3, eps_basis: 'consolidated', profit_this_period: 1234567, profit_same_period_last_year: 1000000,
+    }), pdf, { symbol: 'AAA', title: 'Financial Results for the Quarter Ended September 30, 2026', published_at: '2026-10-20' });
+    expect(d.metrics).toEqual({ headline: 'Profit up 23.5%, Rs 5 dividend', eps: 7.42, eps_basis: 'consolidated', dps: 5, profit_change_pct: 23.5 });
+    expect(d.earnings).toMatchObject({ period_end: '2026-09-30', profit_after_tax: 1234567000, eps: 7.42, eps_basis: 'consolidated', period_months: 3 });
+  });
+
+  it('keeps a full-year EPS for the year; drops any figure the PDF does not print', async () => {
+    const pdf = tinyPdf('Financial results for the year ended June 30, 2026 (unconsolidated). Profit after tax 5,000,000 thousand. Earnings per share 12.50');
+    const d = await readAnnouncement(answer({
+      headline: 'Profit up 22%', annual_year_end: '2026-06-30', annual_profit_after_tax: 5e9, annual_consolidated: false,
+      eps: 12.5, eps_period_months: 12, eps_basis: 'unconsolidated', quarter_eps: 3.3, profit_this_period: 5000000, profit_same_period_last_year: 4100000,
+    }), pdf, { symbol: 'AAA', title: 'Financial Results for the Year Ended June 30, 2026', published_at: '2026-08-20' });
+    expect(d.annual).toMatchObject({ year: 2026, period_end: '2026-06-30', eps: 12.5, eps_basis: 'unconsolidated' });
+    expect(d.earnings).toBeNull();
+    expect(d.metrics).toEqual({ headline: null, eps: 12.5, eps_basis: 'unconsolidated', dps: null, profit_change_pct: null }); // 22% and 4,100,000 are not in it
+    const wrong = await readAnnouncement(answer({ eps: 12.6, eps_period_months: 12, annual_year_end: '2026-06-30', annual_profit_after_tax: 5e9 }), pdf,
+      { symbol: 'AAA', title: 'Financial Results', published_at: '2026-08-20' });
+    expect(wrong.metrics.eps).toBeNull();
+    expect(wrong.annual?.eps).toBeNull();
+  });
+
+  it('an EPS without a stated basis says so', async () => {
+    const pdf = tinyPdf('Year ended June 30, 2026. Profit after tax 900,000. Earnings per share 4.75');
+    const d = await readAnnouncement(answer({ eps: 4.75, eps_period_months: 12, annual_year_end: '2026-06-30', annual_profit_after_tax: 900000 }), pdf,
+      { symbol: 'AAA', title: 'Financial Results', published_at: '2026-08-20' });
+    expect(d.annual).toMatchObject({ eps: 4.75, eps_basis: 'not_stated' });
+  });
+});
+
+describe('AI facts: payout, one-off, cuts and results (owner review A8, A10)', () => {
+  it('holdings carry the P/E the app shows with its basis, the payout, a dividend cut and the latest results change', () => {
+    const u = owner();
+    const mine = new Set([...SEED_HOLDINGS.map((h) => h.symbol), ...SEED_WATCHLIST.map((w) => w.symbol)]);
+    const earnings = [{ id: 'sys-fy', symbol: 'SYS', period_end: '2025-12-31', profit_after_tax: 1e10, verified: true, eps: 10, eps_basis: 'consolidated' as const, period_months: 12 }];
+    const dividends = [
+      { id: 'u1', symbol: 'UBL', announced_on: '2025-10-20', dps: 11, dividend_type: 'interim' as const, book_closure_from: null, book_closure_to: null, verified: true, pdf_url: null },
+      { id: 'u2', symbol: 'UBL', announced_on: '2026-04-20', dps: 8, dividend_type: 'interim' as const, book_closure_from: null, book_closure_to: null, verified: true, pdf_url: null },
+    ];
+    const pe = rulesPe([], SEED_PRICES, earnings);
+    const { facts } = buildFacts(u, buildPortfolio(u.holdings, SEED_PRICES, u.settings, DEFAULT_RULES, {}, { pe, earnings }), mine, {
+      today: '2026-10-06', idx: SEED_INDEX, prices: SEED_PRICES, news: [], dividends, now: new Date('2026-10-06T07:00:00Z'), screen: [],
+      pe, earnings, results: { MEBL: { on: '2026-10-05', profit_change_pct: 18.2 } },
+    }, 0);
+    const h = (s: string) => facts.holdings.find((x) => x.symbol === s) as Record<string, unknown>;
+    expect(h('SYS')).toMatchObject({ pe: 11.44, pe_basis: 'consolidated, year to Dec 2025' });
+    expect(h('UBL')).toMatchObject({ dividend_cut: true, dividend_latest_dps: 8, dividend_previous_dps: 11 });
+    expect(h('MEBL')).toMatchObject({ results_profit_change_pct: 18.2, results_on: '2026-10-05' });
+    expect(typeof h('MEBL').payout_pct).toBe('number');
+    expect(h('MEBL').one_off).toBe(false);
   });
 });

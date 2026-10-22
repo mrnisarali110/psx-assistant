@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { publicErrors, runJob } from './jobs.ts';
+import { latestResults, publicErrors, runJob, stockExtras } from './jobs.ts';
+import { NO_METRICS } from './ai.ts';
 import { dedupeFilings } from '../shared/news.ts';
 import { ConsoleNotifier } from './notify.ts';
 import { MemoryStore, type UserCtx } from './store.ts';
-import type { Snapshot } from './feed.ts';
+import { toScreenRows, type Snapshot } from './feed.ts';
+import { tinyPdf } from './fixtures/tiny-pdf.ts';
+import { dividendLeaders } from '../shared/discover.ts';
 import type { LlmRouter } from '../shared/llm.ts';
-import type { Announcement } from '../shared/types.ts';
+import type { Announcement, AnnouncementMetrics } from '../shared/types.ts';
 import sbpRates from '../shared/sbp-policy-rates.json' with { type: 'json' };
 import type { PolicyRate } from '../shared/regime.ts';
 import { SEED_HOLDINGS, SEED_INDEX, SEED_PRICES, SEED_SCREEN, SEED_SETTINGS, SEED_WATCHLIST } from '../shared/fixtures/seed.ts';
@@ -23,7 +26,10 @@ const owner = (ai = true): UserCtx => ({
 
 const filing: Announcement = { id: 'psx-doc-1', symbol: 'MEBL', title: 'Financial results with interim cash dividend', kind: 'results', published_at: '2026-10-05', pdf_url: 'https://dps.psx.com.pk/download/document/1.pdf' };
 
-/** Peers of the held tech stocks and banks on a high P/E, so SYS, MEBL and UBL are cheap on earnings and the price rules fire. */
+/**
+ * Peers of the held tech stocks and banks on a high P/E, so MEBL and UBL are cheap on earnings and the price rules fire.
+ * Tech has only 4 KSE-100 stocks in the seed, under the 5 a sector comparison needs, so SYS gets no value check.
+ */
 const richPeers = (r: { symbol: string; sector: string | null; pe: number | null }) =>
   ['TECHNOLOGY & COMMUNICATION', 'COMMERCIAL BANKS'].includes(r.sector ?? '') && !SEED_HOLDINGS.some((h) => h.symbol === r.symbol) ? 40 : r.pe;
 
@@ -39,25 +45,34 @@ function snap(changePct = -1.36, asOf = AS_OF, symbols?: string[]): Snapshot {
 }
 const broken = async (): Promise<Snapshot> => ({ fetched_at: '', indices: {}, quotes: {}, screener: {}, errors: ['GET / failed: HTTP 503'] });
 
-/** Canned AI: dividend from the filing, an insight, and picks. `fail` makes every call throw; `oldNotice` makes the filing read like a 2020 re-upload. */
-function fakeAi(fail = false, oldNotice = false): LlmRouter & { calls: string[] } {
+/**
+ * Canned AI: dividend from the filing, an insight, and picks. `fail` makes every call throw; `oldNotice` makes the
+ * filing read like a 2020 re-upload; `pdf` replaces the filing answer. `seen` keeps the facts each picks/insight call got.
+ */
+function fakeAi(fail = false, oldNotice = false, pdf?: Record<string, unknown>): LlmRouter & { calls: string[]; seen: Record<string, any> } {
   const calls: string[] = [];
+  const seen: Record<string, any> = {};
   return {
-    available: true, calls,
+    available: true, calls, seen,
     async json(task: string, system: string, parts: any[]) {
       calls.push(task);
       if (fail) throw new Error('AI unavailable: 429');
+      if (task === 'pdf' && pdf) return { model: 'fake', data: pdf };
       if (task === 'pdf' && oldNotice) return { model: 'fake', data: { summary: 'Board meeting held on September 30, 2020 approved an interim dividend.', figures: [{ label: 'Meeting date', value: 'September 30, 2020' }], cash_dividend_per_share: 7, dividend_type: 'interim', book_closure_from: '2020-10-20', book_closure_to: '2020-10-22' } };
       if (task === 'pdf') return { model: 'fake', data: { summary: 'MEBL profit up; interim dividend Rs 7.', figures: [], cash_dividend_per_share: 7, dividend_type: 'interim', book_closure_from: '2026-10-19', book_closure_to: '2026-10-21', quarter_end: '2026-09-30', quarter_profit_after_tax: -539104000 } };
-      if (system.includes('cautious assistant')) return { model: 'fake', data: {
-        headline: 'Banks are cheap versus your last buys.', stance: 'buy',
-        holding_calls: [{ symbol: 'UBL', call: 'opportunity', text: 'UBL 6.5% below your last buy' }],
-        suggestions: [{ action: 'add', symbol: 'MEBL', text: 'Add MEBL', why: '6% below your last buy, weight 19.5%', confidence: 'high' }],
-      } };
       const facts = JSON.parse(parts[0].text.split('Facts (JSON):\n')[1]);
-      return { model: 'fake', data: { items: facts.slice(0, 2).map((f: any) => ({ symbol: f.symbol, why: `${f.dividend_yield_pct}% yield` })) } };
+      if (system.includes('cautious assistant')) {
+        seen.insight = facts;
+        return { model: 'fake', data: {
+          headline: 'Banks are cheap versus your last buys.', stance: 'buy',
+          holding_calls: [{ symbol: 'UBL', call: 'opportunity', text: 'UBL 6.5% below your last buy' }],
+          suggestions: [{ action: 'add', symbol: 'MEBL', text: 'Add MEBL', why: '6% below your last buy, weight 19.5%', confidence: 'high' }],
+        } };
+      }
+      seen[/dividend payers/.test(parts[0].text) ? 'dividend' : 'undervalued'] = facts;
+      return { model: 'fake', data: { items: facts.filter((f: any) => f.more.payout_pct != null).slice(0, 2).map((f: any) => ({ symbol: f.symbol, why: `Pays out ${f.more.payout_pct}% of its profit` })) } };
     },
-  } as unknown as LlmRouter & { calls: string[] };
+  } as unknown as LlmRouter & { calls: string[]; seen: Record<string, any> };
 }
 
 const deps = (store: MemoryStore, n: ConsoleNotifier, now: Date, extra: Record<string, unknown> = {}) =>
@@ -104,7 +119,8 @@ describe('market job', () => {
     await runJob('market', deps(store, n, MON_1230, { fetchSnapshot: async () => snap(-2.5) }));
     expect(n.sent).toHaveLength(1);
     const kinds = n.sent[0].n.alerts.map((a) => `${a.kind}:${a.symbol ?? ''}`);
-    expect(kinds).toEqual(expect.arrayContaining(['dip:', 'buy_chance:SYS', 'buy_chance:MEBL']));
+    expect(kinds).toEqual(expect.arrayContaining(['dip:', 'buy_chance:MEBL', 'buy_chance:UBL']));
+    expect(kinds).not.toContain('buy_chance:SYS'); // too few sector peers to compare its P/E
     expect(kinds.some((k) => k.startsWith('announcement'))).toBe(false); // news waits for the night digest
     await runJob('market', deps(store, n, new Date('2026-10-05T08:00:00Z'), { fetchSnapshot: async () => snap(-2.5) }));
     expect(n.sent).toHaveLength(1);
@@ -296,6 +312,7 @@ describe('Market Compass and policy rate (night job)', () => {
     expect(store.regime[0]).toMatchObject({ day: '2026-10-05', close: SEED_INDEX.kse100, policy_rate: 11.5, trend: 'sideways', change_1y_pct: 1.2, bull: false });
     expect(store.regime[0].action).toBeTruthy();
     expect((store.regime[0].compass as { cpi: number }).cpi).toBe(10.3);
+    expect((store.regime[0].compass as { gap_basis: string }).gap_basis).toBe('money_market'); // older rows have none: "vs 10-year bond"
     expect(kinds(n).some((k) => ['market_trend', 'market_compass', 'policy_rate'].includes(k))).toBe(false);
   });
 
@@ -318,6 +335,7 @@ describe('Market Compass and policy rate (night job)', () => {
     const advice = alerts.find((a) => a.kind === 'market_compass');
     expect(advice?.title).toMatch(/^Market Compass: /);
     expect(advice?.message).toMatch(/rule of thumb, not advice/);
+    expect(advice?.message).toMatch(/against about [\d.]+% in a money-market fund \(estimate\)/); // the gap the advice acts on
     expect(alerts.some((a) => a.kind === 'policy_rate')).toBe(false); // already sent the first night
     store.runs = [];
     const n3 = new ConsoleNotifier(quiet);
@@ -330,5 +348,180 @@ describe('Market Compass and policy rate (night job)', () => {
     const r = await night(store, new ConsoleNotifier(quiet), async () => { throw new Error('GET https://www.sbp.org.pk failed: HTTP 503'); });
     expect(r.errors.some((e) => e.startsWith('sbp: '))).toBe(true);
     expect(store.regime).toHaveLength(1); // the compass reading still happens
+  });
+});
+
+describe('filing EPS (owner review A2)', () => {
+  const RESULTS_TEXT = 'Condensed interim accounts for the quarter ended September 30, 2026 (unconsolidated). Loss after tax (539,104) Rupees in thousand. '
+    + 'Loss per share - basic and diluted (Rupees) (2.15). Interim cash dividend Rs 7.00 per share (70%).';
+
+  it('stores the EPS with its basis and months, and the News card figures, all found in the PDF', async () => {
+    const store = new MemoryStore([owner()], () => MON_1230);
+    const ai = fakeAi(false, false, {
+      summary: 'MEBL made a loss this quarter; interim dividend Rs 7.', figures: [], headline: 'Quarterly loss, Rs 7 dividend',
+      cash_dividend_per_share: 7, dividend_type: 'interim', quarter_end: '2026-09-30', quarter_profit_after_tax: -539104000,
+      eps: -2.15, eps_period_months: 3, eps_basis: 'unconsolidated',
+    });
+    await runJob('market', deps(store, new ConsoleNotifier(quiet), MON_1230, { ai, fetchPdf: async () => tinyPdf(RESULTS_TEXT) }));
+    expect(store.earningsRows).toEqual([expect.objectContaining({ id: 'psx-doc-1', period_end: '2026-09-30', eps: -2.15, eps_basis: 'unconsolidated', period_months: 3 })]);
+    expect(store.announcements[0].ai_metrics).toEqual({ headline: 'Quarterly loss, Rs 7 dividend', eps: -2.15, eps_basis: 'unconsolidated', dps: 7, profit_change_pct: null });
+  });
+
+  it('the night job reads older results filings of your stocks that have no EPS, a few a night (latest annual + 3 quarters)', async () => {
+    const store = new MemoryStore([owner(false)], () => MON_2100);
+    const old = (symbol: string, id: string, title: string, published_at: string) =>
+      ({ id, symbol, title, kind: 'results' as const, published_at, pdf_url: `https://dps.psx.com.pk/download/document/${id}.pdf`, ai_summary: 'Read before', ai_checked_at: '2026-10-01T00:00:00Z' });
+    store.announcements.push(
+      old('SYS', 'sys-q3', 'Financial Results for the Quarter Ended September 30, 2026', '2026-10-01'),
+      old('SYS', 'sys-h1', 'Financial Results for the Half Year Ended June 30, 2026', '2026-08-15'),
+      old('SYS', 'sys-q1', 'Financial Results for the Quarter Ended March 31, 2026', '2026-04-20'),
+      old('SYS', 'sys-ar', 'Annual Report 2025', '2026-03-30'),
+      old('SYS', 'sys-fy', 'Financial Results for the Year Ended December 31, 2025', '2026-02-20'),
+      old('SYS', 'sys-q3-25', 'Financial Results for the Quarter Ended September 30, 2025', '2025-10-20'),
+      old('MEBL', 'mebl-fy', 'Financial Results for the Year Ended December 31, 2025', '2026-02-25'),
+      old('UBL', 'ubl-fy', 'Financial Results for the Year Ended December 31, 2025', '2026-02-26'),
+    );
+    store.earningsRows.push({ id: 'ubl-y', symbol: 'UBL', period_end: '2025-12-31', profit_after_tax: 1e9, verified: true, eps: 30.2, eps_basis: 'consolidated', period_months: 12 }); // UBL has a full-year EPS already
+    const read: string[] = [];
+    const night = () => runJob('night', deps(store, new ConsoleNotifier(quiet), MON_2100, {
+      ai: fakeAi(), fetchPdf: async (url: string) => { read.push(url.split('/').at(-1)!.replace('.pdf', '')); return new Uint8Array([1]); },
+      fetchSnapshot: async (s: string[]) => snap(-1.36, AS_OF, s.length ? s : undefined),
+    }));
+    const r = await night();
+    expect(read).toEqual(['1', 'sys-fy', 'sys-q3', 'sys-h1', 'sys-q1']); // tonight's new filing first, then SYS's backfill (4 a night)
+    expect(r.ai.eps_backfill).toBe(4);
+    const by = (id: string) => store.announcements.find((a) => a.id === id)!;
+    expect(by('sys-fy').ai_metrics).toEqual({ headline: null, eps: null, eps_basis: null, dps: null, profit_change_pct: null }); // read: not again
+    expect(by('sys-fy').ai_summary).toBe('Read before'); // the summary people saw stays
+    expect(by('sys-q3-25').ai_metrics).toBeUndefined();
+    expect(by('sys-ar').ai_metrics).toBeUndefined();
+    read.length = 0;
+    store.runs = [];
+    await night();
+    expect(read).toEqual(['mebl-fy']); // SYS's latest annual and 3 quarters are done; older ones are not worth a read
+    expect(r.errors.join(' ')).not.toMatch(/SYS|MEBL/);
+  });
+
+  const oldFiling = (symbol: string, id: string, title: string, published_at: string) =>
+    ({ id, symbol, title, kind: 'results' as const, published_at, pdf_url: `https://dps.psx.com.pk/download/document/${id}.pdf`, ai_summary: 'Read before', ai_checked_at: '2026-10-01T00:00:00Z' });
+  const nightWith = (store: MemoryStore, read: string[], ai: LlmRouter) => runJob('night', deps(store, new ConsoleNotifier(quiet), MON_2100, {
+    ai, fetchPdf: async (url: string) => { read.push(url.split('/').at(-1)!.replace('.pdf', '')); return new Uint8Array([1]); },
+    fetchSnapshot: async (s: string[]) => snap(-1.36, AS_OF, s.length ? s : undefined),
+  }));
+
+  it('one stored quarter is not a full year: the backfill still reads the latest annual until the P/E comes from filings', async () => {
+    const store = new MemoryStore([owner(false)], () => MON_2100);
+    store.announcements.push(oldFiling('UBL', 'ubl-fy', 'Financial Results for the Year Ended December 31, 2025', '2026-02-26'));
+    store.earningsRows.push({ id: 'ubl-q', symbol: 'UBL', period_end: '2026-09-30', profit_after_tax: 1e9, verified: true, eps: 9.1, eps_basis: 'consolidated', period_months: 3 });
+    const read: string[] = [];
+    await nightWith(store, read, fakeAi());
+    expect(read).toContain('ubl-fy');
+  });
+
+  it('a filing whose read keeps failing is marked and not planned again every night (it would starve the backfill)', async () => {
+    const store = new MemoryStore([owner(false)], () => MON_2100);
+    store.announcements.push(oldFiling('SYS', 'sys-fy', 'Financial Results for the Year Ended December 31, 2025', '2026-02-20'));
+    const broken = { available: true, async json() { throw new Error('no AI provider can handle a pdf task'); } } as unknown as LlmRouter;
+    const read: string[] = [];
+    const r = await nightWith(store, read, broken);
+    expect(read).toContain('sys-fy');
+    expect(r.errors.some((e) => e.startsWith('ai: eps backfill sys-fy'))).toBe(true);
+    expect(store.announcements.find((a) => a.id === 'sys-fy')!.ai_metrics).toEqual(NO_METRICS);
+    read.length = 0;
+    store.runs = [];
+    await nightWith(store, read, broken);
+    expect(read).not.toContain('sys-fy');
+
+    // Both AI providers down is not the filing's fault: it is tried again on a later night.
+    const down = new MemoryStore([owner(false)], () => MON_2100);
+    down.announcements.push(oldFiling('SYS', 'sys-fy', 'Financial Results for the Year Ended December 31, 2025', '2026-02-20'));
+    await nightWith(down, [], fakeAi(true));
+    expect(down.announcements.find((a) => a.id === 'sys-fy')!.ai_metrics).toBeUndefined();
+  });
+
+  it('latest results: a filing with no figures (PDF gone, unreadable) does not hide an older filing\'s profit change', () => {
+    const a = (id: string, published_at: string, ai_metrics: AnnouncementMetrics): Announcement =>
+      ({ id, symbol: 'SYS', title: 'Financial Results', kind: 'results', published_at, pdf_url: null, ai_metrics });
+    const older = a('old', '2026-02-20', { ...NO_METRICS, profit_change_pct: 18.2 });
+    expect(latestResults([older, a('gone', '2026-08-01', { ...NO_METRICS })])).toEqual({ SYS: { on: '2026-02-20', profit_change_pct: 18.2 } });
+    // A newer filing with figures still wins, even without a profit change.
+    expect(latestResults([older, a('new', '2026-08-01', { ...NO_METRICS, eps: 3.1, eps_basis: 'consolidated' })])).toEqual({ SYS: { on: '2026-08-01', profit_change_pct: null } });
+  });
+});
+
+describe('payout facts for the AI (owner review A8)', () => {
+  it('are the payout the app shows: the last 12 months of filings first, then PSX yield x price', () => {
+    const div = (id: string, announced_on: string, dps: number) => ({ id, symbol: 'XYZ', announced_on, dps, dividend_type: 'interim' as const, book_closure_from: null, book_closure_to: null, verified: true, pdf_url: null });
+    const fig = { pe: 10, basis: 'consolidated' as const, eps: 10, label: 'consolidated, year to Jun 2026', outlier: false, loss: false };
+    const dividends = [div('a', '2026-08-01', 4), div('b', '2026-02-01', 4)];
+    // Filings say Rs 8 a share (80% of EPS 10); PSX's 12% yield would say 120%.
+    expect(stockExtras('XYZ', 100, 12, fig, { today: '2026-10-05', dividends })).toMatchObject({ payout_pct: 80, suspect: false });
+    expect(stockExtras('XYZ', 100, 16, fig, { today: '2026-10-05', dividends: [] })).toMatchObject({ payout_pct: 160, suspect: true });
+  });
+});
+
+describe('price and portfolio history (owner review B7, B8)', () => {
+  it('the night job and Refresh write one close per stock for the trading day: KSE-100, held and watched', async () => {
+    const store = new MemoryStore([owner(false)], () => MON_2100);
+    await runJob('night', deps(store, new ConsoleNotifier(quiet), MON_2100, { fetchSnapshot: async (s: string[]) => snap(-1.36, AS_OF, s.length ? s : undefined) }));
+    expect(store.priceDays.every((p) => p.day === '2026-10-05')).toBe(true);
+    expect(store.priceDays.find((p) => p.symbol === 'SYS')).toEqual({ symbol: 'SYS', day: '2026-10-05', close: 114.37, change_pct: -1.27 });
+    const symbols = new Set(store.priceDays.map((p) => p.symbol));
+    expect(toScreenRows(snap().screener).every((r) => r.price == null || symbols.has(r.symbol))).toBe(true);
+    expect([...SEED_HOLDINGS, ...SEED_WATCHLIST].every((h) => !SEED_PRICES[h.symbol] || symbols.has(h.symbol))).toBe(true);
+    expect(store.priceDays).toHaveLength(symbols.size); // one row per stock
+
+    const market = new MemoryStore([owner(false)], () => MON_1230);
+    await runJob('market', deps(market, new ConsoleNotifier(quiet), MON_1230));
+    expect(market.priceDays).toEqual([]); // the 30-minute checks do not
+  });
+
+  it('Refresh latest also stores the portfolio value of the trading day', async () => {
+    const store = new MemoryStore([owner(false)], () => MON_1230);
+    await runJob('refresh', deps(store, new ConsoleNotifier(quiet), MON_1230, { fetchSnapshot: async (s: string[]) => snap(-1.36, AS_OF, s.length ? s : undefined) }));
+    expect(store.portfolioDays).toEqual([expect.objectContaining({ user_id: 'owner-1', day: '2026-10-05' })]);
+    expect(store.priceDays.length).toBeGreaterThan(50);
+  });
+
+  it('each market check stores your portfolio value (1D chart) and drops ticks older than 10 days', async () => {
+    const store = new MemoryStore([owner(false)], () => MON_1230);
+    store.ticks.push({ user_id: 'owner-1', ts: '2026-09-20T10:00:00.000Z', value: 1 }, { user_id: 'owner-1', ts: '2026-09-30T10:00:00.000Z', value: 2 });
+    await runJob('market', deps(store, new ConsoleNotifier(quiet), MON_1230));
+    expect(store.ticks.map((t) => t.ts)).toEqual(['2026-09-30T10:00:00.000Z', AS_OF]);
+    expect(store.ticks[1].value).toBeGreaterThan(10000);
+    const closed = new MemoryStore([owner(false)], () => MON_1230);
+    await runJob('market', deps(closed, new ConsoleNotifier(quiet), MON_1230, { fetchSnapshot: async () => snap(-1, '2026-10-02T10:49:00.000Z') }));
+    expect(closed.ticks).toEqual([]); // no trading today: nothing new to draw
+  });
+});
+
+describe('AI facts use the app\'s figures (owner review A2, A8, A10)', () => {
+  it('the AI sees the P/E from filings (the one the app shows), and the payout, one-off and results facts', async () => {
+    const store = new MemoryStore([owner()], () => MON_1230);
+    store.earningsRows.push({ id: 'sys-fy', symbol: 'SYS', period_end: '2025-12-31', profit_after_tax: 1e10, verified: true, eps: 10, eps_basis: 'consolidated', period_months: 12 });
+    store.announcements.push({ id: 'sys-fy', symbol: 'SYS', title: 'Financial Results for the Year Ended December 31, 2025', kind: 'results', published_at: '2026-02-20', pdf_url: null,
+      ai_metrics: { headline: null, eps: 10, eps_basis: 'consolidated', dps: null, profit_change_pct: 18.2 } });
+    const ai = fakeAi();
+    await runJob('market', deps(store, new ConsoleNotifier(quiet), MON_1230, { ai }));
+    const sys = ai.seen.insight.holdings.find((h: any) => h.symbol === 'SYS');
+    expect(sys).toMatchObject({ pe: 11.44, pe_basis: 'consolidated, year to Dec 2025', results_profit_change_pct: 18.2, results_on: '2026-02-20' });
+    expect(sys).toHaveProperty('payout_pct');
+    expect(sys).toHaveProperty('one_off');
+    expect(sys).toHaveProperty('dividend_cut');
+  });
+
+  it('Discover picks: suspect payouts never reach the dividend list, and each candidate says what its card already shows', async () => {
+    const store = new MemoryStore([owner()], () => MON_2100);
+    const ai = fakeAi();
+    await runJob('night', deps(store, new ConsoleNotifier(quiet), MON_2100, { ai, fetchSnapshot: async (s: string[]) => snap(-1.36, AS_OF, s.length ? s : undefined) }));
+    const suspect = dividendLeaders(toScreenRows(snap().screener), [], '2026-10-05').filter((d) => d.suspect).map((d) => d.symbol);
+    expect(suspect.length).toBeGreaterThan(0);
+    expect(ai.seen.dividend.length).toBeGreaterThan(0);
+    expect(ai.seen.dividend.some((c: any) => suspect.includes(c.symbol))).toBe(false);
+    expect(ai.seen.dividend[0]).toMatchObject({ on_card: expect.objectContaining({ dividend_yield_pct: expect.any(Number) }), more: expect.objectContaining({ suspect: false }) });
+    expect(ai.seen.undervalued[0].more).toHaveProperty('payout_pct');
+    const saved = store.picks.find((p) => p.kind === 'dividend')!.items[0] as { why: string; facts?: Record<string, number> };
+    expect(saved.why).toMatch(/^Pays out [\d.]+% of its profit$/);
+    expect(saved.facts).toHaveProperty('payout_pct'); // the app checks the reason against these, not the card
   });
 });

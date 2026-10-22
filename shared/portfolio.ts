@@ -1,7 +1,8 @@
 import type { AiInsight, DividendEvent, Holding, HoldingCallKind, Price, PriceMap, QuarterEarnings, Rules, Settings } from './types.ts';
 import { DEFAULT_RULES } from './types.ts';
 import { sectorLabel, rs2 } from './format.ts';
-import { dividendCut, missingNum, peOutlier } from './quality.ts';
+import { dividendCut } from './quality.ts';
+import { peFor, sectorStats, type PeFigure } from './valuation.ts';
 
 export interface HoldingCall {
   call: HoldingCallKind;
@@ -52,26 +53,36 @@ export function screenShariah(screen: { symbol: string; is_shariah: boolean | nu
   return Object.fromEntries(screen.filter((r) => r.is_shariah != null).map((r) => [r.symbol, r.is_shariah]));
 }
 
-/** Typical (median) P/E per PSX sector from the KSE-100 screen, leaving out untrustworthy P/Es; needs 3 peers. */
-export function sectorPeMap(screen: { sector: string | null; pe: number | null }[], rules: Rules = DEFAULT_RULES): Record<string, number> {
-  const by = new Map<string, number[]>();
-  for (const r of screen) if (r.sector && !missingNum(r.pe) && !peOutlier(r.pe, rules).outlier) by.set(r.sector, [...(by.get(r.sector) ?? []), r.pe as number]);
-  const out: Record<string, number> = {};
-  for (const [sector, xs] of by) {
-    if (xs.length < 3) continue;
-    const s = [...xs].sort((a, b) => a - b);
-    out[sector] = s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
-  }
-  return out;
+/**
+ * Typical (median) P/E per PSX sector from the screen, for the sectors that can be compared (valuation.sectorStats:
+ * enough peers with a trusted P/E, not too spread out). `pe` (valuation.peMap) puts each peer's filing-based P/E first.
+ */
+export function sectorPeMap(screen: { symbol?: string; sector: string | null; pe: number | null }[], rules: Rules = DEFAULT_RULES,
+  pe?: Record<string, { pe: number | null }>): Record<string, number> {
+  return Object.fromEntries(Object.entries(sectorStats(screen, rules, pe)).filter(([, s]) => s.comparable).map(([sector, s]) => [sector, s.median]));
 }
 
-/** What the trim and review rules need besides prices: today's date, sector P/Es and the dividend filings. */
-export interface RuleContext { today?: string; sectorPe?: Record<string, number>; dividends?: DividendEvent[]; earnings?: QuarterEarnings[] }
+/**
+ * What the trim and review rules need besides prices: today's date, sector P/Es, the dividend filings, the results
+ * filings and the P/E shown for each stock (valuation.peMap). Without `pe` the rules work it out with peFor from the
+ * price and `earnings`, so the rules always use the figure the screens show.
+ */
+export interface RuleContext { today?: string; sectorPe?: Record<string, number>; dividends?: DividendEvent[]; earnings?: QuarterEarnings[]; pe?: Record<string, PeFigure> }
 
-/** Loss-making quarters in a row, counted back from the latest quarter the filings show (one row per quarter end). */
+/** The P/E the rules use for a stock: the one in `ctx.pe`, else peFor on the price and the stored filings. */
+const peOf = (symbol: string, p: Price | null, ctx: RuleContext, rules: Rules = DEFAULT_RULES): PeFigure =>
+  ctx.pe?.[symbol] ?? peFor(symbol, p?.price ?? null, (ctx.earnings ?? []).filter((e) => e.symbol === symbol), p?.pe ?? null, rules);
+
+/** A single quarter's figures: 3 months, or a row from before period_months was stored (those were all quarters). */
+const isQuarter = (e: QuarterEarnings) => e.period_months == null || e.period_months === 3;
+
+/**
+ * Loss-making quarters in a row, counted back from the latest quarter the filings show (one row per quarter end).
+ * Half-year, nine-month and full-year rows are cumulative and left out.
+ */
 export function lossQuartersInARow(symbol: string, earnings: QuarterEarnings[] | undefined): { count: number; latest: string | null } {
   const mine = new Map<string, number>();
-  for (const e of earnings ?? []) if (e.symbol === symbol && !mine.has(e.period_end)) mine.set(e.period_end, e.profit_after_tax);
+  for (const e of earnings ?? []) if (e.symbol === symbol && isQuarter(e) && !mine.has(e.period_end)) mine.set(e.period_end, e.profit_after_tax);
   const ends = [...mine.keys()].sort().reverse();
   let count = 0;
   for (const d of ends) { if ((mine.get(d) as number) < 0) count++; else break; }
@@ -116,25 +127,33 @@ export function trimReason(h: Holding, p: Price | null, weight: number | null, s
   // A P/E above the sector's is not enough on its own: some names always trade richer (Meezan among banks). It counts
   // only with a second sign the position has run: the price near its 52-week high, or the holding near your cap.
   const sectorPe = ctx.sectorPe?.[sector];
-  if (p && !missingNum(p.pe) && !peOutlier(p.pe).outlier && sectorPe && settings.trim_pe_over_sector_pct > 0) {
-    const over = ((p.pe as number) / sectorPe - 1) * 100;
-    const nearHigh = px != null && p.high_52w != null && p.high_52w > 0 && px >= p.high_52w * (1 - rules.holding.trim_near_high_pct / 100);
+  const pe = peOf(h.symbol, p, ctx, rules);
+  if (pe.pe != null && !pe.outlier && sectorPe && settings.trim_pe_over_sector_pct > 0) {
+    const over = (pe.pe / sectorPe - 1) * 100;
+    const high = p?.high_52w ?? null;
+    const nearHigh = px != null && high != null && high > 0 && px >= high * (1 - rules.holding.trim_near_high_pct / 100);
     const heavy = weight != null && weight >= settings.max_position_pct * rules.holding.trim_weight_of_cap;
     if (over >= settings.trim_pe_over_sector_pct && (nearHigh || heavy)) {
-      return `P/E ${(p.pe as number).toFixed(1)} is ${over.toFixed(0)}% above its sector's ${sectorPe.toFixed(1)} and ${nearHigh ? 'the price is near its 52-week high' : `it is ${weight!.toFixed(0)}% of your money`}`;
+      return `P/E ${pe.pe.toFixed(1)} is ${over.toFixed(0)}% above its sector's ${sectorPe.toFixed(1)} and ${nearHigh ? 'the price is near its 52-week high' : `it is ${weight!.toFixed(0)}% of your money`}`;
     }
   }
   return null;
 }
 
-/** Is the stock cheap on earnings? P/E at or under its sector's typical P/E, and profit not falling two quarters in a row. */
-export function valueCheck(symbol: string, p: Price | null, sector: string, ctx: RuleContext): { ok: boolean; text: string } {
-  const pe = p && !missingNum(p.pe) && !peOutlier(p.pe).outlier ? (p.pe as number) : null;
+/**
+ * Is the stock cheap on earnings? P/E (the one shown, see peOf) at or under its sector's typical P/E, and profit not
+ * falling two quarters in a row. A loss or an unusual P/E is no value check, and says which.
+ */
+export function valueCheck(symbol: string, p: Price | null, sector: string, ctx: RuleContext, rules: Rules = DEFAULT_RULES): { ok: boolean; text: string } {
+  const fig = peOf(symbol, p, ctx, rules);
   const sectorPe = ctx.sectorPe?.[sector] ?? null;
-  if (pe == null) return { ok: false, text: 'no P/E figure to check its value' };
+  if (fig.loss) return { ok: false, text: 'P/E n/a (loss): no value check' };
+  if (fig.pe == null) return { ok: false, text: 'no P/E figure to check its value' };
+  if (fig.outlier) return { ok: false, text: `P/E ${fig.pe.toFixed(1)} looks unusual; check figures` };
+  const pe = fig.pe;
   if (sectorPe == null) return { ok: false, text: `P/E ${pe.toFixed(1)}, no sector figure to compare` };
   if (pe > sectorPe) return { ok: false, text: `P/E ${pe.toFixed(1)} is above its sector's ${sectorPe.toFixed(1)}` };
-  const q = [...new Map((ctx.earnings ?? []).filter((e) => e.symbol === symbol).map((e) => [e.period_end, e.profit_after_tax])).entries()].sort((a, b) => b[0].localeCompare(a[0]));
+  const q = [...new Map((ctx.earnings ?? []).filter((e) => e.symbol === symbol && isQuarter(e)).map((e) => [e.period_end, e.profit_after_tax])).entries()].sort((a, b) => b[0].localeCompare(a[0]));
   if (q.length >= 3 && q[0][1] < q[1][1] && q[1][1] < q[2][1]) return { ok: false, text: 'profit fell two quarters in a row' };
   return { ok: true, text: `P/E ${pe.toFixed(1)}, at or under its sector's ${sectorPe.toFixed(1)}` };
 }
@@ -163,8 +182,10 @@ function ruleCall(h: Holding, p: Price | null, weight: number | null, sectorPct:
   // Buy more needs three things: far enough below your last buy (your setting), a P/E at or under its sector's
   // typical P/E (cheap on earnings, not just cheaper than you paid), and profit not falling two quarters running.
   const buyAt = settings.buy_more_below_pct ?? rules.holding.average_down_pct;
-  const value = valueCheck(h.symbol, p, sector, ctx);
-  const why = `${below.toFixed(1)}% below your last buy`;
+  const value = valueCheck(h.symbol, p, sector, ctx, rules);
+  // Name the reference: your last buy, or your average cost when no buy is recorded (refPrice).
+  const ref = `${h.last_buy_price && h.last_buy_price > 0 ? 'your last buy' : 'your average cost'} (${rs2(refPrice(h))})`;
+  const why = `${below.toFixed(1)}% below ${ref}`;
   if (below >= buyAt && !blocked && value.ok) {
     return { call: below >= settings.drop_alert_pct ? 'opportunity' : 'average_down', text: `${why} · ${value.text}`, source: 'rules' };
   }
@@ -172,7 +193,7 @@ function ruleCall(h: Holding, p: Price | null, weight: number | null, sectorPct:
     const note = blocked ? shortReason(blocked) : below >= buyAt ? value.text : null;
     return { call: 'hold', text: `${why}${note ? ` · ${note}` : ''}`, source: 'rules' };
   }
-  return { call: 'hold', text: vsRef == null ? 'No live price yet' : `${vsRef.toFixed(1)}% above your last buy`, source: 'rules' };
+  return { call: 'hold', text: vsRef == null ? 'No live price yet' : `${vsRef.toFixed(1)}% above ${ref}`, source: 'rules' };
 }
 
 /** Use the AI's call for a holding when it exists and doesn't break the user's own rules. */

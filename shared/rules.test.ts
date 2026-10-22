@@ -4,6 +4,7 @@ import { sectorLabel } from './format.ts';
 import { applyBuy, cleanImported, describeChange, diffImport, investedThisMonth, txnFromChange, withLastBuy } from './changes.ts';
 import { dividendLeaders, frequencyOf, sortDividends, sortUndervalued, sortUpcoming, undervalued, upcomingDividends, workingDaysBefore, type ScreenRow } from './discover.ts';
 import { projectWealth, realValue } from './growth.ts';
+import { payoutOf } from './quality.ts';
 import { dayStance, holdingAlerts, marketAlerts, marketState, planDelivery, todayBanner, type AlertCandidate } from './signals.ts';
 import { isMarketOpen, isStale, isoWeek, minutesToClose } from './time.ts';
 import { DEFAULT_RULES, DEFAULT_SETTINGS, type AiInsight, type DividendEvent, type Holding, type PriceMap } from './types.ts';
@@ -55,11 +56,12 @@ describe('portfolio', () => {
   it('calls each holding from how far it is below your LAST buy', () => {
     const v = view();
     expect(row('SYS', v).call).toMatchObject({ call: 'opportunity', source: 'rules' }); // 12.3% below
-    expect(row('SYS', v).call.text).toMatch(/12\.3% below your last buy/);
+    // The seed records no buy, so the reference is the average cost, and the text names it with its price.
+    expect(row('SYS', v).call.text).toMatch(/12\.3% below your average cost \(Rs 130\.45\)/);
     expect(row('MEBL', v).call.call).toBe('average_down'); // 6.0% below, core
     expect(row('DCR', v).call.call).toBe('hold'); // above
     expect(row('LUCK', v).call.call).toBe('hold'); // 11% below but hold_no_add
-    expect(row('LUCK', v).call.text).toBe('11.1% below your last buy · hold only');
+    expect(row('LUCK', v).call.text).toBe('11.1% below your average cost (Rs 458.39) · hold only');
     expect(row('AVN', v).call.call).toBe('review');
   });
 
@@ -68,6 +70,7 @@ describe('portfolio', () => {
     const r = row('MEBL', buildPortfolio(holdings, SEED_PRICES, SEED_SETTINGS));
     expect(r.ref_price).toBe(550);
     expect(r.call.call).toBe('hold'); // 548.11 is only 0.3% below 550
+    expect(r.call.text).toBe('0.3% below your last buy (Rs 550.00)');
   });
 
   it('lets the AI call a holding, unless it breaks your own rules or raises a Trim your rules do not support', () => {
@@ -147,10 +150,10 @@ describe('sell, trim and review rules', () => {
     // Each trigger is a setting: off, and the calls fall back to the price rules.
     const off = buildPortfolio(holdings, screen, { ...SEED_SETTINGS, trim_pe_over_sector_pct: 0, trim_on_dividend_cut: false }, DEFAULT_RULES, {}, { today: TODAY, sectorPe, dividends: divs });
     // With the trims off they are Hold, not Buy more: their P/E is above the sector's, so they are not cheap on earnings.
-    expect(off.rows.find((r) => r.holding.symbol === 'SYS')!.call).toMatchObject({ call: 'hold', text: "12.3% below your last buy · P/E 22.7 is above its sector's 15.0" });
+    expect(off.rows.find((r) => r.holding.symbol === 'SYS')!.call).toMatchObject({ call: 'hold', text: "12.3% below your average cost (Rs 130.45) · P/E 22.7 is above its sector's 15.0" });
     expect(off.rows.find((r) => r.holding.symbol === 'MEBL')!.call.call).toBe('hold');
     const cheap = buildPortfolio(holdings, screen, { ...SEED_SETTINGS, trim_pe_over_sector_pct: 0, trim_on_dividend_cut: false }, DEFAULT_RULES, {}, { today: TODAY, sectorPe: { 'TECHNOLOGY & COMMUNICATION': 25, 'COMMERCIAL BANKS': 12 } });
-    expect(cheap.rows.find((r) => r.holding.symbol === 'SYS')!.call).toMatchObject({ call: 'opportunity', text: "12.3% below your last buy · P/E 22.7, at or under its sector's 25.0" });
+    expect(cheap.rows.find((r) => r.holding.symbol === 'SYS')!.call).toMatchObject({ call: 'opportunity', text: "12.3% below your average cost (Rs 130.45) · P/E 22.7, at or under its sector's 25.0" });
     expect(cheap.rows.find((r) => r.holding.symbol === 'MEBL')!.call.call).toBe('average_down');
     // The AI cannot talk a Trim or Review back into a buy.
     const ai = { holding_calls: [{ symbol: 'DCR', call: 'opportunity', text: 'cheap' }] } as AiInsight;
@@ -271,6 +274,8 @@ describe('discover', () => {
   const screen = [
     row('BANKA', 'BANKS', 3.5, 12), row('BANKB', 'BANKS', 6, 9), row('BANKC', 'BANKS', 7, 8), row('BANKD', 'BANKS', 8, 7, { is_shariah: false }),
     row('TECHA', 'TECH', 20, 1), row('TECHB', 'TECH', 25, 2), row('TECHC', 'TECH', 14, 3), row('LOSS', 'TECH', -4, 0),
+    // Low-yield peers: never candidates, but they make 5 trusted P/Es per sector, enough to compare against.
+    row('BANKE', 'BANKS', 9, 1), row('TECHD', 'TECH', 22, 1), row('TECHE', 'TECH', 18, 1),
   ];
 
   it('sorts every Discover list strongest first, with the AI order as just one option', () => {
@@ -294,8 +299,12 @@ describe('discover', () => {
   it('finds profitable stocks well below their sector P/E that still pay dividends', () => {
     const u = undervalued(screen);
     expect(u.map((x) => x.symbol)).toEqual(['BANKA', 'BANKB', 'TECHC']);
-    expect(u[0].reason).toMatch(/P\/E 3\.5 · sector 6\.5 · 12\.0% yield · 1y -5%/);
+    expect(u[0].reason).toMatch(/P\/E 3\.5 · sector 7\.0 · 12\.0% yield · 1y -5%/);
     expect(undervalued(screen, { exclude: new Set(['BANKA']) }).map((x) => x.symbol)).not.toContain('BANKA');
+    // With four bank peers there is no sector figure: BANKA is still cheap outright, but no discount is claimed.
+    const few = undervalued(screen.filter((r) => r.symbol !== 'BANKE'));
+    expect(few[0]).toMatchObject({ symbol: 'BANKA', sector_pe: null, discount_pct: null, sector_note: 'too few sector peers to compare' });
+    expect(few[0].reason).toBe('P/E 3.5 · too few sector peers to compare · 12.0% yield · 1y -5%');
   });
 
   const events: DividendEvent[] = [
@@ -310,6 +319,14 @@ describe('discover', () => {
     expect(d[0]).toMatchObject({ annual_dps: 12, frequency: 'Half-yearly', last: { id: 'a' } });
     expect(frequencyOf(events, 'BANKB', TODAY).label).toBe('Yearly');
     expect(dividendLeaders(screen, events, TODAY, { shariahOnly: true }).map((x) => x.symbol)).not.toContain('BANKD');
+  });
+
+  it('the payout on a dividend card is the one every screen shows: filings first, then PSX yield x price', () => {
+    const d = dividendLeaders(screen, events, TODAY);
+    const a = d.find((x) => x.symbol === 'BANKA')!;
+    expect(a.payout_pct).toBe(28); // regular Rs 8 from filings against EPS 100 / 3.5, not PSX's 12% yield (42%)
+    expect(a.payout_pct).toBe(payoutOf('BANKA', events, TODAY, { price: 100, psxYieldPct: 12, pe: 3.5 }).pct);
+    expect(d.find((x) => x.symbol === 'BANKC')!.payout_pct).toBe(56); // no filings: 8% x Rs 100 against 100 / 7
   });
 
   it('lists upcoming dividends with the last day to buy (book closure minus 2 working days under T+1)', () => {

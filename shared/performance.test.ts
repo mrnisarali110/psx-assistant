@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
-  CLOSE_LOOKBACK_DAYS, RECEIPT_MATCH_DAYS, benchmark, cashFlows, closeOn, dividendsByTaxYear, expectedDividends, expectedYearlyIncome,
-  receiptFrom, totalReturn, valueSeries, whtPct, xirr, type Flow,
+  CLOSE_LOOKBACK_DAYS, RECEIPT_MATCH_DAYS, benchmark, benchmarkReady, cashFlows, chargesSummary, closeOn, dividendsByTaxYear, expectedDividends,
+  expectedYearlyIncome, heldAtBookClosure, receiptFrom, totalReturn, valueSeries, whtPct, xirr, type Flow,
 } from './performance.ts';
+import { costRates, tradeCosts } from './costs.ts';
 import { addDays, daysBetween } from './time.ts';
 import {
-  DEFAULT_RULES, DEFAULT_SETTINGS, type DividendEvent, type DividendReceipt, type Holding, type IndexDay, type Price, type PriceMap, type Rules,
-  type Settings, type Txn,
+  DEFAULT_RULES, DEFAULT_SETTINGS, type Announcement, type DividendEvent, type DividendReceipt, type Holding, type IndexDay, type PortfolioDay,
+  type Price, type PriceMap, type Rules, type Settings, type Txn,
 } from './types.ts';
 
 const TODAY = '2026-10-15'; // a Thursday; tax year 2026-27
@@ -376,9 +377,9 @@ describe('expectedDividends and receiptFrom', () => {
     const out = expectedDividends(TXNS, EVENTS, [], SECTORS, S());
     expect(out).toEqual([
       // 100 x 2 = 200 gross; REIT 15% = 30; net 170
-      { dividend_id: 'dcr-1', symbol: 'DCR', shares: 100, dps: 2, gross: 200, wht_pct: 15, wht: 30, net: 170, book_closure_from: '2026-10-17', announced_on: '2026-10-01', verified: true },
+      { dividend_id: 'dcr-1', symbol: 'DCR', shares: 100, dps: 2, gross: 200, wht_pct: 15, wht: 30, net: 170, book_closure_from: '2026-10-17', announced_on: '2026-10-01', verified: true, basis: 'log' },
       // 26 x 5 = 130 gross; power 7.5% = 9.75; net 120.25
-      { dividend_id: 'hubc-1', symbol: 'HUBC', shares: 26, dps: 5, gross: 130, wht_pct: 7.5, wht: 9.75, net: 120.25, book_closure_from: '2026-09-25', announced_on: '2026-09-11', verified: true },
+      { dividend_id: 'hubc-1', symbol: 'HUBC', shares: 26, dps: 5, gross: 130, wht_pct: 7.5, wht: 9.75, net: 120.25, book_closure_from: '2026-09-25', announced_on: '2026-09-11', verified: true, basis: 'log' },
     ]);
     expect(expectedDividends(TXNS, EVENTS, [], SECTORS, S({ tax_filer: false }))[0]).toMatchObject({ wht_pct: 30, wht: 60, net: 140 });
   });
@@ -427,6 +428,99 @@ describe('expectedDividends and receiptFrom', () => {
     expect(receiptFrom(e, '2026-11-02').paid_on).toBe('2026-11-02');
     // the receipt then covers the event
     expect(expectedDividends(TXNS, EVENTS, [receiptFrom(e)], SECTORS, S()).map((x) => x.symbol)).toEqual(['HUBC']);
+  });
+
+  it('expected uses holdings when log has a gap', () => {
+    // HUBC came in as a baseline (no logged buys); its book closure starts today
+    const holdings = [holding('HUBC', 120), holding('DCR', 100)];
+    const events = [event('hubc-2', 'HUBC', TODAY, 4)];
+    const out = expectedDividends(TXNS.filter((t) => t.symbol === 'DCR'), events, [], SECTORS, S(), DEFAULT_RULES, { holdings });
+    expect(out).toMatchObject([{ dividend_id: 'hubc-2', symbol: 'HUBC', shares: 120, gross: 480, basis: 'holdings' }]);
+    // without the holdings the log alone still says nothing was held
+    expect(expectedDividends(TXNS.filter((t) => t.symbol === 'DCR'), events, [], SECTORS, S())).toEqual([]);
+    // a log that explains the holding keeps the log basis
+    expect(expectedDividends(TXNS, EVENTS, [], SECTORS, S(), DEFAULT_RULES, { holdings: [holding('DCR', 100)] }).map((e) => e.basis)).toEqual(['log', 'log']);
+  });
+
+  it('expected excludes buys after cutoff', () => {
+    // 150 OGDC held; only the 50 bought on book closure day are logged, so the log has a gap of 100
+    const holdings = [holding('OGDC', 150)];
+    const events = [event('ogdc-1', 'OGDC', '2026-10-12', 3)];
+    const txns = [tx('OGDC', 'buy', 50, 200, '2026-10-12'), tx('OGDC', 'buy', 30, 200, '2026-10-14')];
+    // 150 now - 80 bought on/after the cut-off = 70 at book closure; the log alone would say 0
+    expect(expectedDividends(txns, events, [], {}, S(), DEFAULT_RULES, { holdings })).toMatchObject([{ shares: 70, gross: 210, basis: 'holdings' }]);
+    // a sell after the cut-off adds back shares that were held then
+    const sold = [...txns, tx('OGDC', 'sell', 20, 210, '2026-10-13')];
+    expect(expectedDividends(sold, events, [], {}, S(), DEFAULT_RULES, { holdings })).toMatchObject([{ shares: 90, basis: 'holdings' }]);
+  });
+
+  it('expected takes book closure from announcement text', () => {
+    const ann = (id: string, title: string, figures?: { label: string; value: string }[]): Announcement => ({
+      id, symbol: 'DCR', kind: 'dividend', published_at: '2026-10-08', title, pdf_url: null, ai_figures: figures?.map((f) => ({ ...f, verified: true })) ?? null,
+    });
+    const events = [event('a-1', 'DCR', null, 2, { announced_on: '2026-10-08' })];
+    const fromTitle = [ann('a-1', 'Cash dividend; book closure from October 17, 2026 to October 22, 2026')];
+    expect(expectedDividends(TXNS, events, [], SECTORS, S(), DEFAULT_RULES, { announcements: fromTitle }))
+      .toMatchObject([{ dividend_id: 'a-1', symbol: 'DCR', shares: 100, book_closure_from: '2026-10-17', basis: 'log' }]);
+    const fromFigure = [ann('a-1', 'Dividend declared', [{ label: 'Book closure dates', value: '17-10-2026 to 22-10-2026' }])];
+    expect(expectedDividends(TXNS, events, [], SECTORS, S(), DEFAULT_RULES, { announcements: fromFigure })).toMatchObject([{ book_closure_from: '2026-10-17' }]);
+    // no matching notice, a notice without a book closure, or an implausible date: still skipped
+    expect(expectedDividends(TXNS, events, [], SECTORS, S(), DEFAULT_RULES, { announcements: [ann('a-2', 'Book closure from October 17, 2026')] })).toEqual([]);
+    expect(expectedDividends(TXNS, events, [], SECTORS, S(), DEFAULT_RULES, { announcements: [ann('a-1', 'Board meeting on October 17, 2026')] })).toEqual([]);
+    expect(expectedDividends(TXNS, events, [], SECTORS, S(), DEFAULT_RULES, { announcements: [ann('a-1', 'Book closure from October 17, 2020')] })).toEqual([]);
+  });
+});
+
+describe('heldAtBookClosure', () => {
+  it('reads the log when it explains the holding, else the holdings less what moved on or after the cut-off', () => {
+    const logged = [tx('DCR', 'buy', 100, 12, '2026-10-10'), tx('DCR', 'buy', 20, 12, '2026-10-17')];
+    expect(heldAtBookClosure('DCR', '2026-10-17', logged, [holding('DCR', 120)])).toEqual({ shares: 100, basis: 'log' });
+    expect(heldAtBookClosure('dcr', '2026-10-17', logged, [])).toEqual({ shares: 100, basis: 'log' }); // not held now: the log is all there is
+    expect(heldAtBookClosure('DCR', '2026-10-17', [], [holding('DCR', 120)])).toEqual({ shares: 120, basis: 'holdings' });
+    expect(heldAtBookClosure('DCR', '2026-10-17', [tx('DCR', 'buy', 20, 12, '2026-10-17')], [holding('DCR', 120)])).toEqual({ shares: 100, basis: 'holdings' });
+    // never below 0
+    expect(heldAtBookClosure('DCR', '2026-10-17', [tx('DCR', 'buy', 5, 12, '2026-10-20')], [holding('DCR', 10)])).toEqual({ shares: 5, basis: 'holdings' });
+    expect(heldAtBookClosure('DCR', '2026-10-17', [tx('DCR', 'buy', 5, 12, '2026-10-20')], [holding('DCR', 4)]).shares).toBe(0);
+  });
+});
+
+describe('chargesSummary', () => {
+  it('charges summary on partial log', () => {
+    // 100 DCR logged at Rs 300 with recorded charges; 50 HUBC came from a screenshot (implied price, charges inside);
+    // MEBL is held with no log at all
+    const txns = [
+      tx('DCR', 'buy', 100, 300, '2026-10-01', { charges: 45.5 }),
+      tx('HUBC', 'buy', 50, 200, '2026-10-02', { source: 'import' }),
+      tx('DCR', 'sell', 20, 320, '2026-10-05'),
+    ];
+    const holdings: Holding[] = [{ ...holding('DCR', 80), avg_cost: 300.46 }, { ...holding('HUBC', 50), avg_cost: 200 }, { ...holding('MEBL', 100), avg_cost: 400 }];
+    const rates = costRates(S());
+    const sellCharges = tradeCosts(20, 320, rates).total;
+    const c = chargesSummary(txns, holdings, {}, S());
+    expect(c.logged).toBeCloseTo(45.5 + sellCharges, 2); // the screenshot buy adds nothing
+    expect(c.logged_on).toBe(30000 + 6400); // the trades those charges were on
+    expect(c.cost_basis).toBe(24036.8 + 10000 + 40000);
+    // the estimate backs the buy charges out of each average cost (which already includes them)
+    const inside = (shares: number, cost: number) => { const ch = tradeCosts(shares, cost, rates).total; return ch / (1 + ch / (shares * cost)); };
+    expect(c.estimate_all).toBeCloseTo(inside(80, 300.46) + inside(50, 200) + inside(100, 400), 2);
+    expect(c.estimate_all).toBeGreaterThan(c.cost_basis * 0.001);
+    expect(c.estimate_all).toBeLessThan(c.cost_basis * 0.01);
+    expect(c.implied_include_charges).toBe(true);
+    expect(chargesSummary([], [], {}, S())).toEqual({ logged: 0, logged_on: 0, estimate_all: 0, cost_basis: 0, implied_include_charges: true });
+  });
+});
+
+describe('benchmarkReady', () => {
+  const snap = (day: string, value = 1000): PortfolioDay => ({ day, value, invested: 900 });
+  it('benchmark hidden under 30 days', () => {
+    expect(DEFAULT_RULES.performance.benchmark_min_days).toBe(30);
+    expect(benchmarkReady([], TODAY)).toEqual({ ready: false, starts_on: null, ready_on: null });
+    const snaps = [snap('2026-10-01'), snap('2026-09-20'), snap('2026-09-10', 0)]; // a zero value is no history
+    expect(benchmarkReady(snaps, TODAY)).toEqual({ ready: false, starts_on: '2026-09-20', ready_on: '2026-10-20' });
+    expect(benchmarkReady(snaps, '2026-10-20')).toEqual({ ready: true, starts_on: '2026-09-20', ready_on: '2026-10-20' });
+    const rules = { ...DEFAULT_RULES, performance: { ...DEFAULT_RULES.performance, benchmark_min_days: 10 } } as Rules;
+    expect(benchmarkReady(snaps, '2026-09-30', rules)).toEqual({ ready: true, starts_on: '2026-09-20', ready_on: '2026-09-30' });
+    expect(benchmarkReady([snap('2026-10-20')], TODAY).starts_on).toBeNull(); // a snapshot after today does not count
   });
 });
 
