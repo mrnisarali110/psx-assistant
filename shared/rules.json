@@ -30,8 +30,8 @@
     "pe_outlier_min": 2,
     "pe_outlier_max": 100,
     "sector_min_peers": 5,
-    "sector_max_iqr_ratio": 1,
-    "sector_note": "Sector P/E = median of peers with a trusted P/E; skipped when fewer than sector_min_peers or when the interquartile range is wider than sector_max_iqr_ratio x the median (sector too mixed to compare)."
+    "sector_max_iqr_ratio": 0.4,
+    "sector_note": "Sector P/E = median of peers with a trusted P/E; skipped when fewer than sector_min_peers or when the interquartile range is wider than sector_max_iqr_ratio x the median (sector too mixed to compare). Owner set 0.4 on 2026-10-23 so mixed sectors (e.g. food, where MUREB sat far below multinationals) are not compared."
   },
   "valuation": {
     "eps_max_age_months": 15,
