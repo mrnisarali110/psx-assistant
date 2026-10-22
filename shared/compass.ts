@@ -102,7 +102,7 @@ export function compass(f: CompassFacts, rules: Rules = DEFAULT_RULES): Compass 
   // ---- shares vs safe yield ----
   const pib = L('pib_10y'), t3 = L('tbill_3m'), t12 = L('tbill_12m');
   const spread = ey != null && pib ? r1(ey - pib.value) : null;
-  const gState: GapState | null = spread == null ? null : spread >= k.spread_shares_above ? 'shares' : spread < k.spread_safe_below ? 'safe' : 'even';
+  const gState: GapState | null = spread == null ? null : spread >= k.spread_shares_above ? 'shares' : spread < k.spread_neutral_low ? 'safe' : 'even';
   const gReasons = spread == null ? ['Needs the 10-year PIB yield from SBP and the P/E'] : [
     `Shares earn ${ey}% on their price; the 10-year government bond pays ${pib!.value.toFixed(2)}% (${fmt(spread)} points)`,
     ...(t12 ? [`12-month T-bill ${t12.value.toFixed(2)}%`] : []),

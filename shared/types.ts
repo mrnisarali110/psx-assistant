@@ -82,6 +82,8 @@ export interface Settings {
   match_nccpl: boolean; // cost basis without broker charges, to reconcile with NCCPL's monthly CGT statement
   cgt_paid: Record<string, number>; // tax year (e.g. "2026-27") -> CGT already deducted by NCCPL, rupees
   loss_carry_forward: Record<string, number>; // tax year -> net loss of that year still available to offset, rupees
+  inflation_pct: number; // today-money projection (Goals & projection), default rules.growth.inflation_pct
+  onboarded: boolean; // first-run setup finished or skipped
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -110,6 +112,8 @@ export const DEFAULT_SETTINGS: Settings = {
   match_nccpl: false,
   cgt_paid: {},
   loss_carry_forward: {},
+  inflation_pct: rulesJson.growth.inflation_pct,
+  onboarded: false,
 };
 
 export type AnnouncementKind = 'dividend' | 'results' | 'board_meeting' | 'other';
@@ -125,6 +129,19 @@ export interface Announcement {
   ai_figures?: { label: string; value: string; verified: boolean }[] | null;
   ai_verified?: boolean | null;
   ai_date_note?: 'older_document' | 'date_unclear' | null; // the AI's dates do not fit the filing date (ISSUE-06)
+  ai_metrics?: AnnouncementMetrics | null; // structured figures for the News card (migration 0012; null on older filings)
+}
+
+/** Which accounts an EPS figure comes from. 'not_stated' = PSX's own figure, basis unknown. */
+export type EpsBasis = 'consolidated' | 'unconsolidated' | 'not_stated';
+
+/** Structured figures read from one filing, for a clean News card (headline, 2-3 chips, impact line). */
+export interface AnnouncementMetrics {
+  headline: string | null; // short plain headline, e.g. "Profit up 18%, Rs 8 dividend"
+  eps: number | null; // rupees per share for the period of the filing
+  eps_basis: EpsBasis | null;
+  dps: number | null; // cash dividend declared, rupees per share
+  profit_change_pct: number | null; // profit after tax vs the same period last year, %
 }
 
 export interface AlertLogRow {
@@ -165,13 +182,24 @@ export interface DividendReceipt {
 }
 
 /** Profit after tax of one quarter, read by the AI from a results filing (negative = loss). */
-export interface QuarterEarnings { id: string; symbol: string; period_end: string; profit_after_tax: number; verified: boolean; pdf_url?: string | null }
+export interface QuarterEarnings {
+  id: string; symbol: string; period_end: string; profit_after_tax: number; verified: boolean; pdf_url?: string | null;
+  eps?: number | null; // earnings per share for the period (migration 0012)
+  eps_basis?: EpsBasis | null;
+  period_months?: number | null; // months the figures cover: 3 = a quarter, 12 = a full year (cumulative filings say 6 or 9)
+}
 
 /** KSE-100 closing level for one trading day (written by the worker; backfilled from index_snapshots). */
 export interface IndexDay { day: string; close: number }
 
 /** One user's portfolio value at the close of a trading day (written by the night job). */
 export interface PortfolioDay { day: string; value: number; invested: number }
+
+/** One stock's close on a trading day (written nightly from PSX's screener; history builds from 2026-10-23). */
+export interface PriceDay { symbol: string; day: string; close: number; change_pct: number | null }
+
+/** One user's portfolio value at a market check during the day (1D chart; kept 10 days). */
+export interface PortfolioTick { ts: string; value: number }
 
 /** A cash dividend declared in a PSX announcement, read by the AI and checked against the PDF. */
 export interface DividendEvent {

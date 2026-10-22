@@ -1,5 +1,7 @@
-import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { haptic } from '../lib/gestures.ts';
+import { Icon } from './Icon.tsx';
+import { Sheet } from './Sheet.tsx';
 
 export function Card({ children, className = '', onClick }: { children: ReactNode; className?: string; onClick?: () => void }) {
   const base = `rounded-3xl bg-white p-4 ring-1 ring-slate-200/80 dark:bg-slate-900 dark:ring-slate-800 ${className}`;
@@ -36,8 +38,9 @@ export function Tag({ tone = 'slate', wrap = false, children }: { tone?: Tone; w
   return <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium ${shape} ${TONES[tone]}`}>{children}</span>;
 }
 
+/** Text colour for a change: up / down tokens, muted when flat or unknown. Pair it with an arrow (see Change). */
 export const changeTone = (v: number | null | undefined) =>
-  v == null || v === 0 ? 'text-slate-500 dark:text-slate-400' : v > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400';
+  v == null || v === 0 ? 'text-muted' : v > 0 ? 'text-up' : 'text-down';
 
 export function Button({ children, onClick, kind = 'primary', disabled, type = 'button', className = '', label }: {
   children: ReactNode; onClick?: () => void; kind?: 'primary' | 'secondary' | 'danger' | 'ghost';
@@ -183,12 +186,123 @@ export function Sparkline({ values, className = '' }: { values: number[]; classN
   );
 }
 
-/** Round letter avatar for a symbol, ring coloured by today's move (Instagram-story style). */
-export function SymbolAvatar({ symbol, change, size = 'h-11 w-11' }: { symbol: string; change?: number | null; size?: string }) {
-  const ring = change == null || change === 0 ? 'ring-slate-300 dark:ring-slate-700' : change > 0 ? 'ring-emerald-500' : 'ring-rose-500';
+/** @deprecated Use CompanyMark. Kept so older screens compile; no longer colours a ring by the day's move. */
+export function SymbolAvatar({ symbol, size = 'h-11 w-11' }: { symbol: string; change?: number | null; size?: string }) {
+  return <CompanyMark symbol={symbol} size={size} />;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Design-system primitives (owner review 2026-10-23). Screens use these instead of hand-rolled variants.
+// ---------------------------------------------------------------------------------------------------------------
+
+const nf = (digits: number) => new Intl.NumberFormat('en-PK', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+
+/**
+ * A change with an arrow, so colour is never the only signal: "▲ +2.3%", "▼ −Rs 593", "– 0.0%".
+ * `kind` 'pct' (default) adds %, 'rs' formats rupees, 'num' a plain number (index points).
+ */
+export function Change({ value, kind = 'pct', digits, className = '', label }: {
+  value: number | null | undefined; kind?: 'pct' | 'rs' | 'num'; digits?: number; className?: string; label?: string;
+}) {
+  if (value == null || !Number.isFinite(value)) return <span className={`text-muted ${className}`}>–</span>;
+  const d = digits ?? (kind === 'pct' ? 1 : 0);
+  const abs = Math.abs(value);
+  const flat = Number(abs.toFixed(d)) === 0;
+  const sign = flat ? '' : value > 0 ? '+' : '−';
+  const body = kind === 'rs' ? `${sign}Rs ${nf(d).format(abs)}` : kind === 'num' ? `${sign}${nf(d).format(abs)}` : `${sign}${abs.toFixed(d)}%`;
+  const arrow = flat ? '–' : value > 0 ? '▲' : '▼';
+  const words = flat ? 'unchanged' : value > 0 ? 'up' : 'down';
   return (
-    <span className={`${size} inline-flex shrink-0 items-center justify-center rounded-full bg-slate-100 text-[11px] font-bold tracking-tight text-slate-700 ring-2 ring-offset-2 ring-offset-white dark:bg-slate-800 dark:text-slate-200 dark:ring-offset-slate-900 ${ring}`}>
-      {symbol.slice(0, 4)}
+    <span className={`num inline-flex items-baseline gap-0.5 whitespace-nowrap ${changeTone(flat ? 0 : value)} ${className}`}
+      aria-label={`${label ? label + ' ' : ''}${words} ${body.replace(/^[+−]/, '')}`}>
+      <span aria-hidden="true" className="text-[0.8em]">{arrow}</span>
+      <span aria-hidden="true">{body}</span>
     </span>
+  );
+}
+
+export type ChipKind = 'bluechip' | 'not_bluechip' | 'shariah' | 'exdiv' | 'ai' | 'caution' | 'estimate' | 'provisional' | 'neutral';
+const CHIP: Record<ChipKind, { label: string; cls: string }> = {
+  bluechip: { label: 'Blue chip', cls: 'bg-info/10 text-info ring-1 ring-info/25' },
+  not_bluechip: { label: 'Not a blue chip', cls: 'bg-surface-2 text-muted' },
+  shariah: { label: 'Shariah', cls: 'bg-surface-2 text-ink' },
+  exdiv: { label: 'Ex-dividend', cls: 'bg-surface-2 text-ink' },
+  ai: { label: 'AI', cls: 'bg-violet-500/10 text-violet-700 dark:text-violet-300' },
+  caution: { label: 'Check', cls: 'bg-caution/10 text-caution' },
+  estimate: { label: 'Estimate', cls: 'bg-surface-2 text-muted' },
+  provisional: { label: 'Provisional', cls: 'bg-caution/10 text-caution' },
+  neutral: { label: '', cls: 'bg-surface-2 text-muted' },
+};
+/** The fixed set of chips. Children override the label (e.g. a caution chip "High payout, may not last"). */
+export function Chip({ kind, children, title }: { kind: ChipKind; children?: ReactNode; title?: string }) {
+  const c = CHIP[kind];
+  return (
+    <span title={title} className={`inline-flex max-w-full items-center gap-1 whitespace-nowrap rounded-chip px-2 py-0.5 text-12 font-semibold ${c.cls}`}>
+      {kind === 'caution' && <Icon name="alert" className="h-3 w-3" />}
+      {kind === 'ai' && <Icon name="sparkles" className="h-3 w-3" />}
+      {children ?? c.label}
+    </span>
+  );
+}
+
+/** Sector colours for company marks: calm hues that never mean up / down / caution. */
+const SECTOR_HUES = ['#4f46e5', '#0284c7', '#7c3aed', '#0891b2', '#475569', '#9333ea', '#2563eb', '#0e7490', '#6d28d9', '#334155'];
+export function sectorColor(sector: string | null | undefined): string {
+  if (!sector) return '#64748b';
+  let h = 0;
+  for (const ch of sector.toUpperCase()) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return SECTOR_HUES[h % SECTOR_HUES.length];
+}
+/** Company mark: up to 3 initials of the symbol in a circle coloured by sector. The full symbol is its label. */
+export function CompanyMark({ symbol, sector, size = 'h-10 w-10' }: { symbol: string; sector?: string | null; size?: string }) {
+  const letters = symbol.replace(/[^A-Z0-9]/gi, '').slice(0, 3).toUpperCase();
+  return (
+    <span role="img" aria-label={symbol} style={{ backgroundColor: sectorColor(sector) }}
+      className={`${size} inline-flex shrink-0 items-center justify-center rounded-full text-[11px] font-bold tracking-tight text-white`}>
+      <span aria-hidden="true">{letters}</span>
+    </span>
+  );
+}
+
+/** A small (i) that explains on tap (phones) or hover/focus (desktop). */
+export function InfoTip({ text, label = 'More information' }: { text: string; label?: string }) {
+  const [open, setOpen] = useState(false);
+  const id = useId();
+  const box = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const off = (e: Event) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener('pointerdown', off);
+    return () => document.removeEventListener('pointerdown', off);
+  }, [open]);
+  return (
+    <span ref={box} className="relative inline-flex align-middle" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
+      <button type="button" aria-label={label} aria-describedby={open ? id : undefined} aria-expanded={open}
+        onClick={() => setOpen((v) => !v)} onFocus={() => setOpen(true)} onBlur={() => setOpen(false)}
+        className="inline-flex h-6 w-6 cursor-pointer items-center justify-center rounded-full text-muted hover:text-ink">
+        <Icon name="info" className="h-4 w-4" />
+      </button>
+      {open && (
+        <span id={id} role="tooltip" className="absolute bottom-full left-1/2 z-30 mb-1 w-56 -translate-x-1/2 rounded-control bg-ink px-3 py-2 text-12 font-normal text-canvas shadow-float">
+          {text}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** "How this works" link that opens a sheet with the method, sources and to-verify notes, keeping cards short. */
+export function HowItWorks({ title, children, linkLabel = 'How this works' }: { title: string; children: ReactNode; linkLabel?: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button type="button" onClick={() => { haptic(); setOpen(true); }}
+        className="press inline-flex min-h-11 cursor-pointer items-center gap-1 text-14 font-semibold text-brand">
+        <Icon name="info" className="h-4 w-4" />{linkLabel}
+      </button>
+      <Sheet open={open} onClose={() => setOpen(false)} title={title}>
+        <div className="space-y-3 text-14 text-ink">{children}</div>
+      </Sheet>
+    </>
   );
 }

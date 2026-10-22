@@ -15,7 +15,9 @@
     "hard_stock_cap_pct": 30,
     "hard_sector_cap_pct": 40,
     "review_after_loss_quarters": 2,
-    "sell_after_loss_quarters": 4
+    "sell_after_loss_quarters": 4,
+    "payout_warn_pct": 90,
+    "payout_warn_note": "Owner review 2026-10-23: a payout above ~90% of profit is flagged \"High payout, may not last\"; above dividends.suspect_payout_pct it is suspect."
   },
   "notifications": {
     "max_per_day": 3
@@ -26,7 +28,10 @@
     "min_dividend_yield_pct": 2,
     "candidates": 10,
     "pe_outlier_min": 2,
-    "pe_outlier_max": 100
+    "pe_outlier_max": 100,
+    "sector_min_peers": 5,
+    "sector_max_iqr_ratio": 1,
+    "sector_note": "Sector P/E = median of peers with a trusted P/E; skipped when fewer than sector_min_peers or when the interquartile range is wider than sector_max_iqr_ratio x the median (sector too mixed to compare)."
   },
   "dividends": {
     "min_yield_pct": 6,
@@ -49,7 +54,9 @@
     "date_sanity": {
       "max_days_before_filing": 90,
       "max_days_after_filing": 365
-    }
+    },
+    "eps_backfill_per_night": 4,
+    "eps_backfill_note": "Old results filings (latest annual + up to 3 quarters) read per night for held and watched stocks with no stored EPS."
   },
   "data": {
     "stale_minutes": 30,
@@ -231,15 +238,14 @@
     "pe_cheap_below": 6.5,
     "pe_expensive_above": 10.5,
     "pe_bands_note": "Below ~6x has been a buying zone (2019, 2023, 2024); above ~10-11x marked the 2008 and 2017 tops (Al Meezan, AHL). Thresholds are settings.",
-    "spread_shares_above": 3.5,
-    "spread_safe_below": 0,
-    "spread_note": "Earnings yield of the KSE-100 stocks minus the 10-year PIB cut-off yield (SBP auction). BMA Capital (Jan 2021): about +1.8 points on average over 10 years; well above that favours shares, below 0 means government bonds pay more than shares earn. Opinion, VERIFY.",
-    "money_market_fee_pct": 1.0,
+    "spread_shares_above": 2,
+    "spread_note": "Owner decision 2026-10-23: earnings yield of the KSE-100 stocks minus the money-market estimate (3-month T-bill minus money_market_fee_pct), the place the cash advice sends money. Between spread_neutral_low and spread_neutral_high (inclusive) nothing changes; below the low end the advice is to park extra cash. VERIFY: spread_shares_above was 3.5 against the 10-year PIB (BMA Capital Jan 2021, ~+1.8 average over 10 years); the money-market estimate sits ~1.5-2 points below the PIB, so 2 is a re-based guess. The 10-year PIB is still shown for information.",
+    "money_market_fee_pct": 1,
     "money_market_note": "VERIFY: money-market funds hold T-bills; estimate = 3-month T-bill cut-off minus about 1% for fees, before tax. MUFAP's fund returns are behind a bot check, so they are not read.",
     "extra_multiplier": {
       "add_extra": 1.5,
-      "buy_in_steps": 1.0,
-      "on_schedule": 1.0,
+      "buy_in_steps": 1,
+      "on_schedule": 1,
       "park_extra": 0
     },
     "steps_months": 3,
@@ -274,6 +280,23 @@
       "fx_reserves_total": 21,
       "pkr_usd": 10,
       "kse100_1y_pct": 7
-    }
+    },
+    "gap_basis": "money_market",
+    "spread_neutral_low": -1,
+    "spread_neutral_high": 1
+  },
+  "performance": {
+    "benchmark_min_days": 30,
+    "benchmark_note": "The comparison with the KSE-100 is hidden until this many calendar days of portfolio history are stored (owner review: a few days tell you nothing)."
+  },
+  "growth": {
+    "inflation_pct": 10,
+    "inflation_note": "VERIFY: default inflation for the today-money projection; Pakistan CPI was ~10% (Sep 2026, PBS). A setting in Profile."
+  },
+  "symbols": {
+    "aliases": {
+      "OGDCL": "OGDC"
+    },
+    "aliases_note": "Common long forms mapped to PSX symbols (PSX lists Oil & Gas Development Company as OGDC)."
   }
 }

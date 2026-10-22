@@ -50,3 +50,60 @@ export function ago(iso: string, now = new Date()): string {
   if (mins < 48 * 60) return 'yesterday';
   return new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Karachi', month: 'short', day: 'numeric' }).format(new Date(iso));
 }
+
+// ---- One date language for the whole app (owner review 2026-10-23). All in PKT. ----
+
+const PKT = 'Asia/Karachi';
+const fmtMonthDay = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric' });
+const fmtMonthDayYear = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric', year: 'numeric' });
+const fmtWeekday = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'short' });
+const fmtTime = new Intl.DateTimeFormat('en-US', { timeZone: PKT, hour: 'numeric', minute: '2-digit' });
+const pktDay = (d: Date) => new Date(d.getTime() + 5 * 3600_000).toISOString().slice(0, 10);
+const utcNoon = (isoDate: string) => new Date(isoDate.slice(0, 10) + 'T12:00:00Z');
+/** A timestamp or a YYYY-MM-DD date → its PKT calendar date. */
+const toPktDate = (iso: string) => (/^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso : pktDay(new Date(iso)));
+const dayDiff = (a: string, b: string) => Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 86400000);
+
+/**
+ * "Today", "Yesterday", "Tomorrow", a weekday within 6 days either side ("Thu"), "Oct 5" this year, "Oct 5, 2025"
+ * otherwise. Accepts a YYYY-MM-DD date or a timestamp (read in PKT).
+ */
+export function day(iso: string | null | undefined, now = new Date()): string {
+  if (!iso) return 'no date';
+  const d = toPktDate(iso);
+  const today = pktDay(now);
+  const diff = dayDiff(today, d);
+  if (diff === 0) return 'Today';
+  if (diff === -1) return 'Yesterday';
+  if (diff === 1) return 'Tomorrow';
+  if (Math.abs(diff) <= 6) return fmtWeekday.format(utcNoon(d));
+  return d.slice(0, 4) === today.slice(0, 4) ? fmtMonthDay.format(utcNoon(d)) : fmtMonthDayYear.format(utcNoon(d));
+}
+
+/** "3:49 PM" in PKT. */
+export function time(iso: string | null | undefined): string {
+  return iso ? fmtTime.format(new Date(iso)) : 'no time';
+}
+
+/** "Today 3:49 PM", "Thu 3:49 PM", "Oct 5 3:49 PM". */
+export function dayTime(iso: string | null | undefined, now = new Date()): string {
+  return iso ? `${day(iso, now)} ${time(iso)}` : 'no data';
+}
+
+/**
+ * The word for a price's day change: "Today" only while the price is from today's session (PKT, Mon-Fri);
+ * otherwise "Last session (Thu)". At 00:41 on Friday a Thursday close reads "Last session (Thu)".
+ */
+export function sessionLabel(asOfIso: string | null | undefined, now = new Date()): string {
+  if (!asOfIso) return 'Last session';
+  const d = toPktDate(asOfIso);
+  const weekday = new Date(now.getTime() + 5 * 3600_000).getUTCDay();
+  if (d === pktDay(now) && weekday >= 1 && weekday <= 5) return 'Today';
+  return `Last session (${fmtWeekday.format(utcNoon(d))})`;
+}
+
+/** Greeting by PKT hour: morning 05-12, afternoon 12-17, evening otherwise (00:41 is evening, not morning). */
+export function greeting(now = new Date()): string {
+  const h = new Date(now.getTime() + 5 * 3600_000).getUTCHours();
+  return h >= 5 && h < 12 ? 'Good morning' : h >= 12 && h < 17 ? 'Good afternoon' : 'Good evening';
+}

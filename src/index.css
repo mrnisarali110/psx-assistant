@@ -27,13 +27,56 @@
 @keyframes breathe { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(0.94); opacity: 0.82; } }
 @keyframes indeterminate { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
 
+/* ---------- Design tokens (owner review 2026-10-23) ----------
+   Colour has one meaning each: up/down = price or return direction only; caution = warnings only;
+   brand (teal) = actions, links and selection only; info = neutral emphasis. Every change also shows an arrow.
+   Use as Tailwind utilities: text-up, bg-down/10, ring-line, bg-surface, text-muted, text-ink ... */
+@theme inline {
+  --color-up: var(--up);
+  --color-down: var(--down);
+  --color-caution: var(--caution);
+  --color-brand: var(--brand);
+  --color-info: var(--info);
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-line: var(--line);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+}
+/* Type scale: text-12 / 14 / 16 / 20 / 28 / 40 (body text never below 14 on phones). */
+@theme {
+  --text-12: 12px; --text-12--line-height: 16px;
+  --text-14: 14px; --text-14--line-height: 20px;
+  --text-16: 16px; --text-16--line-height: 24px;
+  --text-20: 20px; --text-20--line-height: 28px;
+  --text-28: 28px; --text-28--line-height: 34px;
+  --text-40: 40px; --text-40--line-height: 44px;
+  /* Corner radii: rounded-chip (pills), rounded-control (inputs, buttons), rounded-card (cards, sheets). 8 px grid. */
+  --radius-chip: 9999px;
+  --radius-control: 16px;
+  --radius-card: 24px;
+  --shadow-card: 0 1px 2px rgb(15 23 42 / 0.06), 0 1px 1px rgb(15 23 42 / 0.04);
+  --shadow-float: 0 12px 32px rgb(15 23 42 / 0.18);
+}
+:root {
+  --up: #047857; --down: #be123c; --caution: #b45309; --brand: #0f766e; --info: #0369a1;
+  --canvas: #f8fafc; --surface: #ffffff; --surface-2: #f1f5f9; --line: #e2e8f0; --ink: #0f172a; --muted: #475569;
+}
+:root[data-theme="dark"] {
+  --up: #34d399; --down: #fb7185; --caution: #fbbf24; --brand: #2dd4bf; --info: #38bdf8;
+  --canvas: #000000; --surface: #0f172a; --surface-2: #1e293b; --line: #1e293b; --ink: #f1f5f9; --muted: #94a3b8;
+}
+
 :root { color-scheme: light; -webkit-tap-highlight-color: transparent; }
 :root[data-theme="dark"] { color-scheme: dark; }
 
 html, body {
-  @apply bg-slate-50 text-slate-900 dark:bg-black dark:text-slate-100;
+  @apply bg-canvas text-ink;
   overscroll-behavior-y: none;
   -webkit-font-smoothing: antialiased;
+  /* Figures line up in columns everywhere. */
+  font-variant-numeric: tabular-nums;
 }
 
 /* Long-press menus replace the browser's text-selection callout on interactive rows. */
